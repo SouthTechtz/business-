@@ -1,0 +1,7 @@
+Options -MultiViews
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^product/([0-9]+)(?:/[^/]*)?/?$ product.php?id=$1 [L,QSA]
+</IfModule>

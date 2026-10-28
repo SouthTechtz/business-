@@ -1,0 +1,20 @@
+# --- Database & Local Credentials ---
+config.php
+.env
+*.sql
+*.sqlite
+*.sqlite3
+
+# --- Dependencies ---
+vendor/
+node_modules/
+
+# --- Logs & Temp Files ---
+*.log
+logs/
+tmp/
+cache/
+
+# --- Operating System Files ---
+.DS_Store
+Thumbs.db
