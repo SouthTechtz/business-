@@ -34,6 +34,13 @@ $items = fetch_all(
     $id
 );
 
+$payment_summary = fetch_one(
+    "SELECT COALESCE(SUM(amount), 0) paid FROM pos_payments WHERE order_id = ?",
+    $id
+) ?: [];
+$amount_paid = (float)($payment_summary['paid'] ?? 0);
+$balance_due = max(0, (float)$order['total'] - $amount_paid);
+
 require_once 'navbar.php';
 require_once 'sidebar.php';
 $cur = tenant_currency();
@@ -103,6 +110,10 @@ $cur = tenant_currency();
                     <div class="cart-total-row text-danger"><span>Discount</span><span>- <?php echo e(money($order['discount'], $cur)); ?></span></div>
                 <?php endif; ?>
                 <div class="cart-total-row cart-grand"><span>Total</span><span><?php echo e(money($order['total'], $cur)); ?></span></div>
+                <div class="cart-total-row"><span>Paid</span><span class="text-success"><?php echo e(money($amount_paid, $cur)); ?></span></div>
+                <?php if ($order['status'] !== 'cancelled' && $balance_due > 0.004): ?>
+                    <div class="cart-total-row text-danger"><span>Balance Due</span><span><?php echo e(money($balance_due, $cur)); ?></span></div>
+                <?php endif; ?>
             </div>
         </div>
         <div class="card">

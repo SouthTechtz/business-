@@ -1,14 +1,16 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
-require_permission('manage_godown');
-$page_title = 'New Godown Transfer';
+require_permission_any(['manage_godown', 'request_godown_transfers']);
+$can_manage_godown = can('manage_godown');
+$can_request = can('request_godown_transfers');
+$page_title = $can_manage_godown ? 'New Godown Transfer' : 'Request Godown Stock';
 
 $tenant_id = (int)$current_user->tenant_id;
-$godown = find_active_godown();
+$godown = find_tenant_godown();
 if (!$godown) {
-    flash_set('danger', 'Configure an active central Godown before creating a transfer.');
-    redirect('godown.php');
+    flash_set('danger', 'Configure an active default Godown before creating a transfer request.');
+    redirect($can_manage_godown ? 'godown.php' : 'godown-transfers.php');
 }
 
 $shops = accessible_shops(null, false);
@@ -38,7 +40,7 @@ function render_transfer_line(array $products): string
                             data-decimal="<?php echo (int)$product['is_decimal']; ?>"
                             data-stock="<?php echo e($product['godown_quantity']); ?>"
                             data-unit="<?php echo e($product['unit_short']); ?>">
-                        <?php echo e($product['name'] . ' (' . $product['code'] . ')'); ?>
+                        <?php echo e($product['name'] . ' (' . $product['code'] . ') - ' . format_quantity($product['godown_quantity']) . ' available'); ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -181,9 +183,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $locked_godown = fetch_one(
             "SELECT w.* FROM warehouses w
-               JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_godown = 1
-                AND w.is_active = 1 AND s.is_active = 1
+              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type = 'godown'
+                AND w.is_active = 1
               FOR UPDATE",
             (int)$godown['warehouse_id'],
             $tenant_id
@@ -262,7 +263,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             . ' to ' . $destination_shop['name'] . ' / ' . $locked_destination['name']
             . ' with ' . count($merged) . ' product line(s).'
         );
-        flash_set('success', 'Transfer ' . $transfer_number . ' created as a request. Approval does not move stock.');
+        flash_set(
+            'success',
+            'Request ' . $transfer_number . ' created. The Godown team will review it. Approval does not move stock.'
+        );
         redirect('godown-transfer-view.php?id=' . $transfer_id);
     } catch (Throwable $ex) {
         if ($in_transaction) $conn->rollback();
@@ -282,14 +286,14 @@ require_once 'sidebar.php';
 
 <div class="page-head">
     <div>
-        <h1 class="page-title">New Godown Transfer</h1>
+        <h1 class="page-title"><?php echo $can_manage_godown ? 'New Godown Transfer' : 'Request Godown Stock'; ?></h1>
         <div class="page-sub">Request stock from <?php echo e(store_label($godown)); ?> for a shop store.</div>
     </div>
     <a href="godown-transfers.php" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Transfers</a>
 </div>
 
 <ul class="nav page-tabs">
-    <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown Stock</a></li>
+    <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
     <li class="nav-item"><a class="nav-link" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
     <li class="nav-item"><a class="nav-link active" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> New Transfer</a></li>
 </ul>

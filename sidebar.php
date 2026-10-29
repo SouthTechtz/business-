@@ -64,7 +64,7 @@
                 <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span></a>
             </li>
             <?php endif; ?>
-            <?php if (can('manage_godown') || can('approve_godown_transfers') || can('dispatch_godown_transfers') || can('receive_godown_transfers')): ?>
+            <?php if (can('manage_godown') || can('view_godown') || can('approve_godown_transfers') || can('dispatch_godown_transfers') || can('receive_godown_transfers') || can('request_godown_transfers')): ?>
             <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['godown.php', 'godown-transfers.php', 'godown-transfer-add.php', 'godown-transfer-view.php']) ? 'active' : ''; ?>">
                 <a href="<?php echo can('manage_godown') ? 'godown.php' : 'godown-transfers.php'; ?>"><i class="fa fa-archive"></i><span>Central Godown</span></a>
             </li>

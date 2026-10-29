@@ -123,29 +123,54 @@ function accessible_stores($shop_id = null, $include_inactive = false, $tenant_i
     if ($tenant_id !== (int)$current_user->tenant_id) return [];
 
     $shops = accessible_shops($tenant_id, $include_inactive);
-    if (!$shops) return [];
     $shop_ids = array_map(fn($row) => (int)$row['shop_id'], $shops);
-    $placeholders = implode(',', array_fill(0, count($shop_ids), '?'));
 
-    $sql = "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
-            FROM warehouses w
-            JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-            WHERE w.tenant_id = ? AND w.shop_id IN ({$placeholders})";
-    $params = array_merge([$tenant_id], $shop_ids);
-    // Central Godown stock is deliberately excluded from ordinary store lists.
-    // Central pages pass $include_godown = true after checking the permission.
-    if (!$include_godown) {
-        $sql .= " AND w.is_godown = 0";
+    $rows = [];
+    if ($shop_ids) {
+        $placeholders = implode(',', array_fill(0, count($shop_ids), '?'));
+
+        $sql = "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+                FROM warehouses w
+                JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                WHERE w.tenant_id = ? AND w.shop_id IN ({$placeholders}) AND w.location_type = 'store'";
+        $params = array_merge([$tenant_id], $shop_ids);
+        if (!$include_inactive) {
+            $sql .= " AND w.is_active = 1 AND s.is_active = 1";
+        }
+        if ($shop_id !== null) {
+            $sql .= " AND w.shop_id = ?";
+            $params[] = (int)$shop_id;
+        }
+        $sql .= " ORDER BY s.name, w.name";
+        $rows = fetch_all($sql, ...$params);
     }
-    if (!$include_inactive) {
-        $sql .= " AND w.is_active = 1 AND s.is_active = 1";
+
+    // A Godown is an independent warehouse that does not belong to a shop, so
+    // it cannot come from the shop join above. Central pages pass
+    // $include_godown = true after checking a Godown permission.
+    if ($include_godown && $shop_id === null) {
+        $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+        $godowns = fetch_all(
+            "SELECT w.*, NULL AS shop_name, NULL AS shop_code, 1 AS shop_is_active
+               FROM warehouses w
+              WHERE w.tenant_id = ? AND w.location_type = 'godown'{$active_sql}
+              ORDER BY w.name",
+            $tenant_id
+        );
+        $rows = array_merge($rows, $godowns);
     }
-    if ($shop_id !== null) {
-        $sql .= " AND w.shop_id = ?";
-        $params[] = (int)$shop_id;
-    }
-    $sql .= " ORDER BY s.name, w.name";
-    return fetch_all($sql, ...$params);
+
+    return $rows;
+}
+
+/** Whether the current user may work with Godown records. */
+function can_access_godown() {
+    return can('manage_godown')
+        || can('view_godown')
+        || can('approve_godown_transfers')
+        || can('dispatch_godown_transfers')
+        || can('receive_godown_transfers')
+        || can('request_godown_transfers');
 }
 
 /**
@@ -191,12 +216,19 @@ function find_accessible_store($warehouse_id, $include_inactive = false, $includ
     $store = fetch_one(
         "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
          FROM warehouses w
-         JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+         LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
          WHERE w.warehouse_id = ? AND w.tenant_id = ?",
         $warehouse_id,
         $current_user->tenant_id
     );
     if (!$store) return null;
+
+    if ((string)($store['location_type'] ?? '') === 'godown') {
+        if (!$include_godown) return null;
+        if (!$include_inactive && !(int)$store['is_active']) return null;
+        return can_access_godown() ? $store : null;
+    }
+
     if (!$include_inactive && (!(int)$store['is_active'] || !(int)$store['shop_is_active'])) return null;
     if (!$include_godown && (int)($store['is_godown'] ?? 0) === 1) return null;
     return shop_is_accessible((int)$store['shop_id'], $include_inactive) ? $store : null;
@@ -207,24 +239,21 @@ function store_is_accessible($warehouse_id, $include_inactive = false, $include_
     return find_accessible_store($warehouse_id, $include_inactive, $include_godown) !== null;
 }
 
-/** The tenant's active central Godown that the current user may access, or null. */
+/** The tenant's active central Godown, or null. A Godown is independent of shops. */
 function find_active_godown($tenant_id = null, $include_inactive = false) {
     global $current_user;
     if (!$current_user) return null;
     $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
     if ($tenant_id !== (int)$current_user->tenant_id) return null;
-    $active_sql = $include_inactive ? '' : ' AND w.is_active = 1 AND s.is_active = 1';
-    $store = fetch_one(
-        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+    $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+    return fetch_one(
+        "SELECT w.*, NULL AS shop_name, NULL AS shop_code, 1 AS shop_is_active
          FROM warehouses w
-         JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-         WHERE w.tenant_id = ? AND w.is_godown = 1{$active_sql}
+         WHERE w.tenant_id = ? AND w.location_type = 'godown'{$active_sql}
          ORDER BY w.is_active DESC, w.warehouse_id
          LIMIT 1",
         $tenant_id
     );
-    if (!$store) return null;
-    return shop_is_accessible((int)$store['shop_id'], $include_inactive) ? $store : null;
 }
 
 /**
@@ -238,11 +267,10 @@ function find_tenant_godown($tenant_id = null) {
     $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
     if ($tenant_id !== (int)$current_user->tenant_id) return null;
     return fetch_one(
-        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+        "SELECT w.*, NULL AS shop_name, NULL AS shop_code, 1 AS shop_is_active
          FROM warehouses w
-         JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-         WHERE w.tenant_id = ? AND w.is_godown = 1
-           AND w.is_active = 1 AND s.is_active = 1
+         WHERE w.tenant_id = ? AND w.location_type = 'godown'
+           AND w.is_active = 1
          ORDER BY w.warehouse_id
          LIMIT 1",
         $tenant_id
@@ -393,7 +421,17 @@ function stock_transfer_is_visible($transfer) {
     if (tenant_admin_scope()) return true;
     $destination_shop_id = (int)($transfer['destination_shop_id'] ?? 0);
     if ($destination_shop_id > 0 && shop_is_accessible($destination_shop_id, true)) return true;
-    return find_accessible_store((int)$transfer['source_warehouse_id'], true, true) !== null;
+
+    // Source-side visibility belongs to Godown oversight staff. A requester
+    // must not see another shop's request just because it came from the same
+    // Godown; requesters rely on their destination-shop access above.
+    $godown_oversight = can('manage_godown')
+        || can('view_godown')
+        || can('approve_godown_transfers')
+        || can('dispatch_godown_transfers')
+        || can('receive_godown_transfers');
+    return $godown_oversight
+        && find_accessible_store((int)($transfer['source_warehouse_id'] ?? 0), true, true) !== null;
 }
 
 /** Create/retrieve a per-session CSRF token. */
@@ -631,12 +669,9 @@ function consume_form_token() {
 /** Human-readable order statuses. */
 function order_statuses() {
     return [
-        'new'          => 'New',
-        'under_review' => 'Under Review',
-        'confirmed'    => 'Confirmed',
-        'rejected'     => 'Rejected',
-        'cancelled'    => 'Cancelled',
-        'fulfilled'    => 'Fulfilled',
+        'unpaid'         => 'Unpaid',
+        'partially_paid' => 'Partially Paid',
+        'paid'           => 'Paid'
     ];
 }
 
@@ -1066,6 +1101,11 @@ function order_invoice_matches($order_id, $tenant_id, $invoice_id) {
         if (abs($qty - $invoice_map[$product_id]) > 0.0001) return false;
     }
     return true;
+}
+
+/** Brands offered in the product forms. Extend this list as new brands are added. */
+function product_brand_options() {
+    return ['GSP GROUP', 'TECHDOKTA INVESTMENT'];
 }
 
 /** Build a flat list of categories with depth (0 = root, 1 = sub, 2 = sub-sub). */

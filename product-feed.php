@@ -39,7 +39,7 @@ foreach ($sf_rows as $sf_product) {
         'image_link' => $sf_image,
         'price' => number_format((float)$sf_product['sale_price'], 2, '.', '') . ' ' . $sf_currency,
         'availability' => storefront_available($sf_product) ? 'in_stock' : 'out_of_stock',
-        'brand' => '',
+        'brand' => trim((string)($sf_product['brand'] ?? '')),
         'gtin' => $sf_gtin,
         'mpn' => $sf_mpn,
         'condition' => 'new',

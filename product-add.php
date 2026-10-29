@@ -22,6 +22,12 @@ function generateProductCode($conn, $tenantId) {
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verify_csrf();
+    if (!form_token_valid()) {
+        flash_set('danger', 'This form was already submitted. Refresh the page before trying again.');
+        redirect('product-add.php');
+    }
+
     $data = [
         'tenant_id'        => $current_user->tenant_id,
         'category_id'      => !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
@@ -30,13 +36,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'description'      => trim($_POST['description'] ?? ''),
         'barcode'          => trim($_POST['barcode'] ?? ''),
         'sku'              => trim($_POST['sku'] ?? ''),
+        'brand'            => trim($_POST['brand'] ?? '') ?: null,
         'unit_id'          => !empty($_POST['unit_id']) ? (int)$_POST['unit_id'] : null,
         'purchase_price'   => (float)($_POST['purchase_price'] ?? 0),
         'sale_price'       => (float)($_POST['sale_price'] ?? 0),
         'tax_rate'         => (float)($_POST['tax_rate'] ?? 0),
         'min_stock_level'  => (float)($_POST['min_stock_level'] ?? 0),
-        'manufactured_date'=> $_POST['manufactured_date'] ?: null,
-        'expires_date'     => $_POST['expires_date'] ?: null,
+        'date_added'       => !empty($_POST['date_added']) ? $_POST['date_added'] : null,
         'is_active'        => isset($_POST['is_active']) ? 1 : 0,
         'is_service'       => isset($_POST['is_service']) ? 1 : 0,
         'variant_size'     => trim($_POST['variant_size'] ?? '') ?: null,
@@ -45,12 +51,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ];
     if ($data['code'] === '') $data['code'] = generateProductCode($conn, $current_user->tenant_id);
     $initial_stock = (float)($_POST['initial_stock'] ?? 0);
-    $opening_warehouse_id = (int)($_POST['opening_warehouse_id'] ?? 0);
 
     if ($data['name'] === '') {
         $error = 'Product name is required.';
-    } elseif (!$data['is_service'] && $initial_stock > 0 && !find_accessible_store($opening_warehouse_id, false)) {
-        $error = 'Please select an active store for the initial stock.';
+    } elseif ($data['brand'] !== null && !in_array($data['brand'], product_brand_options(), true)) {
+        $error = 'Select a valid product brand.';
+    } elseif (!$data['is_service'] && $initial_stock > 0 && !find_active_godown($current_user->tenant_id, false)) {
+        $error = 'Create an active Central Godown before adding initial stock. Shops and stores receive stock by transfer.';
     } else {
         $conn->begin_transaction();
         try {
@@ -58,20 +65,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$id) throw new Exception('Could not create the product.');
 
             if (!$data['is_service'] && $initial_stock > 0) {
-                $wh = find_accessible_store($opening_warehouse_id, false);
-                if (!$wh) throw new Exception('The selected opening-stock store is no longer available.');
+                // Opening stock always lands in the Central Godown.
+                $wh = find_active_godown($current_user->tenant_id, false);
+                if (!$wh) throw new Exception('The Central Godown is no longer available. No product was created.');
+                
                 $stmt = $conn->prepare("INSERT INTO inventory_stock (tenant_id, product_id, warehouse_id, quantity, reorder_level) VALUES (?, ?, ?, ?, ?)");
                 $reorder = $data['min_stock_level'];
                 $stmt->bind_param('iiidd', $current_user->tenant_id, $id, $wh['warehouse_id'], $initial_stock, $reorder);
                 $stmt->execute();
+                $stmt->close();
+
                 $stmt = $conn->prepare(
                     "INSERT INTO inventory_movements (tenant_id, product_id, warehouse_id, movement_type, quantity, created_by, notes)
-                     VALUES (?, ?, ?, 'adjustment', ?, ?, 'Initial stock for new product')"
+                     VALUES (?, ?, ?, 'adjustment', ?, ?, 'Initial stock received at Central Godown')"
                 );
                 $stmt->bind_param('iiidi', $current_user->tenant_id, $id, $wh['warehouse_id'], $initial_stock, $current_user->user_id);
                 $stmt->execute();
+                $stmt->close();
             }
             $conn->commit();
+            consume_form_token();
             audit_log('create', 'product', $id, 'Product ' . $data['name'] . ' created');
             flash_set('success', 'Product created successfully.');
             redirect('products.php');
@@ -84,10 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $categories = fetch_all("SELECT * FROM product_categories WHERE tenant_id = ? ORDER BY name", $current_user->tenant_id);
 $units = fetch_all("SELECT * FROM units_of_measurement WHERE tenant_id = ? ORDER BY name", $current_user->tenant_id);
-$opening_stores = accessible_stores(null, false);
-if (!isset($opening_warehouse_id) || !find_accessible_store($opening_warehouse_id, false)) {
-    $opening_warehouse_id = $opening_stores ? (int)$opening_stores[0]['warehouse_id'] : 0;
-}
+$godown = find_active_godown($current_user->tenant_id, false);
 
 // Build category tree for cascading selects (Main -> Sub -> Sub-Sub)
 $cat_map = [];
@@ -122,6 +132,8 @@ require_once 'sidebar.php';
             <div class="card-body">
                 <?php if ($error): ?><div class="alert alert-danger"><?php echo e($error); ?></div><?php endif; ?>
                 <form method="POST" action="product-add.php">
+                    <?php echo csrf_field(); ?>
+                    <?php echo form_token_field(); ?>
                     <div class="row">
                         <div class="col-md-4 form-group">
                             <label>Code</label>
@@ -132,11 +144,20 @@ require_once 'sidebar.php';
                             <input type="text" name="name" class="form-control" required value="<?php echo e($_POST['name'] ?? ''); ?>">
                         </div>
                         <div class="col-md-4 form-group">
-                            <label>Main Category (Brand)</label>
-                            <select name="category_main" id="catMain" class="form-control">
+                            <label>Product Brand</label>
+                            <select name="brand" class="form-control">
                                 <option value="">— Select Brand —</option>
+                                <?php foreach (product_brand_options() as $brand): ?>
+                                    <option value="<?php echo e($brand); ?>" <?php echo (($_POST['brand'] ?? '') === $brand) ? 'selected' : ''; ?>><?php echo e($brand); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-4 form-group">
+                            <label>Main Category</label>
+                            <select name="category_main" id="catMain" class="form-control">
+                                <option value="">— Select Main Category —</option>
                                 <?php foreach ($main_cats as $id => $c): ?>
-                                    <option value="<?php echo $id; ?>"><?php echo e($c['name']); ?></option>
+                                    <option value="<?php echo $id; ?>" <?php echo ((int)($_POST['category_main'] ?? 0) === $id) ? 'selected' : ''; ?>><?php echo e($c['name']); ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
@@ -151,7 +172,7 @@ require_once 'sidebar.php';
                             <select name="category_subsub" id="catSubSub" class="form-control">
                                 <option value="">— Select Pack —</option>
                             </select>
-                            <input type="hidden" name="category_id" id="categoryLeaf" value="">
+                            <input type="hidden" name="category_id" id="categoryLeaf" value="<?php echo e($_POST['category_id'] ?? ''); ?>">
                         </div>
                         <div class="col-md-4 form-group">
                             <label>Unit of Measure</label>
@@ -189,24 +210,22 @@ require_once 'sidebar.php';
                         <div class="col-md-4 form-group">
                             <label>Initial Stock</label>
                             <input type="number" name="initial_stock" class="form-control" step="1" min="0" value="<?php echo e($_POST['initial_stock'] ?? '0'); ?>">
-                            <small class="text-muted">Only for non-service products.</small>
+                            <small class="text-muted">Received at the Central Godown.</small>
                         </div>
                         <div class="col-md-4 form-group">
-                            <label>Opening Stock Store</label>
-                            <select name="opening_warehouse_id" class="form-control">
-                                <?php foreach ($opening_stores as $store): ?>
-                                    <option value="<?php echo (int)$store['warehouse_id']; ?>" <?php echo (int)$store['warehouse_id'] === (int)$opening_warehouse_id ? 'selected' : ''; ?>><?php echo e(store_label($store)); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                            <small class="text-muted"><?php echo $opening_stores ? 'Initial stock is stored here.' : 'No active store is available.'; ?></small>
+                            <label>Opening Stock Godown</label>
+                            <input type="text" class="form-control" value="<?php echo e($godown['name'] ?? 'No active Central Godown'); ?>" readonly>
+                            <small class="text-muted">
+                                <?php if ($godown): ?>
+                                    Initial stock is stored in the Central Godown. Shops and stores receive it by transfer.
+                                <?php else: ?>
+                                    Create the Central Godown first; initial stock cannot be added without it.
+                                <?php endif; ?>
+                            </small>
                         </div>
                         <div class="col-md-4 form-group">
-                            <label>Manufactured Date</label>
-                            <input type="date" name="manufactured_date" class="form-control" value="<?php echo e($_POST['manufactured_date'] ?? ''); ?>">
-                        </div>
-                        <div class="col-md-4 form-group">
-                            <label>Expiry Date</label>
-                            <input type="date" name="expires_date" class="form-control" value="<?php echo e($_POST['expires_date'] ?? ''); ?>">
+                            <label>Date Added</label>
+                            <input type="date" name="date_added" class="form-control" value="<?php echo e($_POST['date_added'] ?? date('Y-m-d')); ?>">
                         </div>
                         <div class="col-md-4 form-group">
                             <label>Variant Size</label>

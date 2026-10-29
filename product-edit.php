@@ -22,13 +22,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'description'      => trim($_POST['description'] ?? ''),
         'barcode'          => trim($_POST['barcode'] ?? ''),
         'sku'              => trim($_POST['sku'] ?? ''),
+        'brand'            => trim($_POST['brand'] ?? '') ?: null,
         'unit_id'          => !empty($_POST['unit_id']) ? (int)$_POST['unit_id'] : null,
         'purchase_price'   => (float)($_POST['purchase_price'] ?? 0),
         'sale_price'       => (float)($_POST['sale_price'] ?? 0),
         'tax_rate'         => (float)($_POST['tax_rate'] ?? 0),
         'min_stock_level'  => (float)($_POST['min_stock_level'] ?? 0),
-        'manufactured_date'=> $_POST['manufactured_date'] ?: null,
-        'expires_date'     => $_POST['expires_date'] ?: null,
+        'date_added'       => !empty($_POST['date_added']) ? $_POST['date_added'] : null,
         'is_active'        => isset($_POST['is_active']) ? 1 : 0,
         'is_service'       => isset($_POST['is_service']) ? 1 : 0,
         'variant_size'     => trim($_POST['variant_size'] ?? '') ?: null,
@@ -36,6 +36,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ];
     if ($data['name'] === '' || $data['code'] === '') {
         $error = 'Product name and code are required.';
+    } elseif ($data['brand'] !== null && !in_array($data['brand'], product_brand_options(), true)) {
+        $error = 'Select a valid product brand.';
     } else {
         $set = [];
         $vals = [];
@@ -101,7 +103,7 @@ foreach ($categories as $c) {
 
 $can_godown = can('manage_godown');
 $scope_ids = accessible_warehouse_ids(null, true, $can_godown);
-$stock_sql = "SELECT s.*, w.name warehouse_name, w.is_godown, sh.name shop_name FROM inventory_stock s
+$stock_sql = "SELECT s.*, w.warehouse_id, w.name warehouse_name, w.is_godown, sh.name shop_name FROM inventory_stock s
      JOIN warehouses w ON w.warehouse_id = s.warehouse_id
      LEFT JOIN shops sh ON sh.shop_id = w.shop_id AND sh.tenant_id = w.tenant_id
      WHERE s.product_id = ? AND s.tenant_id = ?";
@@ -137,7 +139,16 @@ require_once 'sidebar.php';
                         <div class="col-md-4 form-group"><label>Code <span class="text-danger">*</span></label><input type="text" name="code" class="form-control" required value="<?php echo e($product['code']); ?>"></div>
                         <div class="col-md-8 form-group"><label>Product Name <span class="text-danger">*</span></label><input type="text" name="name" class="form-control" required value="<?php echo e($product['name']); ?>"></div>
                         <div class="col-md-4 form-group">
-                            <label>Main Category (Brand)</label>
+                            <label>Product Brand</label>
+                            <select name="brand" class="form-control">
+                                <option value="">— Select Brand —</option>
+                                <?php foreach (product_brand_options() as $brand): ?>
+                                    <option value="<?php echo e($brand); ?>" <?php echo $product['brand'] === $brand ? 'selected' : ''; ?>><?php echo e($brand); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-4 form-group">
+                            <label>Main Category</label>
                             <select name="category_main" id="catMain" class="form-control">
                                 <option value="">— Select Brand —</option>
                                 <?php foreach ($main_cats as $id => $c): ?>
@@ -173,8 +184,7 @@ require_once 'sidebar.php';
                         <div class="col-md-4 form-group"><label>Sale Price</label><input type="number" name="sale_price" class="form-control" step="1" min="0" value="<?php echo e($product['sale_price']); ?>"></div>
                         <div class="col-md-4 form-group"><label>Tax Rate (%)</label><input type="number" name="tax_rate" class="form-control" step="1" min="0" value="<?php echo e($product['tax_rate']); ?>"></div>
                         <div class="col-md-4 form-group"><label>Min Stock Level</label><input type="number" name="min_stock_level" class="form-control" step="1" min="0" value="<?php echo e($product['min_stock_level']); ?>"></div>
-                        <div class="col-md-4 form-group"><label>Manufactured Date</label><input type="date" name="manufactured_date" class="form-control" value="<?php echo e($product['manufactured_date']); ?>"></div>
-                        <div class="col-md-4 form-group"><label>Expiry Date</label><input type="date" name="expires_date" class="form-control" value="<?php echo e($product['expires_date']); ?>"></div>
+                        <div class="col-md-4 form-group"><label>Date Added</label><input type="date" name="date_added" class="form-control" value="<?php echo e($product['date_added']); ?>"></div>
                         <div class="col-md-4 form-group"><label>Variant Size</label><input type="text" name="variant_size" class="form-control" value="<?php echo e($product['variant_size']); ?>"></div>
                         <div class="col-md-4 form-group"><label>Color</label><input type="text" name="variant_color" class="form-control" value="<?php echo e($product['variant_color']); ?>" placeholder="e.g. White, Sky Blue"></div>
                         <div class="col-md-12 form-group"><label>Description</label><textarea name="description" class="form-control" rows="2"><?php echo e($product['description']); ?></textarea></div>
@@ -201,21 +211,82 @@ require_once 'sidebar.php';
             <div class="card-header"><h5 class="card-title">Stock by Warehouse</h5></div>
             <div class="card-body">
                 <?php foreach ($stock as $s): ?>
-                    <div class="d-flex justify-content-between mb-2">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
                         <span>
                             <?php echo e(trim(($s['shop_name'] ?? '') . ' / ' . $s['warehouse_name'], ' /')); ?>
                             <?php if ((int)($s['is_godown'] ?? 0) === 1): ?>
                                 <span class="badge badge-warning">Central Godown</span>
                             <?php endif; ?>
                         </span>
-                        <span class="font-weight-semibold"><?php echo e(format_quantity($s['quantity'])); ?></span>
+                        <div>
+                            <span class="font-weight-semibold mr-2"><?php echo e(format_quantity($s['quantity'])); ?></span>
+                            <?php if (can('manage_inventory') && !$product['is_service']): ?>
+                                <button type="button" 
+                                        class="btn btn-sm btn-light open-adjust-modal" 
+                                        data-product-id="<?php echo $product_id; ?>"
+                                        data-warehouse-id="<?php echo (int)$s['warehouse_id']; ?>"
+                                        data-warehouse-name="<?php echo e($s['warehouse_name']); ?>"
+                                        title="Adjust Stock">
+                                    <i class="fa fa-sliders"></i>
+                                </button>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 <?php endforeach; ?>
-                <?php if (!$stock): ?><div class="text-muted small">No stock recorded.</div><?php endif; ?>
-                <?php if (can('manage_inventory') && !$product['is_service']): ?>
-                    <a href="inventory-adjust.php?product=<?php echo $product_id; ?>" class="btn btn-sm btn-outline-primary mt-2"><i class="fa fa-plus mr-1"></i> Adjust Stock</a>
+                <?php if (!$stock): ?><div class="text-muted small mb-2">No stock recorded.</div><?php endif; ?>
+                <?php if (can('manage_inventory') && !$product['is_service'] && empty($stock)): ?>
+                    <button type="button" 
+                            class="btn btn-sm btn-outline-primary mt-2 open-adjust-modal" 
+                            data-product-id="<?php echo $product_id; ?>"
+                            data-warehouse-id="0">
+                        <i class="fa fa-plus mr-1"></i> Adjust Stock
+                    </button>
                 <?php endif; ?>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Adjust Stock Modal -->
+<div class="modal fade" id="adjustStockModal" tabindex="-1" role="dialog" aria-labelledby="adjustStockModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <form id="ajaxAdjustForm" method="POST" action="inventory-adjust.php">
+    <div class="modal-header">
+        <h5 class="modal-title"><i class="fa fa-sliders mr-1"></i> Adjust Stock</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+    </div>
+    <div class="modal-body">
+        <div id="adjustModalAlert" class="alert d-none"></div>
+        
+        <!-- Make sure product_id and warehouse_id are explicitly present -->
+        <input type="hidden" name="product_id" id="modal_product_id" value="">
+        <input type="hidden" name="warehouse_id" id="modal_warehouse_id" value="<?php echo isset($godown) ? (int)$godown['warehouse_id'] : ''; ?>">
+        
+        <div class="form-group" id="modal_product_name_group">
+            <label class="font-weight-semibold">Product</label>
+            <input type="text" id="modal_product_name" class="form-control-plaintext font-weight-bold" readonly>
+        </div>
+
+        <div class="form-group">
+            <label>Quantity to Add <span class="text-danger">*</span></label>
+            <input type="number" name="quantity" id="modal_quantity" class="form-control" step="0.01" min="0.01" required>
+            <small class="text-muted" id="modal_unit_hint">Enter quantity to add to stock.</small>
+        </div>
+
+        <div class="form-group">
+            <label>Notes</label>
+            <textarea name="notes" class="form-control" rows="2" placeholder="e.g. Stock adjustment / count correction"></textarea>
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary btn-sm" data-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="saveAdjustBtn"><i class="fa fa-check mr-1"></i> Save Stock</button>
+    </div>
+</form>
+
         </div>
     </div>
 </div>
@@ -250,6 +321,48 @@ require_once 'sidebar.php';
             fillSelect($('#catSub'), curMain, '— Select Line —', curSub);
             if (curSub) fillSelect($('#catSubSub'), curSub, '— Select Pack —', curSubSub);
         }
+
+        // Trigger modal popup
+        $(document).on('click', '.open-adjust-modal', function (e) {
+            e.preventDefault();
+            var warehouseId = $(this).data('warehouse-id');
+            if (warehouseId) {
+                $('#modal_warehouse_id').val(warehouseId);
+            }
+            $('#adjustModalAlert').addClass('d-none').removeClass('alert-success alert-danger');
+            $('#adjustStockModal').modal('show');
+        });
+
+        // Handle AJAX submission
+        $('#ajaxAdjustForm').on('submit', function (e) {
+            e.preventDefault();
+            var $form = $(this);
+            var $btn = $('#saveAdjustBtn');
+            $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin mr-1"></i> Saving...');
+
+            $.ajax({
+                type: 'POST',
+                url: 'inventory-adjust.php',
+                data: $form.serialize(),
+                dataType: 'json',
+                success: function (res) {
+                    if (res.success) {
+                        $('#adjustModalAlert').removeClass('d-none').alert().addClass('alert-success').text(res.message);
+                        setTimeout(function () {
+                            $('#adjustStockModal').modal('hide');
+                            location.reload();
+                        }, 700);
+                    } else {
+                        $('#adjustModalAlert').removeClass('d-none').removeClass('alert-success').addClass('alert-danger').text(res.message);
+                        $btn.prop('disabled', false).html('<i class="fa fa-check mr-1"></i> Save Stock');
+                    }
+                },
+                error: function () {
+                    $('#adjustModalAlert').removeClass('d-none').addClass('alert-danger').text('Server communication error.');
+                    $btn.prop('disabled', false).html('<i class="fa fa-check mr-1"></i> Save Stock');
+                }
+            });
+        });
     });
 </script>
 

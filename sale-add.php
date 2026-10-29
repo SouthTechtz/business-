@@ -115,6 +115,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('sale-add.php');
         }
 
+        // A registered, active customer is required before a partial payment
+        // can be accepted. Anything else is treated as a walk-in sale.
+        if ($contact_id > 0) {
+            $registered_customer = fetch_one(
+                "SELECT contact_id FROM contacts
+                  WHERE contact_id = ? AND tenant_id = ? AND is_customer = 1 AND is_active = 1",
+                $contact_id,
+                $current_user->tenant_id
+            );
+            if (!$registered_customer) {
+                flash_set('danger', 'Select a valid registered customer, or continue as a walk-in customer.');
+                redirect('sale-add.php');
+            }
+            $contact_id = (int)$registered_customer['contact_id'];
+        } else {
+            $contact_id = 0;
+        }
+
         $discount = (float)($_POST['discount'] ?? 0);
         if ($discount < 0) $discount = 0;
 
@@ -139,9 +157,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'is_service'  => $item['is_service'],
             ];
         }
-$grand_total = $subtotal + $tax_total - $discount;
+        $grand_total = $subtotal + $tax_total - $discount;
         if ($grand_total < 0) {
             flash_set('danger', 'Discount cannot exceed the order total.');
+            redirect('sale-add.php');
+        }
+
+        $amount_paid = isset($_POST['amount_paid']) && $_POST['amount_paid'] !== ''
+            ? round((float)$_POST['amount_paid'], 2)
+            : $grand_total;
+        if ($amount_paid < 0) {
+            flash_set('danger', 'Amount paid cannot be negative.');
+            redirect('sale-add.php');
+        }
+        if ($amount_paid > $grand_total + 0.005) {
+            flash_set('danger', 'Amount paid cannot exceed the sale total of ' . money($grand_total, tenant_currency()) . '.');
+            redirect('sale-add.php');
+        }
+        if ($contact_id === 0 && abs($amount_paid - $grand_total) > 0.005) {
+            flash_set('danger', 'Walk-in customers must pay the full total. Select a registered customer to accept a partial payment.');
             redirect('sale-add.php');
         }
 
@@ -226,13 +260,13 @@ $grand_total = $subtotal + $tax_total - $discount;
                 }
             }
 
-            if ($contact_id) {
+            if ($amount_paid > 0) {
                 $stmt = $conn->prepare(
                     "INSERT INTO pos_payments (order_id, amount, payment_method_id, paid_at, created_by) VALUES (?, ?, ?, NOW(), ?)"
                 );
                 $method = (int)($_POST['payment_method'] ?? 1);
                 $method_db = $method ?: 1;
-                $stmt->bind_param('idii', $order_id, $grand_total, $method_db, $current_user->user_id);
+                $stmt->bind_param('idii', $order_id, $amount_paid, $method_db, $current_user->user_id);
                 $stmt->execute();
                 $stmt->close();
             }
@@ -395,20 +429,27 @@ require_once 'sidebar.php';
                     <div class="cart-total-row cart-grand"><span>Total</span><span id="ttGrand"><?php echo e(money($grand_total, $cur)); ?></span></div>
                 </div>
 
-                <form method="POST" action="sale-add.php" class="mt-3">
+                <form method="POST" action="sale-add.php" class="mt-3" id="checkoutForm">
                     <?php echo csrf_field(); ?>
                     <input type="hidden" name="action" value="checkout">
                     <div class="form-group">
                         <label>Customer</label>
-                        <select name="contact_id" class="form-control">
+                        <select name="contact_id" id="customerSelect" class="form-control">
                             <option value="0">Walk-in Customer</option>
                             <?php foreach ($customers as $c): ?>
                                 <option value="<?php echo $c['contact_id']; ?>"><?php echo e(trim(($c['first_name'] ?? '') . ' ' . ($c['last_name'] ?? '')) ?: $c['company_name']); ?></option>
                             <?php endforeach; ?>
                         </select>
+                        <small class="form-text text-muted" id="customerPaymentHint">Walk-in customers must pay the full total. Select a registered customer to accept a partial payment.</small>
                     </div>
                     <div class="row">
                         <div class="col-7 form-group">
+                            <label>Amount Paid (<?php echo e($cur); ?>)</label>
+                            <input type="number" name="amount_paid" id="amountPaidInput" class="form-control"
+                                   step="0.01" min="0" max="<?php echo e($grand_total); ?>"
+                                   value="<?php echo e($grand_total); ?>" required readonly>
+                        </div>
+                        <div class="col-5 form-group">
                             <label>Payment Method</label>
                             <select name="payment_method" class="form-control">
                                 <?php foreach ($methods as $m): ?>
@@ -416,9 +457,15 @@ require_once 'sidebar.php';
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-5 form-group">
+                    </div>
+                    <div class="row">
+                        <div class="col-7 form-group">
                             <label>Discount (<?php echo e($cur); ?>)</label>
                             <input type="number" name="discount" id="discountInput" class="form-control" step="1" min="0" value="0" max="<?php echo (int)$grand_total; ?>">
+                        </div>
+                        <div class="col-5 form-group">
+                            <label>Balance</label>
+                            <input type="text" id="balanceDisplay" class="form-control" value="<?php echo e(money(0, $cur)); ?>" readonly>
                         </div>
                     </div>
                     <button type="submit" class="btn btn-success btn-block btn-lg" id="checkoutBtn" <?php echo !$cart ? 'disabled' : ''; ?>>
@@ -437,6 +484,8 @@ require_once 'sidebar.php';
     var csrfToken = '<?php echo e(csrf_token()); ?>';
     var searchTimer = null;
     var currentDiscount = 0;
+    var lastGrand = <?php echo json_encode(round((float)$grand_total, 2)); ?>;
+    var amountEdited = false;
 
     var fmt = function (n) {
         return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -502,8 +551,36 @@ require_once 'sidebar.php';
         if (d > subtotal + tax) d = subtotal + tax;
         $('#ttDiscount').text(fmtMoney(d));
         $('#ttDiscountRow').css('display', d > 0 ? '' : 'none');
-        $('#ttGrand').text(fmtMoney(subtotal + tax - d));
-        $('#checkoutTotal').text(fmtMoney(subtotal + tax - d));
+        var grand = subtotal + tax - d;
+        if (grand < 0) grand = 0;
+        $('#ttGrand').text(fmtMoney(grand));
+        $('#checkoutTotal').text(fmtMoney(grand));
+        syncAmountPaid(grand);
+    }
+
+    function isWalkIn() {
+        return String($('#customerSelect').val()) === '0';
+    }
+
+    function updateBalance() {
+        var paid = parseFloat($('#amountPaidInput').val());
+        if (isNaN(paid) || paid < 0) paid = 0;
+        var balance = lastGrand - paid;
+        if (balance < 0) balance = 0;
+        $('#balanceDisplay').val(fmtMoney(balance));
+    }
+
+    function syncAmountPaid(grand) {
+        lastGrand = Math.max(0, parseFloat(grand) || 0);
+        var $amount = $('#amountPaidInput');
+        $amount.attr('max', lastGrand.toFixed(2));
+        if (isWalkIn()) {
+            $amount.val(lastGrand.toFixed(2));
+            amountEdited = false;
+        } else if (!amountEdited) {
+            $amount.val(lastGrand.toFixed(2));
+        }
+        updateBalance();
     }
 
     function persistRow($row) {
@@ -524,6 +601,7 @@ require_once 'sidebar.php';
                     if (grand < 0) grand = 0;
                     $('#ttGrand').text(fmtMoney(grand));
                     $('#checkoutTotal').text(fmtMoney(grand));
+                    syncAmountPaid(grand);
                 } else if (res && res.message) {
                     alert(res.message);
                     location.reload();
@@ -576,6 +654,41 @@ require_once 'sidebar.php';
             currentDiscount = d;
             recalcTotals();
         });
+
+        $('#customerSelect').on('change', function () {
+            var walkin = isWalkIn();
+            $('#amountPaidInput').prop('readonly', walkin);
+            amountEdited = false;
+            $('#customerPaymentHint').text(walkin
+                ? 'Walk-in customers must pay the full total. Select a registered customer to accept a partial payment.'
+                : 'Registered customer: you can enter a partial amount; the balance remains due on this sale.');
+            syncAmountPaid(lastGrand);
+        });
+
+        $('#amountPaidInput').on('input', function () {
+            if (isWalkIn()) {
+                $(this).val(lastGrand.toFixed(2));
+                return;
+            }
+            amountEdited = true;
+            updateBalance();
+        });
+
+        $('#checkoutForm').on('submit', function (e) {
+            var paid = parseFloat($('#amountPaidInput').val());
+            if (isNaN(paid)) paid = 0;
+            if (isWalkIn() && Math.abs(paid - lastGrand) > 0.009) {
+                e.preventDefault();
+                alert('Walk-in customers must pay the full total.');
+                return;
+            }
+            if (paid < 0 || paid > lastGrand + 0.009) {
+                e.preventDefault();
+                alert('Amount paid must be between 0 and the sale total.');
+            }
+        });
+
+        syncAmountPaid(lastGrand);
     });
 
     function addToCart(pid) {

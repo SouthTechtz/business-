@@ -3,14 +3,33 @@ require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_inventory');
 $page_title = 'Inventory';
-$can_godown = can('manage_godown');
 
-// Inline stock adjustment (adds to existing stock)
+$tenant_id = (int)$current_user->tenant_id;
+$can_godown = can_access_godown();
+$can_godown_page = can('manage_godown') || can('view_godown');
+
+$tabs = ['godown' => 'Godown', 'stores' => 'Stores', 'shops' => 'Shops'];
+if (!$can_godown) {
+    unset($tabs['godown']);
+}
+$tab = (string)($_GET['tab'] ?? '');
+$tab_requested = isset($_GET['tab']);
+if (!isset($tabs[$tab])) {
+    $tab = array_key_first($tabs);
+}
+
+// Inline stock adjustment on the Stores tab (adds to the existing store stock).
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'adjust') {
     $stock_id = (int)($_POST['stock_id'] ?? 0);
     $add_qty = (float)($_POST['quantity'] ?? 0);
     $prod_date = ($_POST['production_date'] ?? '') ?: null;
     $exp_date = ($_POST['expires_at'] ?? '') ?: null;
+    $return_store = (int)($_POST['return_store'] ?? 0);
+    $return_tab = (string)($_POST['return_tab'] ?? 'stores');
+    if (!isset($tabs[$return_tab])) {
+        $return_tab = 'stores';
+    }
+    $back = 'inventory.php?tab=' . $return_tab . ($return_store > 0 ? '&store=' . $return_store : '');
 
     $stock = fetch_one(
         "SELECT s.*, p.is_service, u.is_decimal, w.is_godown FROM inventory_stock s
@@ -22,11 +41,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'adjus
     );
     if (!$stock) {
         flash_set('danger', 'Stock record not found.');
-        redirect('inventory.php');
+        redirect($back);
     }
     if (!store_is_accessible((int)$stock['warehouse_id'], true, true)) {
         flash_set('danger', 'You do not have access to the store for this stock record.');
-        redirect('inventory.php');
+        redirect($back);
     }
     if ((int)($stock['is_godown'] ?? 0) === 1) {
         flash_set('danger', 'Central Godown stock is received through the Central Godown page so the source reference and receipt are recorded.');
@@ -34,15 +53,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'adjus
     }
     if ($stock['is_service']) {
         flash_set('danger', 'Services do not have stock.');
-        redirect('inventory.php');
+        redirect($back);
     }
     if (!$stock['is_decimal'] && $add_qty != floor($add_qty)) {
         flash_set('danger', 'This product uses whole units only.');
-        redirect('inventory.php');
+        redirect($back);
     }
     if ($add_qty <= 0) {
         flash_set('danger', 'Quantity to add must be greater than zero.');
-        redirect('inventory.php');
+        redirect($back);
     }
 
     $old_qty = (float)$stock['quantity'];
@@ -63,64 +82,164 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'adjus
         $stmt->bind_param('iiidisss', $current_user->tenant_id, $stock['product_id'], $stock['warehouse_id'], $add_qty, $current_user->user_id, $notes, $prod_date, $exp_date);
         $stmt->execute();
         $conn->commit();
-        flash_set('success', 'Stock updated — added ' . rtrim(rtrim(number_format($add_qty, 2, '.', ''), '0'), '.') . ' (now ' . rtrim(rtrim(number_format($new_qty, 2, '.', ''), '0'), '.') . ').');
+        flash_set('success', 'Stock updated — added ' . format_quantity($add_qty) . ' (now ' . format_quantity($new_qty) . ').');
     } catch (Exception $ex) {
         $conn->rollback();
         flash_set('danger', 'Update failed: ' . $ex->getMessage());
     }
-    redirect('inventory.php');
+    redirect($back);
 }
 
+/* ---------------- Locations available to the current user ---------------- */
+$godowns = $can_godown
+    ? fetch_all(
+        "SELECT * FROM warehouses
+          WHERE tenant_id = ? AND location_type = 'godown'
+          ORDER BY is_active DESC, name",
+        $tenant_id
+    )
+    : [];
+$stores = accessible_stores(null, true);
 $shops = accessible_shops(null, true);
-$accessible_shop_ids = array_map(fn($s) => (int)$s['shop_id'], $shops);
-$shop_id = isset($_GET['shop']) && is_numeric($_GET['shop']) ? (int)$_GET['shop'] : 0;
-if ($shop_id > 0 && !in_array($shop_id, $accessible_shop_ids, true)) {
+
+// Without an existing Godown, open on a tab that has something to show.
+if (!$tab_requested && $tab === 'godown' && !$godowns) {
+    $tab = (isset($tabs['stores']) && $stores) ? 'stores' : (isset($tabs['shops']) ? 'shops' : $tab);
+}
+
+/* ---------------- Selected location ---------------- */
+$godown_ids = array_map('intval', array_column($godowns, 'warehouse_id'));
+$godown_id = (int)($_GET['godown'] ?? 0);
+if (!in_array($godown_id, $godown_ids, true)) {
+    $godown_id = $godown_ids[0] ?? 0;
+}
+
+$store_ids = array_map('intval', array_column($stores, 'warehouse_id'));
+$store_id = (int)($_GET['store'] ?? 0);
+if (!in_array($store_id, $store_ids, true)) {
+    $store_id = 0;
+    foreach ($stores as $store) {
+        if ((int)$store['is_active'] === 1) {
+            $store_id = (int)$store['warehouse_id'];
+            break;
+        }
+    }
+    if ($store_id === 0) {
+        $store_id = $store_ids[0] ?? 0;
+    }
+}
+
+$shop_ids = array_map('intval', array_column($shops, 'shop_id'));
+$shop_id = (int)($_GET['shop'] ?? 0);
+if (!in_array($shop_id, $shop_ids, true)) {
     $shop_id = 0;
-}
-
-$warehouses = accessible_stores(null, true, null, $can_godown);
-$accessible_store_ids = array_map(fn($w) => (int)$w['warehouse_id'], $warehouses);
-$default_wh_id = 0;
-foreach ($warehouses as $warehouse) {
-    if ((int)($warehouse['is_godown'] ?? 0) === 0) {
-        $default_wh_id = (int)$warehouse['warehouse_id'];
-        break;
+    foreach ($shops as $shop) {
+        if ((int)$shop['is_active'] === 1) {
+            $shop_id = (int)$shop['shop_id'];
+            break;
+        }
     }
-}
-$wh_id = isset($_GET['warehouse']) && is_numeric($_GET['warehouse']) ? (int)$_GET['warehouse'] : $default_wh_id;
-if ($wh_id > 0 && !in_array($wh_id, $accessible_store_ids, true)) {
-    $wh_id = 0;
-}
-if ($shop_id > 0 && $wh_id > 0) {
-    $selected_wh = fetch_one("SELECT shop_id FROM warehouses WHERE warehouse_id = ? AND tenant_id = ?", $wh_id, $current_user->tenant_id);
-    if (!$selected_wh || (int)$selected_wh['shop_id'] !== $shop_id) {
-        $wh_id = 0;
+    if ($shop_id === 0) {
+        $shop_id = $shop_ids[0] ?? 0;
     }
 }
 
-$stock_sql = "SELECT s.*, p.name product_name, p.code product_code, p.min_stock_level, p.is_service,
-            u.is_decimal, u.short_name unit_short, w.name warehouse_name, w.is_godown,
-            sh.name shop_name
-     FROM inventory_stock s
-     JOIN products p ON p.product_id = s.product_id
-     LEFT JOIN units_of_measurement u ON u.unit_id = p.unit_id
-     JOIN warehouses w ON w.warehouse_id = s.warehouse_id
-     LEFT JOIN shops sh ON sh.shop_id = w.shop_id
-     WHERE s.tenant_id = ? AND (? = 0 OR s.warehouse_id = ?) AND (? = 0 OR w.shop_id = ?)";
-$stock_params = [$current_user->tenant_id, $wh_id, $wh_id, $shop_id, $shop_id];
-if (!$can_godown) {
-    $stock_sql .= " AND w.is_godown = 0";
+$godown_by_id = [];
+foreach ($godowns as $godown) {
+    $godown_by_id[(int)$godown['warehouse_id']] = $godown;
 }
-$scope_ids = accessible_warehouse_ids(null, true, $can_godown);
-if ($scope_ids !== null) {
-    if (!$scope_ids) {
-        $stock_sql .= " AND 1 = 0";
-    } else {
-        $stock_sql .= " AND s.warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . ")";
+$store_by_id = [];
+foreach ($stores as $store) {
+    $store_by_id[(int)$store['warehouse_id']] = $store;
+}
+$shop_by_id = [];
+foreach ($shops as $shop) {
+    $shop_by_id[(int)$shop['shop_id']] = $shop;
+}
+
+/* Warehouse IDs whose stock the current tab lists. */
+$scope_ids = [];
+$location_name = '';
+if ($tab === 'godown' && $godown_id > 0 && isset($godown_by_id[$godown_id])) {
+    $scope_ids = [$godown_id];
+    $location_name = $godown_by_id[$godown_id]['name'];
+} elseif ($tab === 'stores' && $store_id > 0 && isset($store_by_id[$store_id])) {
+    $scope_ids = [$store_id];
+    $location_name = store_label($store_by_id[$store_id]);
+} elseif ($tab === 'shops' && $shop_id > 0 && isset($shop_by_id[$shop_id])) {
+    $location_name = $shop_by_id[$shop_id]['name'];
+    foreach ($stores as $store) {
+        if ((int)$store['shop_id'] === $shop_id) {
+            $scope_ids[] = (int)$store['warehouse_id'];
+        }
     }
 }
-$stock_sql .= " ORDER BY w.is_godown DESC, p.name";
-$stock_rows = fetch_all($stock_sql, ...$stock_params);
+
+/* ---------------- Listing filters ---------------- */
+$q = trim((string)($_GET['q'] ?? ''));
+$category_id = (int)($_GET['category'] ?? 0);
+$stock_filter = (string)($_GET['stock'] ?? '');
+if (!in_array($stock_filter, ['in', 'low', 'out'], true)) {
+    $stock_filter = '';
+}
+$categories = fetch_all(
+    "SELECT category_id, name FROM product_categories WHERE tenant_id = ? ORDER BY name",
+    $tenant_id
+);
+if ($category_id > 0 && !in_array($category_id, array_map('intval', array_column($categories, 'category_id')), true)) {
+    $category_id = 0;
+}
+
+/* ---------------- Products for the selected location ---------------- */
+$rows = [];
+if ($scope_ids) {
+    $in_list = implode(',', array_map('intval', $scope_ids));
+    $sql = "SELECT p.product_id, p.code, p.name, p.min_stock_level, p.is_active,
+                   c.name category_name, COALESCE(u.short_name, '') unit_short,
+                   COALESCE(st.qty, 0) qty, st.stock_id, st.last_counted_at
+              FROM products p
+              LEFT JOIN product_categories c ON c.category_id = p.category_id AND c.tenant_id = p.tenant_id
+              LEFT JOIN units_of_measurement u ON u.unit_id = p.unit_id AND u.tenant_id = p.tenant_id
+              LEFT JOIN (
+                    SELECT product_id, MAX(stock_id) stock_id, SUM(quantity) qty, MAX(last_counted_at) last_counted_at
+                      FROM inventory_stock
+                     WHERE tenant_id = ? AND warehouse_id IN ({$in_list})
+                     GROUP BY product_id
+              ) st ON st.product_id = p.product_id
+             WHERE p.tenant_id = ? AND p.is_service = 0";
+    $params = [$tenant_id, $tenant_id];
+
+    if ($q !== '') {
+        $like = '%' . $q . '%';
+        $sql .= " AND (p.name LIKE ? OR p.code LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)";
+        array_push($params, $like, $like, $like, $like);
+    }
+    if ($category_id > 0) {
+        $sql .= " AND p.category_id = ?";
+        $params[] = $category_id;
+    }
+    if ($stock_filter === 'in') {
+        $sql .= " AND COALESCE(st.qty, 0) > 0";
+    } elseif ($stock_filter === 'out') {
+        $sql .= " AND COALESCE(st.qty, 0) <= 0";
+    } elseif ($stock_filter === 'low') {
+        $sql .= " AND COALESCE(st.qty, 0) > 0 AND COALESCE(st.qty, 0) <= p.min_stock_level";
+    }
+    $sql .= " ORDER BY p.name, p.product_id";
+    $rows = fetch_all($sql, ...$params);
+}
+
+/* Summary cards for the current listing (follows the filters). */
+$summary = ['products' => count($rows), 'qty' => 0.0, 'low' => 0, 'out' => 0];
+foreach ($rows as $row) {
+    $qty = (float)$row['qty'];
+    $summary['qty'] += $qty;
+    if ($qty <= 0) {
+        $summary['out']++;
+    } elseif ($qty <= (float)$row['min_stock_level']) {
+        $summary['low']++;
+    }
+}
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
@@ -129,120 +248,274 @@ require_once 'sidebar.php';
 <div class="page-head">
     <div>
         <h1 class="page-title">Inventory</h1>
-        <div class="page-sub">Stock levels by store. Central Godown stock is shown separately and is never treated as shop POS availability.</div>
+        <div class="page-sub">Stock by Godown, store and shop. Godown stock is shown separately and is never treated as shop POS availability.</div>
     </div>
-    <?php if ($can_godown): ?>
-        <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> Central Godown</a>
-    <?php endif; ?>
-    <a href="inventory-adjust.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Adjust / Restock</a>
+    <div class="d-flex flex-wrap" style="gap:8px;">
+        <?php if ($can_godown_page): ?>
+            <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> Central Godown</a>
+        <?php endif; ?>
+        <a href="inventory-adjust.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Adjust / Restock</a>
+    </div>
 </div>
 
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
 
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
-        <h5 class="card-title">Stock Levels</h5>
-        <div class="d-flex align-items-center">
-            <form method="GET" action="inventory.php" class="form-inline">
-                <select name="shop" class="form-control form-control-sm mr-2" onchange="this.form.warehouse.value='0'; this.form.submit()">
-                    <option value="0">All Shops</option>
-                    <?php foreach ($shops as $s): ?>
-                        <option value="<?php echo (int)$s['shop_id']; ?>" <?php echo $shop_id === (int)$s['shop_id'] ? 'selected' : ''; ?>><?php echo e($s['name']); ?><?php echo (int)$s['is_active'] ? '' : ' (inactive)'; ?></option>
-                    <?php endforeach; ?>
-                </select>
-                <select name="warehouse" class="form-control form-control-sm" onchange="this.form.submit()">
-                    <option value="0">All Stores</option>
-                    <?php foreach ($warehouses as $w): ?>
-                        <?php if ($shop_id > 0 && (int)$w['shop_id'] !== $shop_id) continue; ?>
-                        <option value="<?php echo (int)$w['warehouse_id']; ?>" <?php echo $wh_id == $w['warehouse_id'] ? 'selected' : ''; ?>><?php echo e(store_label($w)); ?><?php echo (int)($w['is_godown'] ?? 0) ? ' — Central Godown' : ''; ?><?php echo (int)$w['is_active'] ? '' : ' (inactive)'; ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </form>
-            <div class="input-group dt-search ml-2">
-                <div class="input-group-prepend"><span class="input-group-text"><i class="fa fa-search"></i></span></div>
-                <input type="text" class="form-control dt-search-input" data-scope="products" placeholder="Search stock...">
+<?php
+$qty_card_label = [
+    'godown' => 'Godown Stock Qty',
+    'stores' => 'Store Stock Qty',
+    'shops'  => 'Shop Stock Qty',
+][$tab];
+$qty_card_icon = $tab === 'godown' ? 'fa-archive' : ($tab === 'stores' ? 'fa-home' : 'fa-building');
+?>
+
+<div class="row mb-4">
+    <div class="col-md-6 col-xl-3 mb-3">
+        <div class="widget">
+            <div class="widget-icon wi-blue"><i class="fa <?php echo e($qty_card_icon); ?>"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo e(format_quantity($summary['qty'])); ?></div>
+                <div class="widget-label"><?php echo e($qty_card_label); ?></div>
             </div>
         </div>
     </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover data-table">
-                <thead>
-                    <tr>
-                        <th>Product</th><th>Code</th><th>Store</th><th>Quantity</th><th>Unit</th><th>Min Level</th><th>Status</th><th class="text-right">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($stock_rows as $row): ?>
-                    <tr>
-                        <td class="font-weight-semibold"><?php echo e($row['product_name']); ?></td>
-                        <td><span class="badge badge-secondary"><?php echo e($row['product_code']); ?></span></td>
-                        <td>
-                            <?php echo e(trim(($row['shop_name'] ?? '') . ' / ' . $row['warehouse_name'], ' /')); ?>
-                            <?php if ((int)($row['is_godown'] ?? 0) === 1): ?>
-                                <span class="badge badge-warning ml-1">Central Godown</span>
-                            <?php endif; ?>
-                        </td>
-                        <td class="font-weight-semibold"><?php echo e(format_quantity($row['quantity'])); ?></td>
-                        <td><?php echo e($row['unit_short'] ?: ''); ?></td>
-                        <td><?php echo e(format_quantity($row['min_stock_level'])); ?></td>
-                        <td>
-                            <?php if ((float)$row['quantity'] <= (float)$row['min_stock_level']): ?>
-                                <span class="badge badge-danger">Low</span>
-                            <?php else: ?>
-                                <span class="badge badge-success">OK</span>
-                            <?php endif; ?>
-                        </td>
-                        <td class="text-right">
-                            <?php if ((int)($row['is_godown'] ?? 0) === 1): ?>
-                                <a href="godown.php" class="btn btn-action btn-light" title="Receive or transfer central stock"><i class="fa fa-archive"></i></a>
-                            <?php else: ?>
-                                <button class="btn btn-action btn-light" data-toggle="modal" data-target="#adjustModal<?php echo $row['stock_id']; ?>"><i class="fa fa-edit"></i> Adjust</button>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-                <?php if (!$stock_rows): ?>
-                    <tr><td colspan="8" class="text-center text-muted py-4">No stock records found.</td></tr>
-                <?php endif; ?>
-                </tbody>
-            </table>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <div class="widget">
+            <div class="widget-icon wi-purple"><i class="fa fa-cubes"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo $summary['products']; ?></div>
+                <div class="widget-label">Available Products</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <div class="widget">
+            <div class="widget-icon wi-amber"><i class="fa fa-exclamation-triangle"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo $summary['low']; ?></div>
+                <div class="widget-label">Low Stock</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <div class="widget">
+            <div class="widget-icon wi-red"><i class="fa fa-times-circle"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo $summary['out']; ?></div>
+                <div class="widget-label">Out of Stock</div>
+            </div>
         </div>
     </div>
 </div>
 
-<?php foreach ($stock_rows as $row): ?>
-<?php if ((int)($row['is_godown'] ?? 0) === 1) continue; ?>
-<div class="modal fade" id="adjustModal<?php echo $row['stock_id']; ?>" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Adjust Stock — <?php echo e($row['product_name']); ?></h5>
-                <button type="button" class="close" data-dismiss="modal">&times;</button>
+<ul class="nav page-tabs">
+    <?php foreach ($tabs as $tab_key => $tab_label): ?>
+        <li class="nav-item">
+            <a class="nav-link <?php echo $tab === $tab_key ? 'active' : ''; ?>" href="inventory.php?tab=<?php echo e($tab_key); ?>">
+                <i class="fa <?php echo $tab_key === 'godown' ? 'fa-archive' : ($tab_key === 'stores' ? 'fa-home' : 'fa-building'); ?> mr-1"></i>
+                <?php echo e($tab_label); ?>
+            </a>
+        </li>
+    <?php endforeach; ?>
+</ul>
+
+<?php
+$tab_title = [
+    'godown' => 'Godown Products',
+    'stores' => 'Store Products',
+    'shops'  => 'Shop Products',
+][$tab];
+$tab_has_location = ($tab === 'godown' && $godown_id > 0)
+    || ($tab === 'stores' && $store_id > 0)
+    || ($tab === 'shops' && $shop_id > 0);
+$location_options = $tab === 'godown' ? $godowns : ($tab === 'stores' ? $stores : $shops);
+$location_empty_message = $tab === 'godown'
+    ? 'No Godown has been created yet. Create one from the Central Godown page.'
+    : ($tab === 'stores' ? 'No store is assigned to your account.' : 'No shop is assigned to your account.');
+?>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
+        <h5 class="card-title mb-1"><?php echo e($tab_title); ?><?php echo $location_name !== '' ? ' — ' . e($location_name) : ''; ?></h5>
+    </div>
+
+    <?php if (!$location_options): ?>
+        <div class="card-body">
+            <div class="alert alert-warning mb-0">
+                <?php echo e($location_empty_message); ?>
+                <?php if ($tab === 'godown' && $can_godown_page): ?>
+                    <a href="godown.php?tab=overview" class="alert-link">Open Central Godown</a>.
+                <?php endif; ?>
             </div>
-            <form method="POST" action="inventory.php">
-                <div class="modal-body">
-                    <input type="hidden" name="action" value="adjust">
-                    <input type="hidden" name="stock_id" value="<?php echo $row['stock_id']; ?>">
-                    <div class="form-group">
-                        <label>Quantity to Add (current: <?php echo e((float)$row['quantity']); ?>)</label>
-                        <input type="number" name="quantity" class="form-control" step="1" min="1" required value="1">
-                        <small class="text-muted">This amount is added to the existing stock.</small>
-                    </div>
-                    <div class="form-group"><label>Production Date</label><input type="date" name="production_date" class="form-control" value="<?php echo e($row['production_date']); ?>"></div>
-                    <div class="form-group"><label>Expiry Date</label><input type="date" name="expires_at" class="form-control" value="<?php echo e($row['expires_at']); ?>"></div>
-                    <small class="text-muted">The difference is logged as an inventory movement.</small>
+        </div>
+    <?php else: ?>
+        <div class="card-body border-bottom pb-2">
+            <form method="GET" action="inventory.php" class="form-row align-items-end">
+                <input type="hidden" name="tab" value="<?php echo e($tab); ?>">
+                <div class="col-12 col-md-3 form-group mb-2">
+                    <label class="small mb-1"><?php echo $tab === 'godown' ? 'Godown' : ($tab === 'stores' ? 'Store' : 'Shop'); ?></label>
+                    <?php if ($tab === 'godown'): ?>
+                        <select name="godown" class="form-control form-control-sm" onchange="this.form.submit()">
+                            <?php foreach ($godowns as $godown): ?>
+                                <option value="<?php echo (int)$godown['warehouse_id']; ?>" <?php echo $godown_id === (int)$godown['warehouse_id'] ? 'selected' : ''; ?>>
+                                    <?php echo e($godown['name'] . ((int)$godown['is_active'] ? '' : ' (inactive)')); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php elseif ($tab === 'stores'): ?>
+                        <select name="store" class="form-control form-control-sm" onchange="this.form.submit()">
+                            <?php foreach ($stores as $store): ?>
+                                <option value="<?php echo (int)$store['warehouse_id']; ?>" <?php echo $store_id === (int)$store['warehouse_id'] ? 'selected' : ''; ?>>
+                                    <?php echo e(store_label($store) . ((int)$store['is_active'] ? '' : ' (inactive)')); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php else: ?>
+                        <select name="shop" class="form-control form-control-sm" onchange="this.form.submit()">
+                            <?php foreach ($shops as $shop): ?>
+                                <option value="<?php echo (int)$shop['shop_id']; ?>" <?php echo $shop_id === (int)$shop['shop_id'] ? 'selected' : ''; ?>>
+                                    <?php echo e($shop['name'] . ' (' . $shop['code'] . ')' . ((int)$shop['is_active'] ? '' : ' (inactive)')); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php endif; ?>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save</button>
+                <div class="col-6 col-md-3 form-group mb-2">
+                    <label class="small mb-1">Search</label>
+                    <input type="search" name="q" class="form-control form-control-sm" value="<?php echo e($q); ?>" placeholder="Product, code, SKU, barcode...">
+                </div>
+                <div class="col-6 col-md-2 form-group mb-2">
+                    <label class="small mb-1">Category</label>
+                    <select name="category" class="form-control form-control-sm">
+                        <option value="0">All categories</option>
+                        <?php foreach ($categories as $category): ?>
+                            <option value="<?php echo (int)$category['category_id']; ?>" <?php echo $category_id === (int)$category['category_id'] ? 'selected' : ''; ?>>
+                                <?php echo e($category['name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-6 col-md-2 form-group mb-2">
+                    <label class="small mb-1">Stock</label>
+                    <select name="stock" class="form-control form-control-sm">
+                        <option value="">All stock</option>
+                        <option value="in" <?php echo $stock_filter === 'in' ? 'selected' : ''; ?>>In stock</option>
+                        <option value="low" <?php echo $stock_filter === 'low' ? 'selected' : ''; ?>>Low stock</option>
+                        <option value="out" <?php echo $stock_filter === 'out' ? 'selected' : ''; ?>>Out of stock</option>
+                    </select>
+                </div>
+                <div class="col-6 col-md-2 form-group mb-2">
+                    <button type="submit" class="btn btn-sm btn-primary"><i class="fa fa-filter mr-1"></i> Filter</button>
+                    <a href="inventory.php?tab=<?php echo e($tab); ?>" class="btn btn-sm btn-light">Reset</a>
                 </div>
             </form>
         </div>
-    </div>
+
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover data-table">
+                    <thead>
+                        <tr>
+                            <th>Product</th><th>Code</th><th>Category</th><th>Quantity</th><th>Unit</th><th>Min Level</th><th>Status</th><th class="text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($rows as $row): ?>
+                        <?php
+                        $qty = (float)$row['qty'];
+                        $min = (float)$row['min_stock_level'];
+                        if ($qty <= 0) {
+                            $status = '<span class="badge badge-danger">Out</span>';
+                        } elseif ($qty <= $min) {
+                            $status = '<span class="badge badge-warning">Low</span>';
+                        } else {
+                            $status = '<span class="badge badge-success">OK</span>';
+                        }
+                        ?>
+                        <tr>
+                            <td class="font-weight-semibold">
+                                <?php echo e($row['name']); ?>
+                                <?php if (!(int)$row['is_active']): ?><span class="badge badge-secondary ml-1">Inactive</span><?php endif; ?>
+                            </td>
+                            <td><span class="badge badge-secondary"><?php echo e($row['code']); ?></span></td>
+                            <td><?php echo e($row['category_name'] ?: '—'); ?></td>
+                            <td class="font-weight-semibold" data-order="<?php echo (float)$qty; ?>"><?php echo e(format_quantity($qty)); ?></td>
+                            <td><?php echo e($row['unit_short'] ?: ''); ?></td>
+                            <td data-order="<?php echo (float)$min; ?>"><?php echo e(format_quantity($min)); ?></td>
+                            <td><?php echo $status; ?></td>
+                            <td class="text-right">
+                                <?php if ($tab === 'godown'): ?>
+                                    <?php if ($can_godown_page): ?>
+                                        <a href="godown.php?tab=products" class="btn btn-action btn-light" title="Receive or transfer Godown stock"><i class="fa fa-archive"></i></a>
+                                    <?php else: ?>
+                                        <span class="text-muted">—</span>
+                                    <?php endif; ?>
+                                <?php elseif ($tab === 'stores'): ?>
+                                    <?php if ($row['stock_id']): ?>
+                                        <button class="btn btn-action btn-light" data-toggle="modal" data-target="#adjustModal<?php echo (int)$row['stock_id']; ?>" title="Adjust stock"><i class="fa fa-edit"></i></button>
+                                    <?php else: ?>
+                                        <a href="inventory-adjust.php?product=<?php echo (int)$row['product_id']; ?>&warehouse=<?php echo (int)$store_id; ?>" class="btn btn-action btn-light" title="Add stock"><i class="fa fa-plus"></i></a>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <a href="inventory-adjust.php?product=<?php echo (int)$row['product_id']; ?>" class="btn btn-action btn-light" title="Adjust / restock"><i class="fa fa-edit"></i></a>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <?php if (!$rows): ?>
+                        <tr>
+                            <td colspan="8" class="text-center text-muted py-4">
+                                <?php if (!$scope_ids): ?>
+                                    This shop has no stores yet, so no stock can be listed.
+                                <?php else: ?>
+                                    No products match the current filters.
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    <?php endif; ?>
 </div>
-<?php endforeach; ?>
+
+<?php if ($tab === 'stores'): ?>
+    <?php foreach ($rows as $row): ?>
+        <?php if (!$row['stock_id']) continue; ?>
+        <div class="modal fade" id="adjustModal<?php echo (int)$row['stock_id']; ?>" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Adjust Stock — <?php echo e($row['name']); ?></h5>
+                        <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    </div>
+                    <form method="POST" action="inventory.php?tab=stores">
+                        <div class="modal-body">
+                            <input type="hidden" name="action" value="adjust">
+                            <input type="hidden" name="stock_id" value="<?php echo (int)$row['stock_id']; ?>">
+                            <input type="hidden" name="return_tab" value="stores">
+                            <input type="hidden" name="return_store" value="<?php echo (int)$store_id; ?>">
+                            <div class="form-group">
+                                <label>Quantity to Add (current: <?php echo e(format_quantity($row['qty'])); ?>)</label>
+                                <input type="number" name="quantity" class="form-control" step="1" min="1" required value="1">
+                                <small class="text-muted">This amount is added to the existing stock.</small>
+                            </div>
+                            <div class="form-group"><label>Production Date</label><input type="date" name="production_date" class="form-control"></div>
+                            <div class="form-group"><label>Expiry Date</label><input type="date" name="expires_at" class="form-control"></div>
+                            <small class="text-muted">The difference is logged as an inventory movement.</small>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    <?php endforeach; ?>
+<?php endif; ?>
 
 <?php require_once 'footer.php'; ?>

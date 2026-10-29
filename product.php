@@ -17,8 +17,15 @@ $sf_categories = storefront_categories($sf_tenant_id);
 $sf_product_id = (int)($_GET['id'] ?? 0);
 $sf_product = $sf_product_id > 0 ? storefront_product($sf_tenant_id, $sf_product_id) : null;
 
+// Check if request is an AJAX/Modal fetch call
+$is_modal_request = !empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest' || isset($_GET['modal']);
+
 if (!$sf_product) {
     http_response_code(404);
+    if ($is_modal_request) {
+        echo '<div class="sf-modal-error"><h3>Product not found</h3><p>This product may have been removed or is no longer available.</p></div>';
+        exit;
+    }
     $page_title = 'Product not found';
     $sf_meta_description = 'The requested product is not in this catalogue.';
     $sf_canonical_url = storefront_absolute_url('index.php');
@@ -66,6 +73,82 @@ if ($sf_meta_description === '') {
 }
 $page_title = (string)$sf_product['name'];
 
+// If requested via modal/AJAX, output only the clean popup container content
+if ($is_modal_request) {
+    ?>
+    <div class="sf-quickview-content">
+        <button type="button" class="sf-modal-close" onclick="closeProductModal()" aria-label="Close">&times;</button>
+        <div class="sf-product-layout">
+            <div class="sf-product-gallery">
+                <div class="sf-gallery-main">
+                    <?php if ($sf_image !== ''): ?>
+                        <img src="<?php echo e($sf_image); ?>" alt="<?php echo e($sf_product['name']); ?>" width="500" height="400">
+                    <?php else: ?>
+                        <span class="sf-product-placeholder">No product image</span>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div class="sf-detail">
+                <div class="sf-detail-category">
+                    <?php echo !empty($sf_product['category_name']) ? e($sf_product['category_name']) : 'Catalogue'; ?>
+                </div>
+                <h2><?php echo e($sf_product['name']); ?></h2>
+                <div class="sf-product-code">SKU <?php echo e(($sf_product['sku'] ?: $sf_product['code'])); ?></div>
+
+                <div class="sf-detail-price">
+                    <span class="sf-price"><?php echo e(money($sf_product['sale_price'], $sf_currency)); ?></span>
+                    <?php if ($sf_is_sale): ?><span class="sf-price-compare"><?php echo e(money($sf_compare, $sf_currency)); ?></span><?php endif; ?>
+                    <?php if ($sf_unit !== ''): ?><span class="sf-unit">/ <?php echo e($sf_unit); ?></span><?php endif; ?>
+                </div>
+
+                <p class="sf-detail-summary">
+                    <?php echo trim((string)$sf_product['description']) !== '' ? e(mb_substr((string)$sf_product['description'], 0, 160)) : 'Product details are available from the store.'; ?>
+                </p>
+
+                <form id="modalCartForm" method="post" action="storefront-cart-action.php" class="sf-add-form">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="add">
+                    <input type="hidden" name="product_id" value="<?php echo (int)$sf_product['product_id']; ?>">
+                    <div class="sf-detail-buy">
+                        <label class="sf-qty">
+                            <span>Quantity</span>
+                            <input type="number" name="quantity" value="1" min="1" max="<?php echo max(1, $sf_max_quantity); ?>" step="1" <?php echo $sf_available ? '' : 'disabled'; ?>>
+                        </label>
+                        <button type="submit" class="sf-btn sf-btn-primary" <?php echo $sf_available ? '' : 'disabled'; ?>>
+                            <i class="fa fa-shopping-cart" aria-hidden="true"></i>
+                            <?php echo $sf_available ? 'Add to cart' : 'Out of stock'; ?>
+                        </button>
+                    </div>
+                </form>
+                <p class="sf-detail-stock <?php echo $sf_available ? 'in-stock' : 'out-stock'; ?>">
+                    <?php echo $sf_available ? 'Available in shop today.' : 'Out of stock.'; ?>
+                </p>
+            </div>
+        </div>
+    </div>
+    <script>
+        // Handle popup form submission via AJAX so it confirms and auto-closes smoothly
+        document.getElementById('modalCartForm')?.addEventListener('submit', function(e) {
+            e.preventDefault();
+            let formData = new FormData(this);
+            fetch(this.action, {
+                method: 'POST',
+                body: formData
+            }).then(response => {
+                if(response.ok) {
+                    if (typeof closeProductModal === 'function') closeProductModal();
+                    // Optional: trigger cart count refresh if available
+                    location.reload(); 
+                }
+            }).catch(err => console.error(err));
+        });
+    </script>
+    <?php
+    exit;
+}
+
+// Full page render fallback if visited directly
 $sf_schema_product = [
     '@type' => 'Product',
     'name' => (string)$sf_product['name'],
@@ -234,7 +317,6 @@ require __DIR__ . '/storefront-header.php';
                             <?php if ($sf_unit !== ''): ?><tr><th scope="row">Sold by</th><td><?php echo e($sf_unit); ?></td></tr><?php endif; ?>
                             <?php if (trim((string)($sf_product['variant_color'] ?? '')) !== ''): ?><tr><th scope="row">Colour</th><td><?php echo e($sf_product['variant_color']); ?></td></tr><?php endif; ?>
                             <?php if (trim((string)($sf_product['variant_size'] ?? '')) !== ''): ?><tr><th scope="row">Size</th><td><?php echo e($sf_product['variant_size']); ?></td></tr><?php endif; ?>
-                            <?php if (!empty($sf_product['expires_date'])): ?><tr><th scope="row">Expires</th><td><?php echo e($sf_product['expires_date']); ?></td></tr><?php endif; ?>
                         </tbody>
                     </table>
                 </section>

@@ -84,6 +84,7 @@ $chain = category_chain($product['category_id']);
                 <table class="table">
                     <tbody>
                         <tr><th>Name</th><td><?php echo e($product['name']); ?></td></tr>
+                        <tr><th>Brand</th><td><?php echo e($product['brand'] ?: '—'); ?></td></tr>
                         <tr><th>Main Category</th><td><?php echo e($chain[0] ?: '—'); ?></td></tr>
                         <tr><th>Subcategory</th><td><?php echo e($chain[1] ?: '—'); ?></td></tr>
                         <tr><th>Sub-Subcategory</th><td><?php echo e($chain[2] ?: '—'); ?></td></tr>
@@ -93,8 +94,7 @@ $chain = category_chain($product['category_id']);
                         <tr><th>SKU</th><td><?php echo e($product['sku'] ?: '—'); ?></td></tr>
                         <tr><th>Tax Rate</th><td><?php echo e((float)$product['tax_rate']); ?>%</td></tr>
                         <tr><th>Min Stock Level</th><td><?php echo e((float)$product['min_stock_level']); ?></td></tr>
-                        <tr><th>Manufactured</th><td><?php echo $product['manufactured_date'] ? e(date('M d, Y', strtotime($product['manufactured_date']))) : '—'; ?></td></tr>
-                        <tr><th>Expires</th><td><?php echo $product['expires_date'] ? e(date('M d, Y', strtotime($product['expires_date']))) : '—'; ?></td></tr>
+                        <tr><th>Date Added</th><td><?php echo $product['date_added'] ? e(date('M d, Y', strtotime($product['date_added']))) : '—'; ?></td></tr>
                         <tr><th>Pack Size</th><td><?php echo e($product['variant_size'] ?: '—'); ?></td></tr>
                         <tr><th>Type</th><td><?php echo $product['is_service'] ? '<span class="badge badge-purple">Service</span>' : '<span class="badge badge-primary">Product</span>'; ?></td></tr>
                         <tr><th>Status</th><td><?php echo $product['is_active'] ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-secondary">Inactive</span>'; ?></td></tr>

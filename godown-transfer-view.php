@@ -1,7 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
-require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers']);
+require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers']);
 $page_title = 'Godown Transfer';
 
 $tenant_id = (int)$current_user->tenant_id;
@@ -35,7 +35,7 @@ function transfer_load(int $transfer_id, int $tenant_id): ?array
            JOIN shops s ON s.shop_id = t.destination_shop_id AND s.tenant_id = t.tenant_id
            JOIN warehouses w ON w.warehouse_id = t.destination_warehouse_id AND w.tenant_id = t.tenant_id
            JOIN warehouses sw ON sw.warehouse_id = t.source_warehouse_id AND sw.tenant_id = t.tenant_id
-           JOIN shops ssw ON ssw.shop_id = sw.shop_id AND ssw.tenant_id = sw.tenant_id
+           LEFT JOIN shops ssw ON ssw.shop_id = sw.shop_id AND ssw.tenant_id = sw.tenant_id
            LEFT JOIN users ur ON ur.user_id = t.requested_by
            LEFT JOIN users ua ON ua.user_id = t.approved_by
            LEFT JOIN users ud ON ud.user_id = t.dispatched_by
@@ -118,9 +118,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $source_lock = fetch_one(
                 "SELECT w.* FROM warehouses w
-                   JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_godown = 1
-                    AND w.is_active = 1 AND s.is_active = 1
+                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type = 'godown'
+                    AND w.is_active = 1
                   FOR UPDATE",
                 (int)$locked['source_warehouse_id'],
                 $tenant_id
@@ -185,9 +184,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $source_lock = fetch_one(
                 "SELECT w.* FROM warehouses w
-                   JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_godown = 1
-                    AND w.is_active = 1 AND s.is_active = 1
+                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type = 'godown'
+                    AND w.is_active = 1
                   FOR UPDATE",
                 (int)$locked['source_warehouse_id'],
                 $tenant_id
@@ -622,6 +620,7 @@ $can_receive = $destination_store && can('receive_godown_transfers');
 $can_cancel = $source_store && (can('approve_godown_transfers') || can('manage_godown'));
 $can_resolve = $source_store && (can('approve_godown_transfers') || can('manage_godown'));
 $can_manage_godown = can('manage_godown');
+$can_request_godown = can('request_godown_transfers');
 
 $source_stock_by_product = [];
 $show_source_stock = $source_store && in_array($transfer['status'], ['draft', 'approved'], true);
@@ -666,11 +665,11 @@ require_once 'sidebar.php';
 
 <ul class="nav page-tabs">
     <?php if ($can_manage_godown): ?>
-    <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown Stock</a></li>
+    <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
     <?php endif; ?>
     <li class="nav-item"><a class="nav-link" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
-    <?php if ($can_manage_godown && find_active_godown()): ?>
-    <li class="nav-item"><a class="nav-link" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> New Transfer</a></li>
+    <?php if (($can_manage_godown || $can_request_godown) && find_active_godown()): ?>
+    <li class="nav-item"><a class="nav-link" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> <?php echo $can_manage_godown ? 'New Transfer' : 'Request Stock'; ?></a></li>
     <?php endif; ?>
 </ul>
 
@@ -687,7 +686,7 @@ require_once 'sidebar.php';
                     <div class="col-sm-6 mb-3">
                         <div class="text-muted small">Source Godown</div>
                         <div class="font-weight-semibold"><?php echo e($transfer['source_warehouse_name']); ?></div>
-                        <div class="text-muted small"><?php echo e($transfer['source_shop_name']); ?> <?php echo $transfer['source_warehouse_code'] ? '(' . e($transfer['source_warehouse_code']) . ')' : ''; ?></div>
+                        <div class="text-muted small"><?php echo e($transfer['source_shop_name'] ?: 'Independent Godown'); ?> <?php echo $transfer['source_warehouse_code'] ? '(' . e($transfer['source_warehouse_code']) . ')' : ''; ?></div>
                     </div>
                     <div class="col-sm-6 mb-3">
                         <div class="text-muted small">Destination</div>

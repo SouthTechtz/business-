@@ -94,7 +94,7 @@ require_once 'sidebar.php';
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Customer #</th><th>Name</th><th>Company</th><th>Email</th><th>Phone</th><th>City</th><th>Invoices</th><th>Total Spent</th><th class="text-right">Actions</th>
+                        <th>Customer #</th><th>Name</th><th>Company</th><th>Email</th><th>Phone</th><th>Location</th><th>Invoices</th><th>Total Spent</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -110,7 +110,7 @@ require_once 'sidebar.php';
                         <td><?php echo e($row['company_name'] ?: '—'); ?></td>
                         <td><?php echo e($row['email'] ?: '—'); ?></td>
                         <td><?php echo e($row['phone'] ?: '—'); ?></td>
-                        <td><?php echo e($row['city'] ?: '—'); ?></td>
+                        <td><?php echo e($row['address'] ?: ($row['city'] ?: '—')); ?></td>
                         <td><span class="badge badge-primary"><?php echo (int)$row['invoice_count']; ?></span></td>
                         <td><?php echo e(money($row['total_spent'], $cur = tenant_currency())); ?></td>
                         <td class="text-right">

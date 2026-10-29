@@ -1,7 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
-require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers']);
+require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers']);
 $page_title = 'Godown Transfers';
 
 $tenant_id = (int)$current_user->tenant_id;
@@ -47,14 +47,25 @@ $sql = "SELECT t.*,
         JOIN shops s ON s.shop_id = t.destination_shop_id AND s.tenant_id = t.tenant_id
         JOIN warehouses w ON w.warehouse_id = t.destination_warehouse_id AND w.tenant_id = t.tenant_id
         JOIN warehouses sw ON sw.warehouse_id = t.source_warehouse_id AND sw.tenant_id = t.tenant_id
-        JOIN shops ssw ON ssw.shop_id = sw.shop_id AND ssw.tenant_id = sw.tenant_id
+        LEFT JOIN shops ssw ON ssw.shop_id = sw.shop_id AND ssw.tenant_id = sw.tenant_id
         LEFT JOIN users ur ON ur.user_id = t.requested_by
         WHERE t.tenant_id = ?";
 $params = [$tenant_id];
 
 if (!tenant_admin_scope()) {
     $destination_shop_ids = accessible_shop_ids(null, true);
-    $source_warehouse_ids = accessible_warehouse_ids(null, true, true) ?? [];
+    // Pin source-side scope to non-Godown stores. Godown oversight staff get
+    // the Godown source added below; pure requesters must only see transfers
+    // for shops they can access, never every request from the same Godown.
+    $source_warehouse_ids = accessible_warehouse_ids(null, true, false) ?? [];
+    $godown_oversight = can('manage_godown')
+        || can('view_godown')
+        || can('approve_godown_transfers')
+        || can('dispatch_godown_transfers')
+        || can('receive_godown_transfers');
+    if ($godown_oversight) {
+        $source_warehouse_ids = accessible_warehouse_ids(null, true, true) ?? [];
+    }
     $scope_parts = [];
     if ($destination_shop_ids) {
         $scope_parts[] = 't.destination_shop_id IN (' . implode(',', array_map('intval', $destination_shop_ids)) . ')';
@@ -109,18 +120,18 @@ require_once 'sidebar.php';
         <h1 class="page-title">Godown Transfers</h1>
         <div class="page-sub"><?php echo count($transfers); ?> transfer(s) match the current filters. Approval does not move stock; dispatch deducts the Godown once; receipt adds only accepted quantities.</div>
     </div>
-    <?php if ($godown && can('manage_godown')): ?>
-        <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> New Transfer</a>
+    <?php if ($godown && (can('manage_godown') || can('request_godown_transfers'))): ?>
+        <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> <?php echo can('manage_godown') ? 'New Transfer' : 'Request Stock'; ?></a>
     <?php endif; ?>
 </div>
 
 <ul class="nav page-tabs">
     <?php if (can('manage_godown')): ?>
-    <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown Stock</a></li>
+    <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
     <?php endif; ?>
     <li class="nav-item"><a class="nav-link active" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
-    <?php if ($godown && can('manage_godown')): ?>
-    <li class="nav-item"><a class="nav-link" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> New Transfer</a></li>
+    <?php if ($godown && (can('manage_godown') || can('request_godown_transfers'))): ?>
+    <li class="nav-item"><a class="nav-link" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> <?php echo can('manage_godown') ? 'New Transfer' : 'Request Stock'; ?></a></li>
     <?php endif; ?>
 </ul>
 
@@ -179,7 +190,7 @@ require_once 'sidebar.php';
                         </td>
                         <td>
                             <?php echo e($transfer['source_warehouse_name']); ?>
-                            <br><small class="text-muted"><?php echo e($transfer['source_shop_name']); ?></small>
+                            <br><small class="text-muted"><?php echo e($transfer['source_shop_name'] ?: 'Independent Godown'); ?></small>
                         </td>
                         <td>
                             <?php echo e($transfer['destination_shop_name']); ?>
