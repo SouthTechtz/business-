@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_leads');
@@ -36,6 +36,10 @@ if (!$stmt->execute()) {
 $stmt->close();
 
 $sql = "SELECT l.*,
+               (SELECT GROUP_CONCAT(DISTINCT sli.product_name_snapshot SEPARATOR ', ')
+                  FROM storefront_lead_request_items sli
+                  JOIN storefront_lead_requests slr ON slr.request_id = sli.request_id AND slr.tenant_id = sli.tenant_id
+                 WHERE slr.lead_id = l.lead_id AND slr.tenant_id = l.tenant_id) product_names,
                ua.first_name assignee_first, ua.last_name assignee_last,
                uc.first_name creator_first, uc.last_name creator_last,
                c.first_name contact_first, c.last_name contact_last, c.company_name contact_company,
@@ -155,8 +159,8 @@ require_once 'sidebar.php';
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Lead #</th><th>Customer</th><th>Source</th><th>Status</th>
-                        <th>Assigned</th><th>Next Follow-up</th><th>Orders</th><th>Created</th><th class="text-right">Actions</th>
+                        <th>Customer Name</th><th>Phone</th><th>Product Name</th><th>Location</th>
+                        <th>Status</th><th>Orders Placed</th><th>Next Follow-up</th><th>Date</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -168,37 +172,40 @@ require_once 'sidebar.php';
                     $can_delete_lead = in_array($l['status'], ['new', 'contacted', 'qualified'], true)
                         && (int)$l['order_count'] === 0
                         && empty($l['has_converted_request']);
+                    $contact_person = trim((string)($l['contact_first'] ?? '') . ' ' . (string)($l['contact_last'] ?? ''));
+                    $customer_name = trim((string)($l['contact_company'] ?? ''));
+                    if ($customer_name === '') $customer_name = trim((string)($l['company_name'] ?? ''));
+                    if ($customer_name === '') $customer_name = $contact_person ?: (string)$l['contact_name'];
+                    $contact_phone = $l['phone'] ?: ($l['contact_phone'] ?: $l['contact_mobile']);
+                    $contact_email = $l['email'] ?: $l['contact_email'];
+                    $product_name = trim((string)($l['product_names'] ?? ''));
+                    if ($product_name === '') $product_name = 'â€”';
+                    $lead_preview = [
+                        'lead_number' => (string)$l['lead_number'],
+                        'customer_name' => $customer_name,
+                        'phone' => $contact_phone ?: 'Phone not recorded',
+                        'location' => (string)($l['location'] ?: 'â€”'),
+                        'product' => $product_name,
+                        'status' => (string)($statuses[$l['status']] ?? $l['status']),
+                        'orders' => $can_orders ? (int)$l['order_count'] : 0,
+                        'next_follow_up' => $l['next_follow_up_at'] ? date('M d, Y', strtotime($l['next_follow_up_at'])) : 'â€”',
+                        'created' => date('M d, Y', strtotime($l['created_at'])),
+                        'notes' => trim((string)($l['notes'] ?? '')),
+                    ];
                     ?>
-                    <tr>
-                        <td class="font-weight-semibold"><a href="lead-view.php?id=<?php echo (int)$l['lead_id']; ?>"><?php echo e($l['lead_number']); ?></a></td>
+                    <tr class="lead-row" data-lead="<?php echo e(json_encode($lead_preview, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)); ?>" style="cursor:pointer;">
                         <td>
-                            <?php
-                            $contact_person = trim((string)($l['contact_first'] ?? '') . ' ' . (string)($l['contact_last'] ?? ''));
-                            $customer_name = trim((string)($l['contact_company'] ?? ''));
-                            if ($customer_name === '') $customer_name = trim((string)($l['company_name'] ?? ''));
-                            if ($customer_name === '') $customer_name = $contact_person ?: (string)$l['contact_name'];
-                            $contact_phone = $l['phone'] ?: ($l['contact_phone'] ?: $l['contact_mobile']);
-                            $contact_email = $l['email'] ?: $l['contact_email'];
-                            ?>
                             <?php if (!empty($l['contact_id'])): ?>
                                 <a href="customer-view.php?id=<?php echo (int)$l['contact_id']; ?>" class="font-weight-semibold"><?php echo e($customer_name); ?></a>
                             <?php else: ?>
                                 <span class="font-weight-semibold"><?php echo e($customer_name); ?></span>
                             <?php endif; ?>
-                            <?php if ($contact_person !== '' && $contact_person !== $customer_name): ?>
-                                <br><small class="text-muted"><i class="fa fa-user mr-1"></i><?php echo e($contact_person); ?></small>
-                            <?php endif; ?>
-                            <br><small class="text-muted"><i class="fa fa-phone mr-1"></i><?php echo e($contact_phone ?: 'Phone not recorded'); ?></small>
-                            <?php if ($contact_email): ?><br><small class="text-muted"><i class="fa fa-envelope-o mr-1"></i><?php echo e($contact_email); ?></small><?php endif; ?>
                         </td>
-                        <td><?php echo e(source_label($l['source'])); ?></td>
+                        <td><?php echo e($contact_phone ?: 'Phone not recorded'); ?></td>
+                        <td><?php echo e($product_name); ?></td>
+                        <td><?php echo e($l['location'] ?: 'â€”'); ?></td>
                         <td><span class="badge badge-<?php echo e(lead_status_class($l['status'])); ?>"><?php echo e($statuses[$l['status']] ?? $l['status']); ?></span></td>
-                        <td>
-                            <?php
-                            $assignee = trim((string)($l['assignee_first'] ?? '') . ' ' . (string)($l['assignee_last'] ?? ''));
-                            echo e($assignee ?: 'Unassigned');
-                            ?>
-                        </td>
+                        <td><?php echo $can_orders ? (int)$l['order_count'] : 'â€”'; ?></td>
                         <td>
                             <?php if ($l['next_follow_up_at']): ?>
                                 <span class="<?php echo $overdue ? 'text-danger font-weight-semibold' : ''; ?>">
@@ -206,12 +213,12 @@ require_once 'sidebar.php';
                                 </span>
                                 <?php if ($overdue): ?><br><small class="text-danger">Overdue</small><?php endif; ?>
                             <?php else: ?>
-                                <span class="text-muted">—</span>
+                                <span class="text-muted">â€”</span>
                             <?php endif; ?>
                         </td>
-                        <td><?php echo $can_orders ? (int)$l['order_count'] : '—'; ?></td>
                         <td><?php echo e(date('M d, Y', strtotime($l['created_at']))); ?></td>
                         <td class="text-right">
+                            <button type="button" class="btn btn-action btn-light btn-lead-preview" title="Quick preview"><i class="fa fa-eye"></i></button>
                             <?php if ($can_verify_leads && $can_orders && !empty($l['has_storefront_request']) && !in_array($l['status'], ['converted', 'lost'], true)): ?>
                                 <a href="lead-verify.php?id=<?php echo (int)$l['lead_id']; ?>" class="btn btn-action btn-success" title="Review and verify order request"><i class="fa fa-check"></i></a>
                             <?php elseif ($can_verify_leads && empty($l['has_storefront_request']) && !in_array($l['status'], ['verified', 'converted', 'lost'], true)): ?>
@@ -251,5 +258,61 @@ require_once 'sidebar.php';
         </div>
     </div>
 </div>
+
+<!-- Lead Preview Modal -->
+<div class="modal fade" id="leadPreviewModal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Lead Preview: <span id="lp_lead_number"></span></h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-3">Customer Name</dt><dd class="col-sm-9" id="lp_customer_name"></dd>
+                    <dt class="col-sm-3">Phone</dt><dd class="col-sm-9" id="lp_phone"></dd>
+                    <dt class="col-sm-3">Location</dt><dd class="col-sm-9" id="lp_location"></dd>
+                    <dt class="col-sm-3">Product Name</dt><dd class="col-sm-9" id="lp_product"></dd>
+                    <dt class="col-sm-3">Status</dt><dd class="col-sm-9" id="lp_status"></dd>
+                    <dt class="col-sm-3">Orders Placed</dt><dd class="col-sm-9" id="lp_orders"></dd>
+                    <dt class="col-sm-3">Next Follow-up</dt><dd class="col-sm-9" id="lp_next_follow_up"></dd>
+                    <dt class="col-sm-3">Created Date</dt><dd class="col-sm-9" id="lp_created"></dd>
+                    <dt class="col-sm-3">Notes</dt><dd class="col-sm-9" id="lp_notes"></dd>
+                </dl>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    $(function () {
+        $(document).on('click', '.lead-row, .btn-lead-preview', function (e) {
+            if ($(e.target).closest('a, button, form, .dropdown').length && !$(e.target).closest('.btn-lead-preview').length) {
+                if (!$(e.target).closest('.btn-lead-preview').length) return;
+            }
+            var $row = $(this).closest('.lead-row');
+            if (!$row.length) return;
+            e.preventDefault();
+            e.stopPropagation();
+            var data = {};
+            try { data = JSON.parse($row.attr('data-lead')); } catch (err) { return; }
+            $('#lp_lead_number').text(data.lead_number || '');
+            $('#lp_customer_name').text(data.customer_name || '');
+            $('#lp_phone').text(data.phone || '');
+            $('#lp_location').text(data.location || '');
+            $('#lp_product').text(data.product || '');
+            $('#lp_status').text(data.status || '');
+            $('#lp_orders').text(data.orders || 0);
+            $('#lp_next_follow_up').text(data.next_follow_up || '');
+            $('#lp_created').text(data.created || '');
+            $('#lp_notes').text(data.notes || '—');
+            $('#leadPreviewModal').modal('show');
+        });
+    });
+</script>
+
 
 <?php require_once 'footer.php'; ?>
