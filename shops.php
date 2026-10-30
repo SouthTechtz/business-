@@ -134,7 +134,6 @@ require_once 'sidebar.php';
         <div class="page-sub">A shop is a business location. Each shop can contain one or more stores.</div>
     </div>
     <div>
-        <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#addShopModal"><i class="fa fa-plus mr-1"></i> Add Shop</button>
         <a href="stores.php" class="btn btn-light"><i class="fa fa-building mr-1"></i> Stores</a>
     </div>
 </div>

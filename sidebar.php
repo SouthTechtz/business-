@@ -80,9 +80,6 @@ $sidebar_shop = $sidebar_shop ? $sidebar_shop[0] : null;
 $sidebar_store = accessible_stores(null, false);
 $sidebar_store = $sidebar_store ? $sidebar_store[0] : null;
 ?>
-            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['shops.php', 'stores.php', 'user-shops.php', 'shop-view.php', 'store-view.php']) ? 'active' : ''; ?>">
-                <a href="shops.php"><i class="fa fa-building"></i><span>Shops &amp; Stores</span></a>
-            </li>
             <?php if ($sidebar_shop): ?>
             <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'shop-view.php' ? 'active' : ''; ?>">
                 <a href="shop-view.php?id=<?php echo (int)$sidebar_shop['shop_id']; ?>"><i class="fa fa-building-o"></i><span>Shop</span></a>
@@ -95,7 +92,6 @@ $sidebar_store = $sidebar_store ? $sidebar_store[0] : null;
                 <a href="store-view.php?id=<?php echo (int)$sidebar_store['warehouse_id']; ?>"><i class="fa fa-cube"></i><span>Store</span></a>
             </li>
             <?php else: ?>
-            <li class="disabled"><a href="stores.php"><i class="fa fa-cube"></i><span>Store (none assigned)</span></a></li>
             <?php endif; ?>
             <?php endif; ?>
             <?php endif; ?>

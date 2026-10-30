@@ -184,6 +184,10 @@ require_once 'sidebar.php';
         <div class="page-sub">Stock by Godown, store and shop. Godown stock is shown separately and is never treated as shop POS availability.</div>
     </div>
     <div class="d-flex flex-wrap" style="gap:8px;">
+        <?php if (can('manage_shops')): ?>
+            <a href="shops.php" class="btn btn-outline-secondary"><i class="fa fa-plus mr-1"></i> Add Shop</a>
+            <a href="stores.php" class="btn btn-outline-secondary"><i class="fa fa-plus mr-1"></i> Add Store</a>
+        <?php endif; ?>
         <?php if ($can_godown_page): ?>
             <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> Central Godown</a>
         <?php endif; ?>
