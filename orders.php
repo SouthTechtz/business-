@@ -1,11 +1,10 @@
-<?php
-require_once 'header.php';
+﻿<?php
+require_once 'config.php';
 require_once 'auth_check.php';
 require_permission('manage_orders');
 $page_title = 'Orders';
 
-// Handle AJAX requests for quick modal updates
-// Handle AJAX requests for quick modal updates
+// Handle AJAX requests for quick modal updates (before any HTML output)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_POST['ajax_action'] === 'quick_update_order') {
     @ini_set('display_errors', 0);
     header('Content-Type: application/json');
@@ -34,7 +33,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
 
         $total = (float)$order['total'];
 
-        // Automatically calculate payment status based on Amount Paid vs Total
         if ($amount_paid >= $total && $total > 0) {
             $status = 'paid';
         } elseif ($amount_paid > 0) {
@@ -50,7 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         }
 
         $stmt->bind_param('dssii', $amount_paid, $status, $stage, $order_id, (int)$current_user->tenant_id);
-        
+
         if ($stmt->execute()) {
             if (function_exists('audit_log')) {
                 audit_log('update', 'order', $order_id, 'Quick updated amount paid and stage');
@@ -59,13 +57,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         } else {
             echo json_encode(['success' => false, 'message' => 'Database update failed: ' . $stmt->error]);
         }
+        $stmt->close();
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
     }
     exit;
 }
 
-
+require_once 'header.php';
+require_once 'navbar.php';
+require_once 'sidebar.php';
+?>
 $statuses = [
     'unpaid'          => 'Unpaid',
     'partially_paid'  => 'Partially Paid',
@@ -263,7 +265,7 @@ function order_stage_class($stage) {
                                 <?php echo e($o['customer_name']); ?>
                                 <?php if ($o['customer_phone']): ?><br><small class="text-muted"><?php echo e($o['customer_phone']); ?></small><?php endif; ?>
                             </td>
-                            <td><?php echo e($o['shop_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . ($o['store_name'] ?? ''), ' /') : '—'); ?></td>
+                            <td><?php echo e($o['shop_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . ($o['store_name'] ?? ''), ' /') : 'â€”'); ?></td>
                             <td>
                                 <span class="badge badge-<?php echo e(order_stage_class($current_stage)); ?>">
                                     <?php echo e($stages[$current_stage] ?? ucfirst($current_stage)); ?>
@@ -280,7 +282,7 @@ function order_stage_class($stage) {
                                 <?php
                                 $assignee = trim((string)($o['assignee_first'] ?? '') . ' ' . (string)($o['assignee_last'] ?? ''));
                                 $creator = trim((string)($o['creator_first'] ?? '') . ' ' . (string)($o['creator_last'] ?? ''));
-                                echo e($assignee ?: $creator ?: '—');
+                                echo e($assignee ?: $creator ?: 'â€”');
                                 ?>
                             </td>
                             <td><?php echo e(date('M d, Y H:i', strtotime($o['created_at']))); ?></td>
