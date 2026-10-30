@@ -77,6 +77,18 @@
             <?php if (can('manage_shops')): ?>
             <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['shops.php', 'stores.php', 'user-shops.php']) ? 'active' : ''; ?>">
                 <a href="shops.php"><i class="fa fa-building"></i><span>Shops &amp; Stores</span></a>
+            <?php if (can('manage_shops')): ?>
+            <?php foreach (accessible_shops() as $sb_shop): ?>
+            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'shop-view.php' && (int)($_GET['id'] ?? 0) === (int)$sb_shop['shop_id'] ? 'active' : ''; ?>">
+                <a href="shop-view.php?id=<?php echo (int)$sb_shop['shop_id']; ?>"><i class="fa fa-building-o"></i><span><?php echo e($sb_shop['name']); ?> (Shop)</span></a>
+            </li>
+            <?php endforeach; ?>
+            <?php foreach (accessible_stores(null, false) as $sb_store): ?>
+            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'store-view.php' && (int)($_GET['id'] ?? 0) === (int)$sb_store['warehouse_id'] ? 'active' : ''; ?>">
+                <a href="store-view.php?id=<?php echo (int)$sb_store['warehouse_id']; ?>"><i class="fa fa-cube"></i><span><?php echo e($sb_store['name']); ?> (Store)</span></a>
+            </li>
+            <?php endforeach; ?>
+            <?php endif; ?>
             </li>
             <?php endif; ?>
             <?php if (can('manage_orders')): ?>
