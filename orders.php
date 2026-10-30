@@ -149,8 +149,6 @@ foreach ($orders as $o) {
     $total_amount_sum += (float)$o['total'];
 }
 
-require_once 'navbar.php';
-require_once 'sidebar.php';
 $cur = tenant_currency();
 
 function payment_status_class($st) {
