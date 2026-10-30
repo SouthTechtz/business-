@@ -2,7 +2,7 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers']);
-$page_title = 'Godown Transfers';
+$page_title = 'Stock Transfers';
 
 $tenant_id = (int)$current_user->tenant_id;
 $statuses = godown_transfer_statuses();
@@ -31,7 +31,7 @@ $q = trim((string)($_GET['q'] ?? ''));
 $sql = "SELECT t.*,
                s.name destination_shop_name, s.code destination_shop_code,
                w.name destination_store_name,
-               sw.name source_warehouse_name, sw.code source_warehouse_code,
+               sw.name source_warehouse_name, sw.code source_warehouse_code, sw.location_type source_location_type,
                ssw.name source_shop_name,
                TRIM(CONCAT(COALESCE(ur.first_name, ''), ' ', COALESCE(ur.last_name, ''))) requested_by_name,
                ur.username requested_by_username,
@@ -97,16 +97,19 @@ if ($date_to !== '') {
 }
 if ($q !== '') {
     $like = '%' . $q . '%';
-    $sql .= " AND (t.transfer_number LIKE ? OR s.name LIKE ? OR w.name LIKE ? OR ur.first_name LIKE ?
+    $sql .= " AND (t.transfer_number LIKE ? OR s.name LIKE ? OR w.name LIKE ? OR sw.name LIKE ? OR ur.first_name LIKE ?
                   OR ur.last_name LIKE ? OR ur.username LIKE ?
                   OR EXISTS (SELECT 1 FROM stock_transfer_items qti
                               JOIN products qp ON qp.product_id = qti.product_id
                              WHERE qti.transfer_id = t.transfer_id AND qti.tenant_id = t.tenant_id
                                AND (qp.name LIKE ? OR qp.code LIKE ?)))";
-    array_push($params, $like, $like, $like, $like, $like, $like, $like, $like);
+    array_push($params, $like, $like, $like, $like, $like, $like, $like, $like, $like);
 }
 $sql .= ' ORDER BY t.requested_at DESC, t.transfer_id DESC';
 $transfers = fetch_all($sql, ...$params);
+if (can('manage_godown')) {
+    ensure_central_godown($tenant_id);
+}
 $godown = find_active_godown();
 
 $has_filter = $status !== '' || $issue || $shop_id > 0 || $date_from !== '' || $date_to !== '' || $q !== '';
@@ -117,8 +120,8 @@ require_once 'sidebar.php';
 
 <div class="page-head">
     <div>
-        <h1 class="page-title">Godown Transfers</h1>
-        <div class="page-sub"><?php echo count($transfers); ?> transfer(s) match the current filters. Approval does not move stock; dispatch deducts the Godown once; receipt adds only accepted quantities.</div>
+        <h1 class="page-title">Stock Transfers</h1>
+        <div class="page-sub"><?php echo count($transfers); ?> transfer(s) match the current filters. Approval does not move stock; dispatch deducts the source once; receipt adds only accepted quantities.</div>
     </div>
     <?php if ($godown && (can('manage_godown') || can('request_godown_transfers'))): ?>
         <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> <?php echo can('manage_godown') ? 'New Transfer' : 'Request Stock'; ?></a>
@@ -175,7 +178,7 @@ require_once 'sidebar.php';
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Transfer #</th><th>Source Godown</th><th>Destination</th><th>Items</th>
+                        <th>Transfer #</th><th>Source Location</th><th>Destination</th><th>Items</th>
                         <th>Status</th><th>Requested</th><th>Updated</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
@@ -190,7 +193,7 @@ require_once 'sidebar.php';
                         </td>
                         <td>
                             <?php echo e($transfer['source_warehouse_name']); ?>
-                            <br><small class="text-muted"><?php echo e($transfer['source_shop_name'] ?: 'Independent Godown'); ?></small>
+                            <br><small class="text-muted"><?php echo e($transfer['source_shop_name'] ?: ((string)$transfer['source_location_type'] === 'godown' ? 'Central Godown' : 'Store')); ?></small>
                         </td>
                         <td>
                             <?php echo e($transfer['destination_shop_name']); ?>

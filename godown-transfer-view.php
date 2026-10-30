@@ -2,7 +2,7 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers']);
-$page_title = 'Godown Transfer';
+$page_title = 'Stock Transfer';
 
 $tenant_id = (int)$current_user->tenant_id;
 $transfer_id = (int)($_GET['id'] ?? $_POST['transfer_id'] ?? 0);
@@ -18,6 +18,7 @@ function transfer_load(int $transfer_id, int $tenant_id): ?array
                 s.name destination_shop_name, s.code destination_shop_code,
                 w.name destination_store_name, w.code destination_store_code,
                 sw.name source_warehouse_name, sw.code source_warehouse_code,
+                sw.location_type source_location_type, sw.is_active source_is_active,
                 ssw.name source_shop_name,
                 TRIM(CONCAT(COALESCE(ur.first_name, ''), ' ', COALESCE(ur.last_name, ''))) requested_by_name,
                 ur.username requested_by_username,
@@ -110,7 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $source = transfer_source_access($locked);
             if (!$source) {
-                throw new RuntimeException('You do not have access to the source Godown.');
+                throw new RuntimeException('You do not have access to the source location.');
             }
             if ($locked['status'] !== 'draft') {
                 throw new RuntimeException('Only a requested transfer can be approved.');
@@ -118,20 +119,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $source_lock = fetch_one(
                 "SELECT w.* FROM warehouses w
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type = 'godown'
+                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store')
                     AND w.is_active = 1
                   FOR UPDATE",
                 (int)$locked['source_warehouse_id'],
                 $tenant_id
             );
             if (!$source_lock) {
-                throw new RuntimeException('The source is no longer an active central Godown.');
+                throw new RuntimeException('The source is no longer an active Godown or store.');
             }
             $destination_lock = fetch_one(
                 "SELECT w.* FROM warehouses w
                    JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
                   WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
-                    AND w.is_active = 1 AND s.is_active = 1 AND w.is_godown = 0
+                    AND w.is_active = 1 AND s.is_active = 1 AND w.location_type = 'store'
                   FOR UPDATE",
                 (int)$locked['destination_warehouse_id'],
                 $tenant_id,
@@ -176,7 +177,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $source = transfer_source_access($locked);
             if (!$source) {
-                throw new RuntimeException('You do not have access to the source Godown.');
+                throw new RuntimeException('You do not have access to the source location.');
             }
             if ($locked['status'] !== 'approved') {
                 throw new RuntimeException('Only an approved transfer can be dispatched.');
@@ -184,20 +185,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $source_lock = fetch_one(
                 "SELECT w.* FROM warehouses w
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type = 'godown'
+                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store')
                     AND w.is_active = 1
                   FOR UPDATE",
                 (int)$locked['source_warehouse_id'],
                 $tenant_id
             );
             if (!$source_lock) {
-                throw new RuntimeException('The source is no longer an active central Godown.');
+                throw new RuntimeException('The source is no longer an active Godown or store.');
             }
             $destination_lock = fetch_one(
                 "SELECT w.* FROM warehouses w
                    JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
                   WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
-                    AND w.is_active = 1 AND s.is_active = 1 AND w.is_godown = 0
+                    AND w.is_active = 1 AND s.is_active = 1 AND w.location_type = 'store'
                   FOR UPDATE",
                 (int)$locked['destination_warehouse_id'],
                 $tenant_id,
@@ -227,7 +228,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $needed = (float)$item['requested_quantity'];
                 if (!$stock || $available + 0.0001 < $needed) {
                     throw new RuntimeException(
-                        'Insufficient Godown stock for ' . $item['product_name'] . ': '
+                        'Insufficient stock at the source for ' . $item['product_name'] . ': '
                         . format_quantity(max(0, $available)) . ' available, '
                         . format_quantity($needed) . ' required. Dispatch cancelled; no stock was moved.'
                     );
@@ -241,7 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute();
                 if ($stmt->affected_rows !== 1) {
                     $stmt->close();
-                    throw new RuntimeException('Godown stock changed during dispatch. No stock was moved.');
+                    throw new RuntimeException('Source stock changed during dispatch. No stock was moved.');
                 }
                 $stmt->close();
 
@@ -254,7 +255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->close();
 
                 $movement_notes = 'Transfer ' . $locked['transfer_number'] . ' dispatched to '
-                    . $locked['destination_shop_name'] . ' / ' . $locked['destination_store_name'];
+                    . $transfer['destination_shop_name'] . ' / ' . $transfer['destination_store_name'];
                 $stmt = $conn->prepare(
                     "INSERT INTO inventory_movements
                         (tenant_id, product_id, warehouse_id, movement_type, quantity, reference_id, reference_type, created_by, notes)
@@ -290,8 +291,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $conn->commit();
             $in_transaction = false;
             consume_form_token();
-            audit_log('dispatch', 'stock_transfer', $transfer_id, 'Transfer ' . $locked['transfer_number'] . ' dispatched; Godown stock deducted once and now in transit.');
-            flash_set('success', 'Transfer dispatched. Godown stock was deducted and the quantities are now in transit.');
+            audit_log('dispatch', 'stock_transfer', $transfer_id, 'Transfer ' . $locked['transfer_number'] . ' dispatched; source stock deducted once and now in transit.');
+            flash_set('success', 'Transfer dispatched. Source stock was deducted and the quantities are now in transit.');
             redirect('godown-transfer-view.php?id=' . $transfer_id);
         }
 
@@ -310,7 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $destination_lock = fetch_one(
                 "SELECT w.* FROM warehouses w
                    JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ? AND w.is_godown = 0
+                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ? AND w.location_type = 'store'
                   FOR UPDATE",
                 (int)$locked['destination_warehouse_id'],
                 $tenant_id,
@@ -456,7 +457,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt->close();
 
                     $movement_notes = 'Transfer ' . $locked['transfer_number'] . ' received from '
-                        . $locked['source_warehouse_name'] . '; accepted ' . format_quantity($received)
+                        . $transfer['source_warehouse_name'] . '; accepted ' . format_quantity($received)
                         . ', damaged ' . format_quantity($damaged)
                         . ', shortage ' . format_quantity($shortage)
                         . ', excess recorded ' . format_quantity($excess);
@@ -522,7 +523,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $source = transfer_source_access($locked);
             if (!$source) {
-                throw new RuntimeException('You do not have access to the source Godown.');
+                throw new RuntimeException('You do not have access to the source location.');
             }
             if (!in_array($locked['status'], ['draft', 'approved'], true)) {
                 throw new RuntimeException('Only requested or approved transfers can be cancelled. Dispatched stock cannot be erased.');
@@ -562,7 +563,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $source = transfer_source_access($locked);
             if (!$source) {
-                throw new RuntimeException('You do not have access to the source Godown.');
+                throw new RuntimeException('You do not have access to the source location.');
             }
             if ($locked['status'] !== 'discrepancy') {
                 throw new RuntimeException('Only an open discrepancy can be resolved.');
@@ -653,7 +654,7 @@ require_once 'sidebar.php';
     <div>
         <h1 class="page-title"><?php echo e($transfer['transfer_number']); ?></h1>
         <div class="page-sub">
-            <?php echo e($transfer['source_warehouse_name']); ?> → <?php echo e($transfer['destination_shop_name'] . ' / ' . $transfer['destination_store_name']); ?>
+            <?php echo e(trim(($transfer['source_shop_name'] ?? '') . ' / ' . $transfer['source_warehouse_name'], ' /')); ?> → <?php echo e($transfer['destination_shop_name'] . ' / ' . $transfer['destination_store_name']); ?>
             <span class="badge badge-<?php echo e(godown_transfer_status_class($transfer['status'])); ?> ml-2"><?php echo e(godown_transfer_status_label($transfer['status'])); ?></span>
             <?php if ((int)$transfer['has_discrepancy'] === 1): ?>
                 <span class="badge badge-danger ml-1">Discrepancy recorded</span>
@@ -684,7 +685,7 @@ require_once 'sidebar.php';
             <div class="card-body">
                 <div class="row">
                     <div class="col-sm-6 mb-3">
-                        <div class="text-muted small">Source Godown</div>
+                        <div class="text-muted small">Source Location</div>
                         <div class="font-weight-semibold"><?php echo e($transfer['source_warehouse_name']); ?></div>
                         <div class="text-muted small"><?php echo e($transfer['source_shop_name'] ?: 'Independent Godown'); ?> <?php echo $transfer['source_warehouse_code'] ? '(' . e($transfer['source_warehouse_code']) . ')' : ''; ?></div>
                     </div>
@@ -744,9 +745,9 @@ require_once 'sidebar.php';
         <div class="card mb-4">
             <div class="card-header"><h5 class="card-title mb-0"><i class="fa fa-truck mr-1"></i> Dispatch</h5></div>
             <div class="card-body">
-                <p class="text-muted">Dispatch deducts each product from the Godown once and puts the quantities in transit. If any product is short, the whole dispatch is blocked.</p>
+                <p class="text-muted">Dispatch deducts each product from the source location once and puts the quantities in transit. If any product is short, the whole dispatch is blocked.</p>
                 <?php if ($can_dispatch): ?>
-                <form method="POST" action="godown-transfer-view.php?id=<?php echo $transfer_id; ?>" class="mb-3" onsubmit="return confirm('Dispatch this transfer? Godown stock will be deducted now.');">
+                <form method="POST" action="godown-transfer-view.php?id=<?php echo $transfer_id; ?>" class="mb-3" onsubmit="return confirm('Dispatch this transfer? Source stock will be deducted now.');">
                     <?php echo csrf_field(); ?>
                     <?php echo form_token_field(); ?>
                     <input type="hidden" name="action" value="dispatch">
@@ -855,7 +856,7 @@ require_once 'sidebar.php';
                         <thead>
                             <tr>
                                 <th>Product</th><th>Requested</th><th>Dispatched</th><th>Accepted</th><th>Damaged</th><th>Shortage</th><th>Excess</th>
-                                <?php if ($show_source_stock): ?><th>Godown On Hand</th><?php endif; ?>
+                                <?php if ($show_source_stock): ?><th>Source On Hand</th><?php endif; ?>
                                 <th>Line Note</th>
                             </tr>
                         </thead>

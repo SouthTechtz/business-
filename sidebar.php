@@ -60,13 +60,18 @@
             </li>
             <?php endif; ?>
             <?php if (can('manage_inventory')): ?>
-            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['inventory.php', 'inventory-adjust.php']) ? 'active' : ''; ?>">
+            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'inventory.php' ? 'active' : ''; ?>">
                 <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span></a>
             </li>
             <?php endif; ?>
             <?php if (can('manage_godown') || can('view_godown') || can('approve_godown_transfers') || can('dispatch_godown_transfers') || can('receive_godown_transfers') || can('request_godown_transfers')): ?>
-            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['godown.php', 'godown-transfers.php', 'godown-transfer-add.php', 'godown-transfer-view.php']) ? 'active' : ''; ?>">
+            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['godown.php', 'godown-transfers.php', 'godown-transfer-add.php', 'godown-transfer-view.php', 'inventory-adjust.php']) ? 'active' : ''; ?>">
                 <a href="<?php echo can('manage_godown') ? 'godown.php' : 'godown-transfers.php'; ?>"><i class="fa fa-archive"></i><span>Central Godown</span></a>
+            </li>
+            <?php endif; ?>
+            <?php if (can('manage_godown') || can('view_godown')): ?>
+            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'purchases.php' ? 'active' : ''; ?>">
+                <a href="purchases.php"><i class="fa fa-shopping-bag"></i><span>Purchases</span></a>
             </li>
             <?php endif; ?>
             <?php if (can('manage_shops')): ?>
@@ -88,8 +93,8 @@
             </li>
             <?php endif; ?>
             <?php if (can('manage_invoices')): ?>
-            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['invoices.php', 'invoice-add.php', 'invoice-details.php', 'invoice-edit.php', 'invoice-print.php']) ? 'active' : ''; ?>">
-                <a href="invoices.php"><i class="fa fa-file-text"></i><span>Invoices</span></a>
+            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['invoices.php', 'invoice-add.php', 'invoice-details.php', 'invoice-edit.php', 'invoice-print.php', 'quotations.php', 'quotation-add.php', 'quotation-details.php', 'quotation-print.php', 'quotation-download.php']) ? 'active' : ''; ?>">
+                <a href="invoices.php"><i class="fa fa-file-text"></i><span>Invoices &amp; Quotations</span></a>
             </li>
             <?php endif; ?>
             <?php if (can('manage_expenses') || can('manage_settings')): ?>

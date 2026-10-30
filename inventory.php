@@ -7,6 +7,11 @@ $page_title = 'Inventory';
 $tenant_id = (int)$current_user->tenant_id;
 $can_godown = can_access_godown();
 $can_godown_page = can('manage_godown') || can('view_godown');
+$can_request_stock = can('manage_godown') || can('request_godown_transfers');
+
+if (can('manage_godown')) {
+    ensure_central_godown($tenant_id);
+}
 
 $tabs = ['godown' => 'Godown', 'stores' => 'Stores', 'shops' => 'Shops'];
 if (!$can_godown) {
@@ -16,78 +21,6 @@ $tab = (string)($_GET['tab'] ?? '');
 $tab_requested = isset($_GET['tab']);
 if (!isset($tabs[$tab])) {
     $tab = array_key_first($tabs);
-}
-
-// Inline stock adjustment on the Stores tab (adds to the existing store stock).
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'adjust') {
-    $stock_id = (int)($_POST['stock_id'] ?? 0);
-    $add_qty = (float)($_POST['quantity'] ?? 0);
-    $prod_date = ($_POST['production_date'] ?? '') ?: null;
-    $exp_date = ($_POST['expires_at'] ?? '') ?: null;
-    $return_store = (int)($_POST['return_store'] ?? 0);
-    $return_tab = (string)($_POST['return_tab'] ?? 'stores');
-    if (!isset($tabs[$return_tab])) {
-        $return_tab = 'stores';
-    }
-    $back = 'inventory.php?tab=' . $return_tab . ($return_store > 0 ? '&store=' . $return_store : '');
-
-    $stock = fetch_one(
-        "SELECT s.*, p.is_service, u.is_decimal, w.is_godown FROM inventory_stock s
-         JOIN products p ON p.product_id = s.product_id
-         LEFT JOIN units_of_measurement u ON u.unit_id = p.unit_id
-         JOIN warehouses w ON w.warehouse_id = s.warehouse_id AND w.tenant_id = s.tenant_id
-         WHERE s.stock_id = ? AND s.tenant_id = ?",
-        $stock_id, $current_user->tenant_id
-    );
-    if (!$stock) {
-        flash_set('danger', 'Stock record not found.');
-        redirect($back);
-    }
-    if (!store_is_accessible((int)$stock['warehouse_id'], true, true)) {
-        flash_set('danger', 'You do not have access to the store for this stock record.');
-        redirect($back);
-    }
-    if ((int)($stock['is_godown'] ?? 0) === 1) {
-        flash_set('danger', 'Central Godown stock is received through the Central Godown page so the source reference and receipt are recorded.');
-        redirect('godown.php');
-    }
-    if ($stock['is_service']) {
-        flash_set('danger', 'Services do not have stock.');
-        redirect($back);
-    }
-    if (!$stock['is_decimal'] && $add_qty != floor($add_qty)) {
-        flash_set('danger', 'This product uses whole units only.');
-        redirect($back);
-    }
-    if ($add_qty <= 0) {
-        flash_set('danger', 'Quantity to add must be greater than zero.');
-        redirect($back);
-    }
-
-    $old_qty = (float)$stock['quantity'];
-    $new_qty = $old_qty + $add_qty;
-    $conn->begin_transaction();
-    try {
-        $stmt = $conn->prepare(
-            "UPDATE inventory_stock SET quantity = quantity + ?, production_date = ?, expires_at = ?, last_counted_at = CURRENT_TIMESTAMP
-             WHERE stock_id = ? AND tenant_id = ?"
-        );
-        $stmt->bind_param('dssii', $add_qty, $prod_date, $exp_date, $stock_id, $current_user->tenant_id);
-        $stmt->execute();
-        $stmt = $conn->prepare(
-            "INSERT INTO inventory_movements (tenant_id, product_id, warehouse_id, movement_type, quantity, created_by, notes, production_date, expires_at)
-             VALUES (?, ?, ?, 'restock', ?, ?, ?, ?, ?)"
-        );
-        $notes = 'Restocked from ' . $old_qty . ' to ' . $new_qty;
-        $stmt->bind_param('iiidisss', $current_user->tenant_id, $stock['product_id'], $stock['warehouse_id'], $add_qty, $current_user->user_id, $notes, $prod_date, $exp_date);
-        $stmt->execute();
-        $conn->commit();
-        flash_set('success', 'Stock updated — added ' . format_quantity($add_qty) . ' (now ' . format_quantity($new_qty) . ').');
-    } catch (Exception $ex) {
-        $conn->rollback();
-        flash_set('danger', 'Update failed: ' . $ex->getMessage());
-    }
-    redirect($back);
 }
 
 /* ---------------- Locations available to the current user ---------------- */
@@ -254,7 +187,9 @@ require_once 'sidebar.php';
         <?php if ($can_godown_page): ?>
             <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> Central Godown</a>
         <?php endif; ?>
-        <a href="inventory-adjust.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Adjust / Restock</a>
+        <?php if ($can_request_stock): ?>
+            <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-exchange mr-1"></i> Request Stock</a>
+        <?php endif; ?>
     </div>
 </div>
 
@@ -452,14 +387,16 @@ $location_empty_message = $tab === 'godown'
                                     <?php else: ?>
                                         <span class="text-muted">—</span>
                                     <?php endif; ?>
-                                <?php elseif ($tab === 'stores'): ?>
-                                    <?php if ($row['stock_id']): ?>
-                                        <button class="btn btn-action btn-light" data-toggle="modal" data-target="#adjustModal<?php echo (int)$row['stock_id']; ?>" title="Adjust stock"><i class="fa fa-edit"></i></button>
-                                    <?php else: ?>
-                                        <a href="inventory-adjust.php?product=<?php echo (int)$row['product_id']; ?>&warehouse=<?php echo (int)$store_id; ?>" class="btn btn-action btn-light" title="Add stock"><i class="fa fa-plus"></i></a>
-                                    <?php endif; ?>
+                                <?php elseif ($can_request_stock): ?>
+                                    <?php
+                                    $request_params = $tab === 'stores'
+                                        ? ['shop' => (int)($store_by_id[$store_id]['shop_id'] ?? 0), 'store' => (int)$store_id]
+                                        : ['shop' => (int)$shop_id];
+                                    $request_params = array_filter($request_params, fn($value) => (int)$value > 0);
+                                    ?>
+                                    <a href="godown-transfer-add.php?<?php echo e(http_build_query($request_params)); ?>" class="btn btn-action btn-light" title="Request stock"><i class="fa fa-exchange"></i></a>
                                 <?php else: ?>
-                                    <a href="inventory-adjust.php?product=<?php echo (int)$row['product_id']; ?>" class="btn btn-action btn-light" title="Adjust / restock"><i class="fa fa-edit"></i></a>
+                                    <span class="text-muted">—</span>
                                 <?php endif; ?>
                             </td>
                         </tr>
@@ -481,41 +418,5 @@ $location_empty_message = $tab === 'godown'
         </div>
     <?php endif; ?>
 </div>
-
-<?php if ($tab === 'stores'): ?>
-    <?php foreach ($rows as $row): ?>
-        <?php if (!$row['stock_id']) continue; ?>
-        <div class="modal fade" id="adjustModal<?php echo (int)$row['stock_id']; ?>" tabindex="-1">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Adjust Stock — <?php echo e($row['name']); ?></h5>
-                        <button type="button" class="close" data-dismiss="modal">&times;</button>
-                    </div>
-                    <form method="POST" action="inventory.php?tab=stores">
-                        <div class="modal-body">
-                            <input type="hidden" name="action" value="adjust">
-                            <input type="hidden" name="stock_id" value="<?php echo (int)$row['stock_id']; ?>">
-                            <input type="hidden" name="return_tab" value="stores">
-                            <input type="hidden" name="return_store" value="<?php echo (int)$store_id; ?>">
-                            <div class="form-group">
-                                <label>Quantity to Add (current: <?php echo e(format_quantity($row['qty'])); ?>)</label>
-                                <input type="number" name="quantity" class="form-control" step="1" min="1" required value="1">
-                                <small class="text-muted">This amount is added to the existing stock.</small>
-                            </div>
-                            <div class="form-group"><label>Production Date</label><input type="date" name="production_date" class="form-control"></div>
-                            <div class="form-group"><label>Expiry Date</label><input type="date" name="expires_at" class="form-control"></div>
-                            <small class="text-muted">The difference is logged as an inventory movement.</small>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
-                            <button type="submit" class="btn btn-primary">Save</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-    <?php endforeach; ?>
-<?php endif; ?>
 
 <?php require_once 'footer.php'; ?>

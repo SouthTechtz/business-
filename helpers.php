@@ -277,6 +277,52 @@ function find_tenant_godown($tenant_id = null) {
     );
 }
 
+/**
+ * Ensure the tenant has its default central Godown and return it.
+ * The Godown is created empty (no stock) when the tenant has no active one.
+ */
+function ensure_central_godown($tenant_id = null) {
+    global $current_user, $conn;
+    if (!$current_user) return null;
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    if ($tenant_id !== (int)$current_user->tenant_id) return null;
+
+    $existing = fetch_one(
+        "SELECT * FROM warehouses
+          WHERE tenant_id = ? AND location_type = 'godown' AND is_active = 1
+          ORDER BY warehouse_id
+          LIMIT 1",
+        $tenant_id
+    );
+    if ($existing) return $existing;
+
+    $n = 1;
+    do {
+        $code = 'GODOWN-' . str_pad((string)$n, 3, '0', STR_PAD_LEFT);
+        $taken = fetch_one(
+            "SELECT 1 FROM warehouses WHERE tenant_id = ? AND code = ?",
+            $tenant_id,
+            $code
+        );
+        $n++;
+    } while ($taken);
+
+    $stmt = $conn->prepare(
+        "INSERT INTO warehouses (tenant_id, shop_id, name, code, location_type, is_active)
+         VALUES (?, NULL, 'Central Godown', ?, 'godown', 1)"
+    );
+    $stmt->bind_param('is', $tenant_id, $code);
+    $stmt->execute();
+    $warehouse_id = (int)$stmt->insert_id;
+    $stmt->close();
+
+    return fetch_one(
+        "SELECT * FROM warehouses WHERE warehouse_id = ? AND tenant_id = ?",
+        $warehouse_id,
+        $tenant_id
+    );
+}
+
 /** Guard: stop with 403 unless the shop is accessible. */
 function assert_shop_access($shop_id, $include_inactive = true) {
     global $current_user;
@@ -1106,6 +1152,296 @@ function order_invoice_matches($order_id, $tenant_id, $invoice_id) {
 /** Brands offered in the product forms. Extend this list as new brands are added. */
 function product_brand_options() {
     return ['GSP GROUP', 'TECHDOKTA INVESTMENT'];
+}
+
+/** Human-readable quotation statuses. */
+function quotation_statuses() {
+    return [
+        'draft'     => 'Draft',
+        'sent'      => 'Sent',
+        'accepted'  => 'Accepted',
+        'rejected'  => 'Rejected',
+        'expired'   => 'Expired',
+        'converted' => 'Converted',
+    ];
+}
+
+/** Human label for a quotation status. */
+function quotation_status_label($status) {
+    $labels = quotation_statuses();
+    return $labels[$status] ?? ucwords(str_replace('_', ' ', (string)$status));
+}
+
+/** Bootstrap badge class for a quotation status. */
+function quotation_status_class($status) {
+    $map = [
+        'draft'     => 'secondary',
+        'sent'      => 'info',
+        'accepted'  => 'success',
+        'rejected'  => 'danger',
+        'expired'   => 'warning',
+        'converted' => 'primary',
+    ];
+    return $map[$status] ?? 'secondary';
+}
+
+/** Whether the current user may see a quotation (tenant + store scope). */
+function quotation_is_visible($quotation) {
+    global $current_user;
+    if (!$current_user || !$quotation) return false;
+    if ((int)$quotation['tenant_id'] !== (int)$current_user->tenant_id) return false;
+    if (tenant_admin_scope()) return true;
+    $scope_ids = accessible_warehouse_ids();
+    if ($scope_ids === null) return true;
+    $warehouse_id = (int)($quotation['warehouse_id'] ?? 0);
+    return $warehouse_id > 0 && in_array($warehouse_id, $scope_ids, true);
+}
+
+/**
+ * Convert an accepted/draft quotation into a real invoice.
+ *
+ * The caller must have verified the CSRF token. Stock is checked and deducted
+ * exactly once, inside a single transaction. A quotation can only convert once.
+ * Returns the new invoice ID.
+ */
+function convert_quotation_to_invoice($quotation_id, $tenant_id) {
+    global $conn, $current_user;
+    $quotation_id = (int)$quotation_id;
+    $tenant_id = (int)$tenant_id;
+
+    $quotation = fetch_one(
+        "SELECT * FROM quotations WHERE quotation_id = ? AND tenant_id = ? FOR UPDATE",
+        $quotation_id,
+        $tenant_id
+    );
+    if (!$quotation) {
+        throw new RuntimeException('Quotation not found.');
+    }
+    if ($quotation['status'] === 'converted' || !empty($quotation['converted_invoice_id'])) {
+        throw new RuntimeException('This quotation was already converted into an invoice.');
+    }
+    if ($quotation['status'] === 'rejected') {
+        throw new RuntimeException('A rejected quotation cannot be converted.');
+    }
+
+    $store = find_accessible_store((int)$quotation['warehouse_id'], false);
+    if (!$store) {
+        throw new RuntimeException('The quotation store is no longer active or accessible.');
+    }
+
+    $items = fetch_all(
+        "SELECT qi.*, p.is_service, p.name current_name, p.is_active product_active
+           FROM quotation_items qi
+           LEFT JOIN products p ON p.product_id = qi.product_id AND p.tenant_id = qi.tenant_id
+          WHERE qi.quotation_id = ? AND qi.tenant_id = ?
+          ORDER BY qi.quotation_item_id",
+        $quotation_id,
+        $tenant_id
+    );
+    if (!$items) {
+        throw new RuntimeException('This quotation has no items.');
+    }
+
+    // Aggregate stock needs before touching any row.
+    $needed = [];
+    foreach ($items as $item) {
+        if ((int)($item['is_service'] ?? 0) === 1) continue;
+        $product_id = (int)($item['product_id'] ?? 0);
+        $qty = (float)$item['quantity'];
+        if ($qty <= 0) {
+            throw new RuntimeException('A quotation line has an invalid quantity.');
+        }
+        if ($product_id <= 0) {
+            throw new RuntimeException('A quotation line has no product and cannot be converted.');
+        }
+        if (!$item['current_name'] || (int)$item['product_active'] !== 1) {
+            throw new RuntimeException('A product on this quotation was deleted or deactivated. Update the quotation before converting.');
+        }
+        $needed[$product_id] = ($needed[$product_id] ?? 0.0) + $qty;
+    }
+
+    ksort($needed);
+    foreach ($needed as $product_id => $qty) {
+        $stock = fetch_one(
+            "SELECT quantity FROM inventory_stock
+              WHERE tenant_id = ? AND product_id = ? AND warehouse_id = ?
+              FOR UPDATE",
+            $tenant_id,
+            $product_id,
+            (int)$quotation['warehouse_id']
+        );
+        $on_hand = $stock ? (float)$stock['quantity'] : 0.0;
+        $reserved = reserved_stock_quantity($tenant_id, $product_id, (int)$quotation['warehouse_id']);
+        $available = $on_hand - $reserved;
+        if ($available + 0.0001 < $qty) {
+            $name = '';
+            foreach ($items as $item) {
+                if ((int)$item['product_id'] === $product_id) {
+                    $name = (string)($item['description'] ?: $item['current_name']);
+                    break;
+                }
+            }
+            throw new RuntimeException(
+                'Insufficient available stock for ' . $name
+                . ' at ' . store_label($store)
+                . ' (requested: ' . $qty . ', available: ' . max(0, $available) . ').'
+            );
+        }
+    }
+
+    $settings = fetch_one(
+        "SELECT * FROM system_settings WHERE tenant_id = ? FOR UPDATE",
+        $tenant_id
+    );
+    $prefix = ($settings && isset($settings['invoice_prefix'])) ? $settings['invoice_prefix'] : 'INV-';
+    $next_no = ($settings && isset($settings['invoice_next_number'])) ? (int)$settings['invoice_next_number'] : 1001;
+    $invoice_number = $prefix . $next_no;
+
+    $status = fetch_one(
+        "SELECT status_id FROM document_statuses
+          WHERE tenant_id = ? AND type = 'invoice'
+          ORDER BY CASE WHEN name = 'Draft' THEN 0 ELSE 1 END, sort_order
+          LIMIT 1",
+        $tenant_id
+    );
+    $status_id = $status ? (int)$status['status_id'] : null;
+
+    $issue_date = date('Y-m-d');
+    $due_date = !empty($quotation['valid_until']) ? $quotation['valid_until'] : null;
+    $reference = trim((string)$quotation['quotation_number']);
+    $notes = trim((string)$quotation['notes']);
+    $terms = trim((string)$quotation['terms']);
+    $subtotal = (float)$quotation['subtotal'];
+    $tax_total = (float)$quotation['tax_amount'];
+    $total = (float)$quotation['total'];
+
+    $stmt = $conn->prepare(
+        "INSERT INTO invoices
+            (tenant_id, invoice_number, warehouse_id, contact_id, issue_date, due_date, status_id,
+             reference, notes, terms, subtotal, tax_amount, total, amount_due, amount_paid, is_paid, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)"
+    );
+    $invoice_warehouse_id = (int)$quotation['warehouse_id'];
+    $invoice_contact_id = (int)$quotation['contact_id'];
+    $created_by = (int)$current_user->user_id;
+    $stmt->bind_param(
+        'isiississsddddi',
+        $tenant_id,
+        $invoice_number,
+        $invoice_warehouse_id,
+        $invoice_contact_id,
+        $issue_date,
+        $due_date,
+        $status_id,
+        $reference,
+        $notes,
+        $terms,
+        $subtotal,
+        $tax_total,
+        $total,
+        $total,
+        $created_by
+    );
+    $stmt->execute();
+    $invoice_id = (int)$stmt->insert_id;
+    $stmt->close();
+
+    $stmt = $conn->prepare(
+        "INSERT INTO invoice_items
+            (tenant_id, invoice_id, warehouse_id, product_id, description, quantity, unit_price,
+             tax_rate_id, tax_amount, subtotal, total, discount)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 0)"
+    );
+    foreach ($items as $item) {
+        $product_id = (int)($item['product_id'] ?? 0) ?: null;
+        $description = (string)($item['description'] ?: $item['current_name'] ?: 'Item');
+        $quantity = (float)$item['quantity'];
+        $unit_price = (float)$item['unit_price'];
+        $line_tax = (float)$item['tax_amount'];
+        $line_subtotal = (float)$item['subtotal'];
+        $line_total = (float)$item['total'];
+        $warehouse_id = (int)$quotation['warehouse_id'];
+        $stmt->bind_param(
+            'iiiisddddd',
+            $tenant_id,
+            $invoice_id,
+            $warehouse_id,
+            $product_id,
+            $description,
+            $quantity,
+            $unit_price,
+            $line_tax,
+            $line_subtotal,
+            $line_total
+        );
+        $stmt->execute();
+
+        if ($product_id !== null && (int)($item['is_service'] ?? 0) !== 1) {
+            $stmt_stock = $conn->prepare(
+                "UPDATE inventory_stock SET quantity = quantity - ?
+                  WHERE tenant_id = ? AND product_id = ? AND warehouse_id = ? AND quantity >= ?"
+            );
+            $stmt_stock->bind_param(
+                'diiid',
+                $quantity,
+                $tenant_id,
+                $product_id,
+                $warehouse_id,
+                $quantity
+            );
+            $stmt_stock->execute();
+            if ($stmt_stock->affected_rows !== 1) {
+                $stmt_stock->close();
+                throw new RuntimeException('Stock changed while converting the quotation. No invoice was created.');
+            }
+            $stmt_stock->close();
+
+            $movement_notes = 'Converted from quotation ' . $quotation['quotation_number'];
+            $stmt_movement = $conn->prepare(
+                "INSERT INTO inventory_movements
+                    (tenant_id, product_id, warehouse_id, movement_type, quantity, reference_id, reference_type, created_by, notes)
+                 VALUES (?, ?, ?, 'invoice', ?, ?, 'invoice', ?, ?)"
+            );
+            $stmt_movement->bind_param(
+                'iiidiis',
+                $tenant_id,
+                $product_id,
+                $warehouse_id,
+                $quantity,
+                $invoice_id,
+                $current_user->user_id,
+                $movement_notes
+            );
+            $stmt_movement->execute();
+            $stmt_movement->close();
+        }
+    }
+    $stmt->close();
+
+    if ($settings && isset($settings['invoice_next_number'])) {
+        $stmt = $conn->prepare(
+            "UPDATE system_settings SET invoice_next_number = invoice_next_number + 1 WHERE tenant_id = ?"
+        );
+        $stmt->bind_param('i', $tenant_id);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    $stmt = $conn->prepare(
+        "UPDATE quotations
+            SET status = 'converted', converted_invoice_id = ?, converted_at = NOW()
+          WHERE quotation_id = ? AND tenant_id = ?
+            AND converted_invoice_id IS NULL AND status <> 'converted'"
+    );
+    $stmt->bind_param('iii', $invoice_id, $quotation_id, $tenant_id);
+    $stmt->execute();
+    if ($stmt->affected_rows !== 1) {
+        $stmt->close();
+        throw new RuntimeException('The quotation changed while it was being converted.');
+    }
+    $stmt->close();
+
+    return $invoice_id;
 }
 
 /** Build a flat list of categories with depth (0 = root, 1 = sub, 2 = sub-sub). */

@@ -4,9 +4,10 @@ require_once 'auth_check.php';
 require_permission_any(['manage_godown', 'request_godown_transfers']);
 $can_manage_godown = can('manage_godown');
 $can_request = can('request_godown_transfers');
-$page_title = $can_manage_godown ? 'New Godown Transfer' : 'Request Godown Stock';
+$page_title = $can_manage_godown ? 'New Stock Transfer' : 'Request Stock';
 
 $tenant_id = (int)$current_user->tenant_id;
+ensure_central_godown($tenant_id);
 $godown = find_tenant_godown();
 if (!$godown) {
     flash_set('danger', 'Configure an active default Godown before creating a transfer request.');
@@ -15,6 +16,35 @@ if (!$godown) {
 
 $shops = accessible_shops(null, false);
 $stores = accessible_stores(null, false);
+
+// Source may be the Central Godown, another shop, or any available store.
+$source_options = fetch_all(
+    "SELECT w.*, s.name shop_name, s.code shop_code
+       FROM warehouses w
+       LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+      WHERE w.tenant_id = ? AND w.is_active = 1
+        AND w.location_type IN ('godown', 'store')
+      ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, w.name",
+    $tenant_id
+);
+$source_ids = array_map(fn($row) => (int)$row['warehouse_id'], $source_options);
+$source_id = (int)($_GET['source'] ?? $_POST['source_warehouse_id'] ?? 0);
+if (!in_array($source_id, $source_ids, true)) {
+    $source_id = (int)$godown['warehouse_id'];
+}
+$source = null;
+foreach ($source_options as $option) {
+    if ((int)$option['warehouse_id'] === $source_id) {
+        $source = $option;
+        break;
+    }
+}
+if (!$source) {
+    $source = $godown;
+    $source_id = (int)$godown['warehouse_id'];
+}
+$source_label = trim(($source['shop_name'] ?? '') . ' / ' . $source['name'], ' /');
+
 $products = fetch_all(
     "SELECT p.product_id, p.code, p.name, COALESCE(u.is_decimal, 0) is_decimal, COALESCE(u.short_name, '') unit_short,
             COALESCE(s.quantity, 0) godown_quantity
@@ -23,7 +53,7 @@ $products = fetch_all(
        LEFT JOIN inventory_stock s ON s.product_id = p.product_id AND s.tenant_id = p.tenant_id AND s.warehouse_id = ?
       WHERE p.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0
       ORDER BY p.name",
-    (int)$godown['warehouse_id'],
+    $source_id,
     $tenant_id
 );
 
@@ -69,6 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $in_transaction = false;
     try {
+        $source_warehouse_id = (int)($_POST['source_warehouse_id'] ?? 0);
         $destination_shop_id = (int)($_POST['destination_shop_id'] ?? 0);
         $destination_warehouse_id = (int)($_POST['destination_warehouse_id'] ?? 0);
         $notes = trim((string)($_POST['notes'] ?? ''));
@@ -80,6 +111,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!is_array($quantities)) $quantities = [];
         if (!is_array($line_notes)) $line_notes = [];
 
+        $source_row = fetch_one(
+            "SELECT w.*, s.name shop_name FROM warehouses w
+              LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+             WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1
+               AND w.location_type IN ('godown', 'store')",
+            $source_warehouse_id,
+            $tenant_id
+        );
+        if (!$source_row) {
+            throw new RuntimeException('Select an active Godown or store as the source location.');
+        }
+        $source_label = trim(($source_row['shop_name'] ?? '') . ' / ' . $source_row['name'], ' /');
         if ($destination_shop_id <= 0) {
             throw new RuntimeException('Select the destination shop.');
         }
@@ -102,8 +145,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ((int)$destination_store['shop_id'] !== $destination_shop_id) {
             throw new RuntimeException('The destination store does not belong to the selected shop.');
         }
-        if ((int)($destination_store['is_godown'] ?? 0) === 1) {
+        if ((string)$destination_store['location_type'] !== 'store') {
             throw new RuntimeException('The central Godown cannot be a transfer destination.');
+        }
+        if ($destination_warehouse_id === $source_warehouse_id) {
+            throw new RuntimeException('The source and destination cannot be the same location.');
         }
         if (mb_strlen($notes) > 2000) {
             throw new RuntimeException('Notes are too long (maximum 2,000 characters).');
@@ -166,14 +212,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 "SELECT quantity FROM inventory_stock
                   WHERE tenant_id = ? AND warehouse_id = ? AND product_id = ?",
                 $tenant_id,
-                (int)$godown['warehouse_id'],
+                $source_warehouse_id,
                 (int)$product_id
             );
             $available = (float)($stock['quantity'] ?? 0);
             if ($line['quantity'] > $available + 0.0001) {
                 throw new RuntimeException(
                     'Only ' . format_quantity($available) . ' of ' . $line['product']['name']
-                    . ' is available in the Godown. Reduce the requested quantity.'
+                    . ' is available at ' . $source_label . '. Reduce the requested quantity.'
                 );
             }
         }
@@ -181,23 +227,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conn->begin_transaction();
         $in_transaction = true;
 
-        $locked_godown = fetch_one(
+        $locked_source = fetch_one(
             "SELECT w.* FROM warehouses w
-              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type = 'godown'
+              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store')
                 AND w.is_active = 1
               FOR UPDATE",
-            (int)$godown['warehouse_id'],
+            $source_warehouse_id,
             $tenant_id
         );
-        if (!$locked_godown) {
-            throw new RuntimeException('The central Godown is no longer active.');
+        if (!$locked_source) {
+            throw new RuntimeException('The source location is no longer active.');
         }
 
         $locked_destination = fetch_one(
             "SELECT w.* FROM warehouses w
                JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
               WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
-                AND w.is_active = 1 AND s.is_active = 1 AND w.is_godown = 0
+                AND w.is_active = 1 AND s.is_active = 1 AND w.location_type = 'store'
               FOR UPDATE",
             $destination_warehouse_id,
             $tenant_id,
@@ -220,7 +266,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'isiiisi',
             $tenant_id,
             $transfer_number,
-            $locked_godown['warehouse_id'],
+            $locked_source['warehouse_id'],
             $destination_shop_id,
             $locked_destination['warehouse_id'],
             $notes_db,
@@ -259,13 +305,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'create',
             'stock_transfer',
             $transfer_id,
-            'Transfer ' . $transfer_number . ' requested from ' . store_label($locked_godown)
+            'Transfer ' . $transfer_number . ' requested from ' . $source_label
             . ' to ' . $destination_shop['name'] . ' / ' . $locked_destination['name']
             . ' with ' . count($merged) . ' product line(s).'
         );
         flash_set(
             'success',
-            'Request ' . $transfer_number . ' created. The Godown team will review it. Approval does not move stock.'
+            'Request ' . $transfer_number . ' created. The source location team will review it. Approval does not move stock.'
         );
         redirect('godown-transfer-view.php?id=' . $transfer_id);
     } catch (Throwable $ex) {
@@ -276,8 +322,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $prefill_shop_id = (int)($_GET['shop'] ?? 0);
+$prefill_store_id = (int)($_GET['store'] ?? 0);
+if ($prefill_store_id > 0) {
+    $prefill_store = find_accessible_store($prefill_store_id, false, false);
+    if (!$prefill_store) {
+        $prefill_store_id = 0;
+    } elseif ($prefill_shop_id <= 0) {
+        $prefill_shop_id = (int)$prefill_store['shop_id'];
+    }
+}
 if ($prefill_shop_id > 0 && !shop_is_accessible($prefill_shop_id, false)) {
     $prefill_shop_id = 0;
+    $prefill_store_id = 0;
 }
 
 require_once 'navbar.php';
@@ -286,8 +342,8 @@ require_once 'sidebar.php';
 
 <div class="page-head">
     <div>
-        <h1 class="page-title"><?php echo $can_manage_godown ? 'New Godown Transfer' : 'Request Godown Stock'; ?></h1>
-        <div class="page-sub">Request stock from <?php echo e(store_label($godown)); ?> for a shop store.</div>
+        <h1 class="page-title"><?php echo $can_manage_godown ? 'New Stock Transfer' : 'Request Stock'; ?></h1>
+        <div class="page-sub">Request stock from <?php echo e($source_label); ?> for a shop store.</div>
     </div>
     <a href="godown-transfers.php" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Transfers</a>
 </div>
@@ -295,7 +351,7 @@ require_once 'sidebar.php';
 <ul class="nav page-tabs">
     <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
     <li class="nav-item"><a class="nav-link" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
-    <li class="nav-item"><a class="nav-link active" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> New Transfer</a></li>
+    <li class="nav-item"><a class="nav-link active" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> <?php echo $can_manage_godown ? 'New Transfer' : 'Request Stock'; ?></a></li>
 </ul>
 
 <?php if ($f = flash_get()): ?>
@@ -316,9 +372,15 @@ require_once 'sidebar.php';
                 <div class="card-header"><h5 class="card-title mb-0">Destination</h5></div>
                 <div class="card-body">
                     <div class="form-group">
-                        <label>Source Godown</label>
-                        <input type="text" class="form-control" value="<?php echo e(store_label($godown)); ?>" readonly>
-                        <small class="text-muted">The source is fixed to the active central Godown.</small>
+                        <label>Source Location <span class="text-danger">*</span></label>
+                        <select name="source_warehouse_id" id="sourceLocation" class="form-control" required onchange="window.location='godown-transfer-add.php?source=' + encodeURIComponent(this.value);">
+                            <?php foreach ($source_options as $option): ?>
+                                <option value="<?php echo (int)$option['warehouse_id']; ?>" <?php echo $source_id === (int)$option['warehouse_id'] ? 'selected' : ''; ?>>
+                                    <?php echo e(trim(($option['shop_name'] ?? '') . ' / ' . $option['name'], ' /')); ?><?php echo (string)$option['location_type'] === 'godown' ? ' (Godown)' : ''; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <small class="text-muted">Request from the Central Godown, another shop, or any available store.</small>
                     </div>
                     <div class="form-group">
                         <label>Destination Shop <span class="text-danger">*</span></label>
@@ -334,7 +396,7 @@ require_once 'sidebar.php';
                         <select name="destination_warehouse_id" id="destination_store" class="form-control" required>
                             <option value="">— Select Destination Store —</option>
                             <?php foreach ($stores as $store): ?>
-                                <option value="<?php echo (int)$store['warehouse_id']; ?>" data-shop="<?php echo (int)$store['shop_id']; ?>" <?php echo $prefill_shop_id === (int)$store['shop_id'] ? '' : 'disabled'; ?>>
+                                <option value="<?php echo (int)$store['warehouse_id']; ?>" data-shop="<?php echo (int)$store['shop_id']; ?>" <?php echo ($prefill_shop_id === (int)$store['shop_id'] ? '' : 'disabled') . ' ' . ($prefill_store_id === (int)$store['warehouse_id'] ? 'selected' : ''); ?>>
                                     <?php echo e($store['shop_name'] . ' / ' . $store['name']); ?>
                                 </option>
                             <?php endforeach; ?>

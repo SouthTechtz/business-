@@ -158,6 +158,11 @@ $cur = tenant_currency();
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
 
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item"><a class="nav-link active" href="invoices.php"><i class="fa fa-file-text mr-1"></i> Invoices</a></li>
+    <li class="nav-item"><a class="nav-link" href="quotations.php"><i class="fa fa-file-signature mr-1"></i> Quotations</a></li>
+</ul>
+
 <div class="card">
     <div class="card-header">
         <form method="GET" action="invoices.php" class="form-inline flex-wrap">

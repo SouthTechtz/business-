@@ -821,6 +821,38 @@ Until those are addressed, the storefront can be treated as a working catalogue/
 - The summary cards are now tab-scoped and follow the active filters: stock quantity (labelled **Godown Stock Qty**, **Store Stock Qty**, or **Shop Stock Qty** depending on the open tab), **Available Products** (products in the current list), **Low Stock**, and **Out of Stock**. The per-listing summary strip below the filters was removed; the global Shops/Stores/Total Products/Godown Qty cards were replaced.
 - Verified: default tab, all three tabs, empty-Godown and empty-store states, search (`Mineral` -> 1 product, 36 units), category (Beverages -> 3 products, 64 units), stock filters (out -> 1, low -> 0), karikoo store/shop (8 products, 0 units, 8 out), Godown tab with a temporary Godown (8 products, 5 units, 1 low, 7 out), tab-aware cards (Store/Shop 221 qty, 8 available, 0 low, 1 out; Godown 5 qty, 8 available, 1 low, 7 out), filtered cards (`stock=out` -> 0 qty, 1 available, 1 out; `q=Mineral` -> 36 qty, 1 available), and the inline adjust redirect. Temporary Godown/stock/movement were removed; stock is back to Main Shop product 1 = 36 and 8 stock rows.
 
+### Quotations on the invoice page (2026-10-30)
+
+- Applied `database/migrations/012_quotations_default_godown.php`. It creates `quotations` and `quotation_items` as isolated tables so invoice/report queries are unchanged, and it records the default Godown migration.
+- `quotations.php` lists quotations with status, search, and store filters plus Invoices/Quotations tabs shared with `invoices.php`.
+- `quotation-add.php` builds line items, tax, validity, reference, terms, and notes. It allocates `QUO-######` through `next_document_number()` but never reserves or deducts stock.
+- `quotation-details.php` shows the quotation, customer, and store, and converts it to an invoice once through `convert_quotation_to_invoice()`.
+- `quotation-print.php` is a printable page. `quotation-download.php` generates a real PDF with a small built-in writer (no external library); A4, Helvetica, multi-page item tables, totals, notes, and terms.
+- Conversion creates a normal invoice and deducts stock from the selected store exactly once. A converted quotation cannot be deleted or converted again.
+- Verified: created `QUO-000001` (subtotal 3,000, tax 540, total 3,540), printed it, downloaded a valid `%PDF-1.4` file, converted it to invoice `INV-1009`, and confirmed stock 36 -> 34 plus one `invoice` movement. The test quotation, invoice, movement, and sequence were removed and stock/numbering restored.
+
+### Purchases listing (2026-10-30)
+
+- `purchases.php` lists stock received into the Central Godown from `godown_receipts`, joined to products, suppliers, warehouses, and users.
+- Filters cover search (receipt, product, supplier, source reference), supplier, Godown, and received date range, with receipt/quantity/supplier summary cards.
+- The sidebar has a **Purchases** entry for users with `manage_godown` or `view_godown`; **Receive Stock** links to the Godown Products tab.
+
+### Godown-only stock adjustment (2026-10-30)
+
+- The inline adjust handler, Adjust/Restock header button, store adjust modals, and per-row adjust links were removed from Inventory.
+- Inventory rows in the Stores and Shops tabs now link to the request flow (`godown-transfer-add.php`) and the header offers **Request Stock**.
+- `inventory-adjust.php` now requires `manage_godown`, accepts only active Central Godown warehouses, lists Godowns only, and excludes services. It remains the AJAX endpoint behind the Godown Products adjust modal.
+- The Godown Products summary cards now follow the active search/category/stock filters and are labelled **Available Products**, **Godown Stock Qty**, **Low Stock**, and **Out of Stock**.
+- `ensure_central_godown()` is called from the Godown page, Inventory, Add Product, and transfer creation so the tenant always has one active empty Central Godown available.
+
+### Transfers from the Godown or any store (2026-10-30)
+
+- `godown-transfer-add.php` now has a **Source Location** selector covering the active Central Godown, another shop, or any available store. Changing the source reloads the product list and available quantities for that source.
+- Source validation, destination validation, stock availability checks, and the locking queries accept `location_type IN ('godown', 'store')` for the source. The destination must still be an ordinary `store` belonging to an accessible shop, and the source and destination cannot be the same location.
+- Approval and dispatch in `godown-transfer-view.php` now lock any active Godown or store source; dispatch deducts the source once. Receipt still adds only accepted quantities to the destination store.
+- Movement notes use the resolved source/destination names, and list/view labels now say **Source Location** instead of **Source Godown**.
+- Verified end to end: Main Shop (store) -> kariakoo / karikoo store moved product 1 (36 -> 34, destination +2), and Makongo (Godown) -> Main Shop moved product 6 (35 -> 34, destination +1). All test transfers, items, movements, sequences, and stock changes were removed afterward.
+
 ### Still outstanding
 
 - `database/` is still web-accessible and contains destructive seeders.

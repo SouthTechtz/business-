@@ -4,6 +4,9 @@ require_once 'auth_check.php';
 require_permission('manage_products');
 $page_title = 'Add Product';
 
+// Opening stock is always received into the active Central Godown.
+ensure_central_godown($current_user->tenant_id);
+
 /** Generate the next product code in the form PRD-### */
 function generateProductCode($conn, $tenantId) {
     $stmt = $conn->prepare("SELECT code FROM products WHERE tenant_id = ? AND code LIKE 'PRD-%' ORDER BY code DESC LIMIT 1");

@@ -7,6 +7,11 @@ $page_title = 'Central Godown';
 $tenant_id = (int)$current_user->tenant_id;
 $can_manage = can('manage_godown');
 
+// The system always keeps one active Central Godown available.
+if ($can_manage) {
+    ensure_central_godown($tenant_id);
+}
+
 // Reordered tabs: Products first by default, followed by overview and transfers
 $valid_tabs = ['products', 'overview', 'transfers'];
 $tab = (string)($_GET['tab'] ?? 'products');
@@ -744,18 +749,15 @@ require_once 'sidebar.php';
         </div>
     <?php else: ?>
         <?php
-            // Calculate summary metrics for the active godown products
+            // Summary metrics follow the same filters as the product table below.
             $metrics = fetch_one(
-                "SELECT 
+                "SELECT
                     COUNT(p.product_id) total_products,
-                    COALESCE(SUM(s.quantity), 0) total_qty,
-                    SUM(CASE WHEN COALESCE(s.quantity, 0) > 0 AND COALESCE(s.quantity, 0) <= p.min_stock_level THEN 1 ELSE 0 END) low_stock_count,
-                    SUM(CASE WHEN COALESCE(s.quantity, 0) <= 0 THEN 1 ELSE 0 END) out_stock_count
-                 FROM products p
-                 LEFT JOIN inventory_stock s ON s.product_id = p.product_id AND s.tenant_id = p.tenant_id AND s.warehouse_id = ?
-                 WHERE p.tenant_id = ? AND p.is_service = 0 AND p.is_active = 1",
-                (int)$godown['warehouse_id'],
-                $tenant_id
+                    COALESCE(SUM(COALESCE(s.quantity, 0)), 0) total_qty,
+                    COALESCE(SUM(CASE WHEN COALESCE(s.quantity, 0) > 0 AND COALESCE(s.quantity, 0) <= p.min_stock_level THEN 1 ELSE 0 END), 0) low_stock_count,
+                    COALESCE(SUM(CASE WHEN COALESCE(s.quantity, 0) <= 0 THEN 1 ELSE 0 END), 0) out_stock_count"
+                . $product_from . $product_where,
+                ...$product_params
             ) ?: ['total_products' => 0, 'total_qty' => 0, 'low_stock_count' => 0, 'out_stock_count' => 0];
         ?>
 
@@ -766,7 +768,7 @@ require_once 'sidebar.php';
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
                             <div class="col mr-2">
-                                <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Total Products</div>
+                                <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Available Products</div>
                                 <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int)$metrics['total_products']; ?></div>
                             </div>
                             <div class="col-auto">
@@ -782,7 +784,7 @@ require_once 'sidebar.php';
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
                             <div class="col mr-2">
-                                <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Total Quantity Stocked</div>
+                                <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Godown Stock Qty</div>
                                 <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(format_quantity($metrics['total_qty'])); ?></div>
                             </div>
                             <div class="col-auto">
@@ -798,7 +800,7 @@ require_once 'sidebar.php';
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
                             <div class="col mr-2">
-                                <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">Low Stock Items</div>
+                                <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">Low Stock</div>
                                 <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int)$metrics['low_stock_count']; ?></div>
                             </div>
                             <div class="col-auto">
@@ -1332,6 +1334,7 @@ require_once 'sidebar.php';
         <div class="modal-content">
 
            <form id="ajaxAdjustForm" method="POST" action="inventory-adjust.php">
+                <?php echo csrf_field(); ?>
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="fa fa-sliders mr-1"></i> Adjust Stock</h5>
                     <button type="button" class="close" data-dismiss="modal" aria-label="Close">
