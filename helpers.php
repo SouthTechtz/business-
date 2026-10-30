@@ -737,26 +737,20 @@ function order_allowed_transitions($status) {
 /** Human-readable lead statuses. */
 function lead_statuses() {
     return [
-        'new'       => 'New',
-        'contacted' => 'Contacted',
-        'qualified' => 'Qualified',
-        'verified'  => 'Verified',
-        'converted' => 'Converted',
-        'lost'      => 'Lost',
+        'pending'   => 'Pending',
+        'confirmed' => 'Confirmed',
+        'follow_up' => 'Follow Up',
+        'cancelled' => 'Cancelled',
     ];
 }
 
 /** Statuses a lead may move to from its current status. */
 function lead_allowed_transitions($status) {
     $map = [
-        // A storefront request begins as an unprocessed lead. An administrator
-        // must verify it before staff can convert it into an Order.
-        'new'       => ['contacted', 'qualified', 'verified', 'lost'],
-        'contacted' => ['qualified', 'verified', 'lost'],
-        'qualified' => ['verified', 'lost'],
-        'verified'  => ['converted', 'lost'],
-        'converted' => [],
-        'lost'      => ['new'],
+        'pending'   => ['follow_up', 'confirmed', 'cancelled'],
+        'follow_up' => ['pending', 'confirmed', 'cancelled'],
+        'confirmed' => [],
+        'cancelled' => ['pending'],
     ];
     return $map[$status] ?? [];
 }
@@ -805,12 +799,10 @@ function order_status_class($status) {
 /** Bootstrap badge class for a lead status. */
 function lead_status_class($status) {
     $map = [
-        'new'       => 'warning',
-        'contacted' => 'info',
-        'qualified' => 'primary',
-        'verified'  => 'success',
-        'converted' => 'success',
-        'lost'      => 'secondary',
+        'pending'   => 'warning',
+        'follow_up' => 'info',
+        'confirmed' => 'success',
+        'cancelled' => 'secondary',
     ];
     return $map[$status] ?? 'secondary';
 }

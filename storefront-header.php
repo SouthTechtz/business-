@@ -28,9 +28,12 @@ $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.
     <link rel="alternate" type="application/json" title="Product feed (JSON)" href="<?php echo e(storefront_url('product-feed.php?format=json')); ?>">
     <link rel="alternate" type="text/csv" title="Product feed (CSV)" href="<?php echo e(storefront_url('product-feed.php?format=csv')); ?>">
     <link rel="icon" type="image/png" href="assets/img/favicon.png">
+    <link rel="preconnect" href="https://fonts.bunny.net">
+    <link href="https://fonts.bunny.net/css?family=figtree:400,500,600,700,800,900|plus-jakarta-sans:400,500,600,700,800,900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="assets/css/bootstrap.min.css?v=<?php echo filemtime('assets/css/bootstrap.min.css'); ?>">
     <link rel="stylesheet" href="assets/css/font-awesome.min.css?v=<?php echo filemtime('assets/css/font-awesome.min.css'); ?>">
     <link rel="stylesheet" href="assets/css/storefront.css?v=<?php echo filemtime('assets/css/storefront.css'); ?>">
+    <link rel="stylesheet" href="assets/css/visionshop-tailwind.css?v=<?php echo filemtime('assets/css/visionshop-tailwind.css'); ?>">
     <script defer src="assets/js/storefront.js?v=<?php echo file_exists('assets/js/storefront.js') ? filemtime('assets/js/storefront.js') : time(); ?>"></script>
     <?php echo $sf_head_extra ?? ''; ?>
 </head>

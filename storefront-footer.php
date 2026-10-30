@@ -94,5 +94,102 @@ $sf_payment_methods = storefront_payment_methods($sf_tenant_id);
         </div>
     </div>
 </footer>
+<div id="sf-product-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="sf-modal-name">
+    <div class="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <h2 id="sf-modal-name" class="text-lg font-bold text-gray-900"></h2>
+            <button type="button" id="sf-modal-close" class="text-gray-400 hover:text-gray-700 text-2xl leading-none" aria-label="Close">&times;</button>
+        </div>
+        <div class="grid md:grid-cols-2 gap-0">
+            <div class="bg-gray-50 p-4 flex items-center justify-center">
+                <img id="sf-modal-image" src="" alt="" class="max-h-80 w-full object-contain rounded-xl">
+            </div>
+            <div class="p-6 flex flex-col gap-3">
+                <p id="sf-modal-price" class="text-2xl font-extrabold text-brand-600"></p>
+                <p id="sf-modal-unit" class="text-sm text-gray-500"></p>
+                <p id="sf-modal-desc" class="text-sm text-gray-600 leading-relaxed"></p>
+                <p id="sf-modal-stock" class="text-sm font-semibold"></p>
+                <form method="post" action="storefront-cart-action.php" class="sf-add-form mt-2">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="add">
+                    <input type="hidden" name="product_id" id="sf-modal-product-id" value="">
+                    <div class="flex items-center gap-3">
+                        <label class="text-sm font-medium text-gray-700" for="sf-modal-qty">Qty</label>
+                        <input type="number" id="sf-modal-qty" name="quantity" value="1" min="1" max="999" class="w-20 rounded-lg border border-gray-200 px-3 py-2 text-sm">
+                        <button type="submit" id="sf-modal-add" class="inline-flex items-center gap-2 rounded-full bg-brand-600 hover:bg-brand-700 text-white font-semibold px-5 py-2.5 shadow-sm transition">
+                            <i class="fa fa-shopping-cart" aria-hidden="true"></i> Add to cart
+                        </button>
+                    </div>
+                </form>
+                <a id="sf-modal-link" href="#" class="text-sm text-brand-600 hover:underline mt-1">View full details &rarr;</a>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+(function () {
+    var modal = document.getElementById('sf-product-modal');
+    if (!modal) return;
+    var closeBtn = document.getElementById('sf-modal-close');
+    var img = document.getElementById('sf-modal-image');
+    var name = document.getElementById('sf-modal-name');
+    var price = document.getElementById('sf-modal-price');
+    var unit = document.getElementById('sf-modal-unit');
+    var desc = document.getElementById('sf-modal-desc');
+    var stock = document.getElementById('sf-modal-stock');
+    var pid = document.getElementById('sf-modal-product-id');
+    var qty = document.getElementById('sf-modal-qty');
+    var addBtn = document.getElementById('sf-modal-add');
+    var link = document.getElementById('sf-modal-link');
+
+    function open(data) {
+        name.textContent = data.name || '';
+        price.textContent = data.price || '';
+        unit.textContent = data.unit ? ('per ' + data.unit) : '';
+        desc.textContent = data.description || '';
+        if (data.image) { img.src = data.image; img.alt = data.name || ''; img.style.display = ''; }
+        else { img.style.display = 'none'; }
+        pid.value = data.product_id || '';
+        qty.value = 1;
+        qty.max = data.max_qty && data.max_qty > 0 ? data.max_qty : 999;
+        if (data.available === '1') {
+            stock.textContent = (data.max_qty > 0 && data.max_qty <= 5) ? ('Low stock: ' + data.max_qty + ' left') : 'In stock';
+            stock.className = 'text-sm font-semibold text-green-600';
+            addBtn.disabled = false;
+        } else {
+            stock.textContent = 'Out of stock';
+            stock.className = 'text-sm font-semibold text-red-600';
+            addBtn.disabled = true;
+        }
+        link.href = data.url || '#';
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        document.body.style.overflow = 'hidden';
+    }
+    function close() {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        document.body.style.overflow = '';
+    }
+    closeBtn && closeBtn.addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.classList.contains('hidden')) close(); });
+
+    document.addEventListener('click', function (e) {
+        var card = e.target.closest('[data-sf-product]');
+        if (!card) return;
+        e.preventDefault();
+        try { open(JSON.parse(card.getAttribute('data-sf-product'))); }
+        catch (err) { window.location.href = card.getAttribute('data-sf-url') || '#'; }
+    });
+    document.addEventListener('keydown', function (e) {
+        if ((e.key === 'Enter' || e.key === ' ') ) {
+            var card = e.target.closest && e.target.closest('[data-sf-product]');
+            if (card) { e.preventDefault(); card.click(); }
+        }
+    });
+})();
+</script>
+
 </body>
 </html>

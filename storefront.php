@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once __DIR__ . '/config.php';
 
 // ============================================================
@@ -469,18 +469,28 @@ function storefront_render_product_card($product, $currency) {
     $max_qty = storefront_max_quantity($product);
     $unit = trim((string)($product['unit_short'] ?? '')) ?: trim((string)($product['unit_name'] ?? ''));
     $url = storefront_product_url($product);
-    $sku = trim((string)($product['sku'] ?? '')) ?: trim((string)($product['code'] ?? ''));
     $compare = isset($product['compare_at_price']) ? (float)$product['compare_at_price'] : 0.0;
     $is_sale = $compare > (float)$product['sale_price'];
-    $rating = isset($product['rating']) ? (float)$product['rating'] : 0.0;
-    $reviews = isset($product['review_count']) ? (int)$product['review_count'] : 0;
+    $desc = trim((string)($product['description'] ?? ''));
+    if ($desc === '') $desc = 'See the product page for details.';
 
-    echo '<article class="sf-product-card">';
-    echo '<div class="sf-product-media">';
+    $data = [
+        'product_id'  => (int)$product['product_id'],
+        'name'        => (string)$product['name'],
+        'image'       => $image,
+        'price'       => money($product['sale_price'], $currency),
+        'compare'     => $is_sale ? money($compare, $currency) : '',
+        'unit'        => $unit,
+        'available'   => $available ? '1' : '0',
+        'max_qty'     => (int)$max_qty,
+        'description' => $desc,
+        'url'         => $url,
+    ];
+
+    echo '<article class="sf-product-card sf-product-card--square" data-sf-product=\'' . e(json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) . '\' role="button" tabindex="0">';
+    echo '<div class="sf-product-media sf-product-media--square">';
     if ($image !== '') {
-        echo '<a href="' . e($url) . '" aria-label="View ' . e($product['name']) . '">';
-        echo '<img src="' . e($image) . '" alt="' . e($product['name']) . '" loading="lazy" width="400" height="300">';
-        echo '</a>';
+        echo '<img src="' . e($image) . '" alt="' . e($product['name']) . '" loading="lazy">';
     } else {
         echo '<span class="sf-product-placeholder">No image</span>';
     }
@@ -490,53 +500,14 @@ function storefront_render_product_card($product, $currency) {
         echo '<span class="sf-product-tag is-sale">Sale</span>';
     }
     echo '</div>';
-
     echo '<div class="sf-product-body">';
-    if (!empty($product['category_name'])) {
-        echo '<div class="sf-product-category">' . e($product['category_name']) . '</div>';
-    }
-    echo '<h3><a href="' . e($url) . '">' . e($product['name']) . '</a></h3>';
-    echo '<div class="sf-product-code">' . e($sku !== '' ? 'SKU ' . $sku : 'Code ' . $product['code']) . '</div>';
-    if (trim((string)$product['description']) !== '') {
-        echo '<p class="sf-product-desc">' . e(mb_substr((string)$product['description'], 0, 120)) . (mb_strlen((string)$product['description']) > 120 ? '...' : '') . '</p>';
-    } else {
-        echo '<p class="sf-product-desc">See the product page for details.</p>';
-    }
-    $variant = [];
-    if (trim((string)($product['variant_size'] ?? '')) !== '') $variant[] = 'Size ' . $product['variant_size'];
-    if (trim((string)($product['variant_color'] ?? '')) !== '') $variant[] = 'Colour ' . $product['variant_color'];
-    if ($variant) {
-        echo '<div class="sf-product-variant">' . e(implode(' / ', $variant)) . '</div>';
-    }
-    if ($reviews > 0) {
-        echo '<div class="sf-rating"><strong>' . e(number_format($rating, 1)) . ' out of 5</strong><span>(' . $reviews . ' review' . ($reviews === 1 ? '' : 's') . ')</span></div>';
-    }
+    echo '<h3 class="sf-product-name">' . e($product['name']) . '</h3>';
     echo '<div class="sf-product-meta">';
     echo '<span class="sf-price">' . e(money($product['sale_price'], $currency)) . '</span>';
     if ($is_sale) {
         echo '<span class="sf-price-compare">' . e(money($compare, $currency)) . '</span>';
     }
     if ($unit !== '') echo '<span class="sf-unit">/ ' . e($unit) . '</span>';
-    echo '</div>';
-
-    echo '<div class="sf-product-footer">';
-    if ($available) {
-        if ((int)$product['is_service'] !== 1 && $max_qty > 0 && $max_qty <= 5) {
-            echo '<span class="sf-stock low-stock">Low stock: ' . $max_qty . ' left</span>';
-        } else {
-            echo '<span class="sf-stock in-stock">' . ((int)$product['is_service'] === 1 ? 'Service available' : 'In stock') . '</span>';
-        }
-    } else {
-        echo '<span class="sf-stock out-stock">Out of stock</span>';
-    }
-    echo '<form method="post" action="storefront-cart-action.php" class="sf-add-form">';
-    echo csrf_field();
-    echo '<input type="hidden" name="action" value="add">';
-    echo '<input type="hidden" name="product_id" value="' . (int)$product['product_id'] . '">';
-    echo '<input type="hidden" name="quantity" value="1">';
-    echo '<button type="submit" class="sf-btn sf-btn-add" ' . ($available ? '' : 'disabled') . '>';
-    echo '<i class="fa fa-shopping-cart" aria-hidden="true"></i> ' . ($available ? 'Add to cart' : 'Unavailable');
-    echo '</button></form>';
     echo '</div>';
     echo '</div></article>';
 }

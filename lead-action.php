@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_leads');
@@ -172,7 +172,7 @@ try {
                     (int)$current_user->tenant_id,
                     'status_change',
                     'Verified by administrator',
-                    'Status: ' . ($statuses[$lead['status']] ?? $lead['status']) . ' → Verified'
+                    'Status: ' . ($statuses[$lead['status']] ?? $lead['status']) . ' â†’ Verified'
                 );
                 $conn->commit();
             } catch (Throwable $ex) {
@@ -428,7 +428,7 @@ try {
                 );
 
                 $stmt = $conn->prepare(
-                    "UPDATE leads SET status = 'converted', converted_at = NOW(), lost_reason = NULL
+                    "UPDATE leads SET status = 'confirmed', converted_at = NOW(), lost_reason = NULL
                       WHERE lead_id = ? AND tenant_id = ? AND status <> 'lost'"
                 );
                 $stmt->bind_param('ii', $id, $current_user->tenant_id);
@@ -582,13 +582,13 @@ try {
                     }
 
                     $stmt = $conn->prepare(
-                        "UPDATE leads SET status = 'converted', converted_at = NOW(), lost_reason = NULL
+                        "UPDATE leads SET status = 'confirmed', converted_at = NOW(), lost_reason = NULL
                           WHERE lead_id = ? AND tenant_id = ? AND status = ?"
                     );
                     $stmt->bind_param('iis', $id, $current_user->tenant_id, $lead['status']);
                 } elseif ($target === 'lost') {
                     $stmt = $conn->prepare(
-                        "UPDATE leads SET status = 'lost', lost_reason = ?
+                        "UPDATE leads SET status = 'cancelled', lost_reason = ?
                           WHERE lead_id = ? AND tenant_id = ? AND status = ?"
                     );
                     $stmt->bind_param('siis', $lost_reason, $id, $current_user->tenant_id, $lead['status']);
@@ -613,7 +613,7 @@ try {
                     $id,
                     (int)$current_user->tenant_id,
                     'status_change',
-                    'Status: ' . $statuses[$lead['status']] . ' → ' . $statuses[$target],
+                    'Status: ' . $statuses[$lead['status']] . ' â†’ ' . $statuses[$target],
                     $target === 'lost' ? $lost_reason : $activity_notes,
                     null,
                     $activity_order_id
@@ -709,3 +709,4 @@ try {
 } catch (Throwable $ex) {
     lead_action_redirect($back, 'danger', $ex->getMessage());
 }
+

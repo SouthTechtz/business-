@@ -84,7 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'email'            => $email !== '' ? $email : null,
                 'location'         => $location !== '' ? $location : null,
                 'source'           => $source,
-                'status'           => 'new',
+                'status'           => 'pending',
                 'assigned_to'      => $assigned_to ?: null,
                 'next_follow_up_at'=> $next_follow_up_at !== '' ? $next_follow_up_at : null,
                 'notes'            => $notes !== '' ? $notes : null,

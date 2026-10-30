@@ -180,6 +180,7 @@ require_once 'sidebar.php';
                     $contact_email = $l['email'] ?: $l['contact_email'];
                     $product_name = trim((string)($l['product_names'] ?? ''));
                     if ($product_name === '') $product_name = 'â€”';
+
                     $lead_preview = [
                         'lead_number' => (string)$l['lead_number'],
                         'customer_name' => $customer_name,
@@ -187,8 +188,12 @@ require_once 'sidebar.php';
                         'location' => (string)($l['location'] ?: 'â€”'),
                         'product' => $product_name,
                         'status' => (string)($statuses[$l['status']] ?? $l['status']),
+                        'status_key' => (string)$l['status'],
+
                         'orders' => $can_orders ? (int)$l['order_count'] : 0,
                         'next_follow_up' => $l['next_follow_up_at'] ? date('M d, Y', strtotime($l['next_follow_up_at'])) : 'â€”',
+                        'followup_raw' => $l['next_follow_up_at'] ? (string)$l['next_follow_up_at'] : '',
+
                         'created' => date('M d, Y', strtotime($l['created_at'])),
                         'notes' => trim((string)($l['notes'] ?? '')),
                     ];
@@ -268,7 +273,7 @@ require_once 'sidebar.php';
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
             </div>
             <div class="modal-body">
-                <dl class="row mb-0">
+                <dl class="row mb-3">
                     <dt class="col-sm-3">Customer Name</dt><dd class="col-sm-9" id="lp_customer_name"></dd>
                     <dt class="col-sm-3">Phone</dt><dd class="col-sm-9" id="lp_phone"></dd>
                     <dt class="col-sm-3">Location</dt><dd class="col-sm-9" id="lp_location"></dd>
@@ -279,9 +284,44 @@ require_once 'sidebar.php';
                     <dt class="col-sm-3">Created Date</dt><dd class="col-sm-9" id="lp_created"></dd>
                     <dt class="col-sm-3">Notes</dt><dd class="col-sm-9" id="lp_notes"></dd>
                 </dl>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+
+                <form method="POST" action="lead-action.php" class="mb-2">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="set_status">
+                    <input type="hidden" name="lead_id" id="lp_lead_id_status" value="">
+                    <div class="form-row">
+                        <div class="form-group col-md-6">
+                            <label>Update Status</label>
+                            <select name="status" id="lp_status_select" class="form-control">
+                                <?php foreach (lead_statuses() as $key => $label): ?>
+                                    <option value="<?php echo e($key); ?>"><?php echo e($label); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group col-md-6 d-flex align-items-end">
+                            <button type="submit" class="btn btn-primary"><i class="fa fa-check mr-1"></i> Update Status</button>
+                        </div>
+                    </div>
+                </form>
+
+                <form method="POST" action="lead-action.php" class="mb-2">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="add_activity">
+                    <input type="hidden" name="lead_id" id="lp_lead_id_followup" value="">
+                    <input type="hidden" name="activity_type" value="note">
+                    <input type="hidden" name="subject" value="Follow-up scheduled">
+                    <div class="form-group">
+                        <label>Set Follow-up Date</label>
+                        <div class="input-group">
+                            <input type="date" name="next_follow_up_at" id="lp_followup_date" class="form-control">
+                            <div class="input-group-append">
+                                <button type="submit" class="btn btn-info"><i class="fa fa-calendar mr-1"></i> Save Date</button>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+
+                <a id="lp_edit_link" href="#" class="btn btn-light"><i class="fa fa-pencil mr-1"></i> Edit Lead Details</a>
             </div>
         </div>
     </div>
@@ -309,6 +349,11 @@ require_once 'sidebar.php';
             $('#lp_next_follow_up').text(data.next_follow_up || '');
             $('#lp_created').text(data.created || '');
             $('#lp_notes').text(data.notes || '—');
+            $('#lp_lead_id_status').val(data.lead_id || '');
+            $('#lp_lead_id_followup').val(data.lead_id || '');
+            $('#lp_status_select').val(data.status_key || '');
+            $('#lp_followup_date').val(data.followup_raw || '');
+            $('#lp_edit_link').attr('href', 'lead-edit.php?id=' + (data.lead_id || ''));
             $('#leadPreviewModal').modal('show');
         });
     });

@@ -112,6 +112,29 @@ if ($sf_products) {
 require __DIR__ . '/storefront-header.php';
 ?>
 <main class="sf-main" id="sf-main">
+    <section class="relative overflow-hidden bg-gradient-to-br from-brand-50 via-white to-brand-50">
+        <div class="relative w-full px-4 sm:px-6 lg:px-8 py-10 lg:py-14 grid lg:grid-cols-2 gap-8 items-center">
+            <div>
+                <span class="inline-flex items-center gap-2 rounded-full bg-white border border-brand-100 text-brand-600 text-xs font-semibold px-4 py-1.5 shadow-sm">
+                    <i class="fa fa-shopping-bag" aria-hidden="true"></i> <?php echo e($sf_company); ?> online shop
+                </span>
+                <h1 class="mt-4 text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-gray-900 leading-tight">
+                    Browse the catalogue and send an order request.
+                </h1>
+                <p class="mt-4 text-base text-gray-500 max-w-md leading-relaxed">
+                    Live stock and current prices. The store confirms availability, delivery and payment with you before fulfilment. No payment is taken online.
+                </p>
+                <div class="mt-6 flex flex-wrap gap-3">
+                    <a href="index.php#catalogue" class="inline-flex items-center gap-2 rounded-full bg-gray-900 hover:bg-brand-600 text-white font-semibold px-6 py-3 shadow-xl shadow-gray-900/15 transition">
+                        Shop all products <i class="fa fa-arrow-right" aria-hidden="true"></i>
+                    </a>
+                    <a href="<?php echo $sf_logged_in ? 'dashboard.php' : 'login.php'; ?>" class="inline-flex items-center gap-2 rounded-full bg-white border border-gray-200 text-gray-700 hover:border-brand-300 hover:text-brand-600 font-semibold px-6 py-3 shadow-sm transition">
+                        <i class="fa fa-user" aria-hidden="true"></i> <?php echo $sf_logged_in ? 'My account' : 'Log in'; ?>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
     <div class="sf-container sf-page">
         <nav aria-label="Breadcrumb">
             <ol class="sf-breadcrumb">
