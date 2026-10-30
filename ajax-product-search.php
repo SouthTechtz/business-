@@ -22,13 +22,11 @@ if ($is_pos) {
         echo json_encode(['products' => [], 'error' => 'POS access denied.']);
         exit;
     }
-    $session = find_open_pos_session();
-    $store = $session && (int)$session['warehouse_id'] > 0
-        ? find_accessible_store((int)$session['warehouse_id'], false)
-        : null;
+    $stores = accessible_stores(null, false);
+    $store = $stores ? find_accessible_store((int)$stores[0]['warehouse_id'], false) : null;
     if (!$store) {
         http_response_code(403);
-        echo json_encode(['products' => [], 'error' => 'Open a POS session first.']);
+        echo json_encode(['products' => [], 'error' => 'No active store is available for your account.']);
         exit;
     }
     $warehouse_id = (int)$store['warehouse_id'];

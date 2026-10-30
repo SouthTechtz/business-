@@ -6,25 +6,14 @@ $page_title = 'New Sale';
 
 $tax_enabled = tax_enabled();
 
-// A sale must belong to the signed-in user's one open POS session.
-$open_session = find_open_pos_session();
-if (!$open_session) {
-    flash_set('danger', 'Open a POS session and choose a shop/store before selling.');
-    redirect('pos-session.php');
-}
-$selected_store = find_accessible_store((int)$open_session['warehouse_id'], false);
+// Resolve the selling store from the signed-in user's accessible stores.
+$stores = accessible_stores(null, false);
+$selected_store = $stores ? find_accessible_store((int)$stores[0]['warehouse_id'], false) : null;
 if (!$selected_store) {
-    flash_set('danger', 'Your POS session store is no longer active or accessible. Close the session and open a new one.');
-    redirect('pos-session.php');
+    flash_set('danger', 'No active store is available for your account. Ask an administrator to grant shop/store access.');
+    redirect('index.php');
 }
-$session_id = (int)$open_session['session_id'];
 $selected_store_id = (int)$selected_store['warehouse_id'];
-if ((int)($_SESSION['pos_session_id'] ?? 0) !== $session_id) {
-    // Never carry a cart between different POS sessions/locations.
-    unset($_SESSION['pos_cart']);
-    $_SESSION['pos_session_id'] = $session_id;
-}
-// Kept for compatibility with older scripts; never trust this value for a sale.
 $_SESSION['pos_warehouse_id'] = $selected_store_id;
 
 // ---- Cart actions ----

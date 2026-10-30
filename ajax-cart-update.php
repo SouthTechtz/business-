@@ -9,15 +9,12 @@ $pid = (int)($_POST['product_id'] ?? 0);
 $price = (float)($_POST['price'] ?? 0);
 $qty = (float)($_POST['quantity'] ?? 0);
 
-// The cart always belongs to the signed-in user's open POS session. A posted
-// warehouse_id is ignored so a manipulated request cannot move the cart.
-$session = find_open_pos_session();
-$store = $session && (int)$session['warehouse_id'] > 0
-    ? find_accessible_store((int)$session['warehouse_id'], false)
-    : null;
+// Resolve the store from the signed-in user's accessible stores.
+$stores = accessible_stores(null, false);
+$store = $stores ? find_accessible_store((int)$stores[0]['warehouse_id'], false) : null;
 if (!$store) {
     http_response_code(403);
-    echo json_encode(['ok' => false, 'message' => 'Open a POS session before changing the cart.']);
+    echo json_encode(['ok' => false, 'message' => 'No active store is available for your account.']);
     exit;
 }
 $warehouse_id = (int)$store['warehouse_id'];
