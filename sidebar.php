@@ -1,4 +1,4 @@
-    <aside class="sidebar" id="sidebar">
+﻿    <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
             <div class="brand-text"><?php echo e(APP_NAME); ?><small>Business Suite</small></div>
         </div>
@@ -73,23 +73,31 @@
             <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'purchases.php' ? 'active' : ''; ?>">
                 <a href="purchases.php"><i class="fa fa-shopping-cart"></i><span>Purchases</span></a>
             </li>
-            <?php endif; ?>
-            <?php if (can('manage_shops')): ?>
-            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['shops.php', 'stores.php', 'user-shops.php']) ? 'active' : ''; ?>">
+<?php if (can('manage_shops')): ?>
+<?php
+$sidebar_shop = accessible_shops();
+$sidebar_shop = $sidebar_shop ? $sidebar_shop[0] : null;
+$sidebar_store = accessible_stores(null, false);
+$sidebar_store = $sidebar_store ? $sidebar_store[0] : null;
+?>
+            <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['shops.php', 'stores.php', 'user-shops.php', 'shop-view.php', 'store-view.php']) ? 'active' : ''; ?>">
                 <a href="shops.php"><i class="fa fa-building"></i><span>Shops &amp; Stores</span></a>
-            <?php if (can('manage_shops')): ?>
-            <?php foreach (accessible_shops() as $sb_shop): ?>
-            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'shop-view.php' && (int)($_GET['id'] ?? 0) === (int)$sb_shop['shop_id'] ? 'active' : ''; ?>">
-                <a href="shop-view.php?id=<?php echo (int)$sb_shop['shop_id']; ?>"><i class="fa fa-building-o"></i><span><?php echo e($sb_shop['name']); ?> (Shop)</span></a>
             </li>
-            <?php endforeach; ?>
-            <?php foreach (accessible_stores(null, false) as $sb_store): ?>
-            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'store-view.php' && (int)($_GET['id'] ?? 0) === (int)$sb_store['warehouse_id'] ? 'active' : ''; ?>">
-                <a href="store-view.php?id=<?php echo (int)$sb_store['warehouse_id']; ?>"><i class="fa fa-cube"></i><span><?php echo e($sb_store['name']); ?> (Store)</span></a>
+            <?php if ($sidebar_shop): ?>
+            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'shop-view.php' ? 'active' : ''; ?>">
+                <a href="shop-view.php?id=<?php echo (int)$sidebar_shop['shop_id']; ?>"><i class="fa fa-building-o"></i><span>Shop</span></a>
             </li>
-            <?php endforeach; ?>
+            <?php else: ?>
+            <li class="disabled"><a href="shops.php"><i class="fa fa-building-o"></i><span>Shop (none assigned)</span></a></li>
             <?php endif; ?>
+            <?php if ($sidebar_store): ?>
+            <li class="<?php echo basename($_SERVER['PHP_SELF']) == 'store-view.php' ? 'active' : ''; ?>">
+                <a href="store-view.php?id=<?php echo (int)$sidebar_store['warehouse_id']; ?>"><i class="fa fa-cube"></i><span>Store</span></a>
             </li>
+            <?php else: ?>
+            <li class="disabled"><a href="stores.php"><i class="fa fa-cube"></i><span>Store (none assigned)</span></a></li>
+            <?php endif; ?>
+            <?php endif; ?>
             <?php endif; ?>
             <?php if (can('manage_orders')): ?>
             <li class="<?php echo in_array(basename($_SERVER['PHP_SELF']), ['orders.php', 'order-add.php', 'order-edit.php', 'order-view.php']) ? 'active' : ''; ?>">
