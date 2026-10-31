@@ -14,6 +14,11 @@ if (!$selected_store) {
     redirect('index.php');
 }
 $selected_store_id = (int)$selected_store['warehouse_id'];
+$shop_id_for_store = (int)($selected_store['shop_id'] ?? 0);
+if ($shop_id_for_store > 0 && shop_inventory_ready($shop_id_for_store)) {
+    $shop_wh = shop_inventory_warehouse_id($shop_id_for_store);
+    if ($shop_wh) { $selected_store_id = $shop_wh; }
+}
 $_SESSION['pos_warehouse_id'] = $selected_store_id;
 
 // ---- Cart actions ----
