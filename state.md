@@ -860,3 +860,125 @@ Until those are addressed, the storefront can be treated as a working catalogue/
 - Migration numbering is still duplicated: two applied `009_*` entries exist with distinct names.
 - No automated regression tests cover the Godown or transfer workflows.
 - The local `kariakoo` shop-manager password was reset during testing and must be changed by the owner.
+---
+
+# Structural Audit Report â€” Inventory, Shops, Stores, Godowns, and Transfers
+
+> **Report appended:** Inventory/shop/store/godown/transfer structural audit.
+> **Mode:** Read-only. No database, schema, or application code was changed while preparing this report.
+
+## 1. Current data model (how things are linked)
+
+### 1.1 Shops (`shops`)
+- **Purpose:** A tenant-owned business location *grouping*.
+- Fields: `shop_id`, `tenant_id`, `name`, `code`, `address`, `phone`, `is_active`, timestamps.
+- Unique: `(tenant_id, code)` and `(shop_id, tenant_id)`.
+- Access: `user_shops` maps users â†’ shops. Full admins (`manage_users`/`manage_settings`) see all shops; other users see only mapped shops.
+
+### 1.2 Stores / Warehouses (`warehouses`)
+- **One table serves two roles**, distinguished by `location_type`:
+  - `location_type = 'store'` â†’ a physical store **must** belong to a shop (`shop_id IS NOT NULL`).
+  - `location_type = 'godown'` â†’ the central Godown **must not** belong to a shop (`shop_id IS NULL`).
+- Enforced by:
+  - `chk_wh_type_shop` CHECK constraint.
+  - `fk_wh_shop_tenant` FK on `(shop_id, tenant_id) â†’ shops(shop_id, tenant_id)`.
+  - `uq_wh_active_godown` ensures **at most one active Godown per tenant** (via generated `godown_tenant_key`).
+  - `is_godown` is a generated virtual flag (`location_type = 'godown'`), never written directly.
+- Additional attributes: `code`, `address`, `phone`, `manager_user_id`, `is_active`, timestamps.
+
+**Relationship:** `warehouses.shop_id â†’ shops.shop_id` (store belongs to shop). Godown is independent.
+
+### 1.3 User access to Godowns (`user_godowns`)
+- Maps `user_id â†’ warehouse_id` (Godown only).
+- Used to scope Godown visibility for non-admin users.
+
+### 1.4 Stock balances (`inventory_stock`)
+- One row per **(product, warehouse)**: `stock_id`, `tenant_id`, `product_id`, `warehouse_id`, `quantity`, `reorder_level`, production/expiry dates, `last_counted_at`, `updated_at`.
+- Unique: `(product_id, warehouse_id)`.
+- FKs to `products`, `tenants`, `warehouses` (cascade on delete).
+
+### 1.5 Stock movement ledger (`inventory_movements`)
+- One row per stock change event: `movement_id`, `tenant_id`, `product_id`, `warehouse_id`, `movement_type`, `quantity`, `reference_id`, `reference_type`, `created_by`, `notes`, dates, `created_at`.
+- FKs to `products`, `tenants`, `warehouses`.
+
+### 1.6 Godown receipts (`godown_receipts`)
+- Records stock received into a Godown: `receipt_id`, `tenant_id`, `receipt_number`, `godown_id`, `product_id`, `supplier_id`, `quantity`, `source_reference`, `notes`, `received_by`, `received_at`, `created_at`.
+- FKs to `warehouses` (godown), `products`, `suppliers`, `users`.
+
+### 1.7 Stock transfers (`stock_transfers` + `stock_transfer_items`)
+- **Header:** `transfer_id`, `tenant_id`, `transfer_number`, `source_warehouse_id`, `destination_shop_id` (nullable), `destination_warehouse_id`, `status` (draft/approved/dispatched/received/discrepancy/cancelled), discrepancy flags, audit columns (requested_by/at, approved_by/at, dispatched_by/at, received_by/at, cancelled_by/at), notes/cancel/reason/resolution.
+- **Items:** `item_id`, `tenant_id`, `transfer_id`, `line_no`, `product_id`, requested/dispatched/received/damaged/shortage/excess quantities, `line_notes`.
+- Unique item per `(transfer_id, product_id)`.
+- FKs: source/destination warehouses, destination shop, products, tenant.
+
+### 1.8 Transfer routes (`transfer_routes`)
+- Static allow-list of `from_type â†’ to_type` (store/godown). Currently unused by application code.
+
+## 2. How stock is tracked today
+1. **Balances** live in `inventory_stock` (per product per warehouse).
+2. **Every change** is expected to be mirrored in `inventory_movements` (ledger).
+3. **Godown intake** is recorded in `godown_receipts` and increases Godown stock.
+4. **Transfers** move stock:
+   - Dispatch: subtract from source warehouse stock + movement.
+   - Receipt: add accepted quantity to destination warehouse stock + movement.
+   - Discrepancies (damaged/shortage/excess) are recorded per line.
+## 3. How shops and stores interact
+- A **shop** is a business grouping; a **store** is a warehouse that belongs to exactly one shop.
+- User access is shop-scoped via `user_shops`; store access derives from shop access.
+- Godown is independent and accessed via `user_godowns` or admin scope.
+- Inventory UI (`inventory.php`) has tabs: **Godown**, **Stores**, **Shops**, each with location selector, filters, and tab-scoped summary cards.
+
+## 4. Transfer workflow (current capabilities)
+- Source: any active warehouse with `location_type IN ('godown','store')`.
+- Destination: an active store (`location_type = 'store'`) belonging to an accessible shop.
+- One transfer = one source warehouse â†’ one destination warehouse (plus `destination_shop_id`).
+- Multi-product: multiple `stock_transfer_items` lines.
+- Status flow: `draft â†’ approved â†’ dispatched â†’ received/discrepancy/cancelled`.
+- Approval/dispatch/receipt are permission-gated (`approve_godown_transfers`, `dispatch_godown_transfers`, `receive_godown_transfers`, `manage_godown`).
+- Requesters (`request_godown_transfers`) can create draft transfers for accessible shops/stores.
+
+**Limitation:** A single transfer cannot target multiple destination entities simultaneously; you create separate transfers per destination.
+
+## 5. â€œCapital locked in stockâ€
+- There is **no dedicated capital column**. Capital would be derived as:
+  - `SUM(inventory_stock.quantity * products.purchase_price)` or `* sale_price`, grouped by warehouse/shop.
+- The Products list already shows floating totals of unit purchase/sale prices, but no per-entity capital report exists yet.
+
+## 6. Relevant pages/modules
+| Area | Files | Notes |
+|---|---|---|
+| Shops | `shops.php`, `stores.php`, `user-shops.php` | Shop/store admin and user access |
+| Godown | `godown.php`, `godown-transfers.php`, `godown-transfer-add.php`, `godown-transfer-view.php` | Godown overview, transfers, receive stock |
+| Inventory | `inventory.php`, `inventory-adjust.php` | Tabs for Godown/Stores/Shops, godown-only adjust |
+| Purchases | `purchases.php`, `purchase-add.php`, ... | Godown receipts list |
+| Helpers | `helpers.php` | `accessible_shops`, `accessible_stores`, `ensure_central_godown`, etc. |
+| Sidebar | `sidebar.php` | Permission-gated navigation |
+
+## 7. Gaps vs. proposed objectives
+| Proposed objective | Current state | Gap |
+|---|---|---|
+| Separate shops & stores with own dashboards | Stores are warehouses under shops; inventory tabs aggregate | No dedicated per-shop/per-store dashboard page |
+| Entity-level movement history & audit | `inventory_movements` per warehouse; `audit_logs` global | No per-entity filtered history view |
+| Capital locked in stock per entity | Derivable from stock Ã— price | No report/card yet |
+| Multi-directional requests (shop/store â†’ godown/store/shop) | Source can be godown or store; destination must be store | Destination cannot be a shop directly (only its store); multi-destination not supported |
+| Central Godown transfer to multiple entities at once | One destination warehouse per transfer | Need multiple destination lines or batch transfers |
+| Activity history per entity | Movements + transfers + audit logs exist | No unified activity timeline per entity |
+
+## 8. DB mapping summary (for future restructuring)
+- **Shop entity:** `shops` (tenant-scoped).
+- **Store entity:** `warehouses` where `location_type='store'` and `shop_id` FK.
+- **Godown entity:** `warehouses` where `location_type='godown'` and `shop_id IS NULL`.
+- **Access:** `user_shops` (shop), `user_godowns` (godown warehouse).
+- **Stock:** `inventory_stock` (product Ã— warehouse), `inventory_movements` (ledger).
+- **Intake:** `godown_receipts` (into godown).
+- **Movement between entities:** `stock_transfers` + `stock_transfer_items`.
+
+## 9. Recommendation (awaiting your review before implementation)
+If approved, a future phase could:
+1. Add **per-entity dashboards** (shop/store/godown) reusing existing queries with `warehouse_id`/`shop_id` filters.
+2. Add **capital cards** using `SUM(stock.quantity * product.purchase_price)`.
+3. Add **per-entity movement history** view filtering `inventory_movements` by `warehouse_id`.
+4. Extend transfers to support **multiple destination warehouses** in one workflow (either multi-row batch or a new `stock_transfer_destinations` table).
+5. Add a **unified activity timeline** per entity combining movements, transfers, and audit logs.
+
+> **No changes were made.** Please review this report and confirm which objectives to implement before any code or schema changes. If any schema change is required, a detailed impact report and confirmation will be provided per policy.

@@ -124,6 +124,16 @@ if ($shop_ids) {
     }
 }
 
+$selected_shop_id = (int)($_GET["shop"] ?? 0);
+$accessible_shop_ids = array_map(fn($s) => (int)$s["shop_id"], $shops);
+if ($selected_shop_id > 0 && !in_array($selected_shop_id, $accessible_shop_ids, true)) {
+    $selected_shop_id = 0;
+}
+if ($selected_shop_id <= 0) {
+    $selected_shop_id = $accessible_shop_ids[0] ?? 0;
+}
+$selected_shop_summary = $selected_shop_id ? shop_stock_summary($selected_shop_id, (int)$current_user->tenant_id) : ["products" => 0, "qty" => 0.0, "low" => 0, "out" => 0];
+
 require_once 'navbar.php';
 require_once 'sidebar.php';
 ?>
@@ -149,6 +159,44 @@ require_once 'sidebar.php';
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
+
+<?php if (tenant_admin_scope() && count($shops) > 1): ?>
+<form method="GET" action="shops.php" class="form-inline mb-3">
+    <label class="mr-2">Shop</label>
+    <select name="shop" class="form-control form-control-sm mr-2" onchange="this.form.submit()">
+        <?php foreach ($shops as $sh): ?>
+            <option value="<?php echo (int)$sh["shop_id"]; ?>" <?php echo (int)$sh["shop_id"] === (int)$selected_shop_id ? "selected" : ""; ?>><?php echo e($sh["name"]); ?></option>
+        <?php endforeach; ?>
+    </select>
+</form>
+<?php endif; ?>
+
+<div class="row mb-3">
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Total Products Available</div>
+            <div class="h4 mb-0"><?php echo (int)$selected_shop_summary["products"]; ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Total Stock Quantity</div>
+            <div class="h4 mb-0"><?php echo e(format_quantity($selected_shop_summary["qty"])); ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Low Stock Items</div>
+            <div class="h4 mb-0"><?php echo (int)$selected_shop_summary["low"]; ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Out of Stock Products</div>
+            <div class="h4 mb-0"><?php echo (int)$selected_shop_summary["out"]; ?></div>
+        </div></div>
+    </div>
+</div>
 
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">

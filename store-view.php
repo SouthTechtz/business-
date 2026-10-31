@@ -5,7 +5,16 @@ require_permission_any(['manage_shops', 'manage_inventory', 'manage_pos', 'manag
 $page_title = 'Store Dashboard';
 
 $tenant_id = (int)$current_user->tenant_id;
-$warehouse_id = (int)($_GET['id'] ?? 0);
+$accessible_stores = accessible_stores(null, true);
+$store_ids = array_map(fn($s) => (int)$s["warehouse_id"], $accessible_stores);
+$requested_store_id = (int)($_GET["id"] ?? 0);
+if ($requested_store_id > 0 && !in_array($requested_store_id, $store_ids, true)) {
+    $requested_store_id = 0;
+}
+if ($requested_store_id <= 0) {
+    $requested_store_id = $store_ids[0] ?? 0;
+}
+$warehouse_id = $requested_store_id;
 $store = assert_store_access($warehouse_id, true);
 if (($store['location_type'] ?? '') !== 'store') {
     flash_set('danger', 'This page is for stores only.');
@@ -26,6 +35,8 @@ $row = fetch_one(
 $total_products = (int)($row['products'] ?? 0);
 $total_qty = (float)($row['qty'] ?? 0);
 $capital = (float)($row['capital'] ?? 0);
+$low_stock = 0;
+$out_of_stock = 0;
 
 // Available stock table
 $stock_rows = fetch_all(
@@ -38,6 +49,16 @@ $stock_rows = fetch_all(
     $tenant_id,
     $warehouse_id
 );
+
+foreach ($stock_rows as $r) {
+    $qty = (float)$r["quantity"];
+    $threshold = isset($r["reorder_level"]) && $r["reorder_level"] !== null ? (float)$r["reorder_level"] : (float)$r["min_stock_level"];
+    if ($qty <= 0) {
+        $out_of_stock++;
+    } elseif ($qty <= $threshold) {
+        $low_stock++;
+    }
+}
 
 // Movement history
 $movement_rows = fetch_all(
@@ -65,10 +86,21 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
     <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock Transfer</a>
 </div>
 
+<?php if (tenant_admin_scope() && count($accessible_stores) > 1): ?>
+<form method="GET" action="store-view.php" class="form-inline mb-3">
+    <label class="mr-2">Store</label>
+    <select name="id" class="form-control form-control-sm mr-2" onchange="this.form.submit()">
+        <?php foreach ($accessible_stores as $st): ?>
+            <option value="<?php echo (int)$st["warehouse_id"]; ?>" <?php echo (int)$st["warehouse_id"] === (int)$warehouse_id ? "selected" : ""; ?>><?php echo e(store_label($st)); ?></option>
+        <?php endforeach; ?>
+    </select>
+</form>
+<?php endif; ?>
+
 <div class="row mb-3">
     <div class="col-md-4 col-sm-6 mb-2">
         <div class="card"><div class="card-body">
-            <div class="text-muted small">Available Products</div>
+            <div class="text-muted small">Total Products Available</div>
             <div class="h4 mb-0"><?php echo $total_products; ?></div>
         </div></div>
     </div>
@@ -76,6 +108,18 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
         <div class="card"><div class="card-body">
             <div class="text-muted small">Total Physical Stock Quantity</div>
             <div class="h4 mb-0"><?php echo e(format_quantity($total_qty)); ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-4 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Low Stock Items</div>
+            <div class="h4 mb-0"><?php echo $low_stock; ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-4 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Out of Stock Products</div>
+            <div class="h4 mb-0"><?php echo $out_of_stock; ?></div>
         </div></div>
     </div>
     <div class="col-md-4 col-sm-6 mb-2">

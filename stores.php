@@ -138,6 +138,17 @@ foreach ($stores as $store) {
     ];
 }
 
+$all_accessible_stores = accessible_stores(null, true);
+$accessible_store_ids = array_map(fn($s) => (int)$s["warehouse_id"], $all_accessible_stores);
+$selected_store_id = (int)($_GET["store"] ?? 0);
+if ($selected_store_id > 0 && !in_array($selected_store_id, $accessible_store_ids, true)) {
+    $selected_store_id = 0;
+}
+if ($selected_store_id <= 0) {
+    $selected_store_id = $accessible_store_ids[0] ?? 0;
+}
+$selected_store_summary = $selected_store_id ? store_stock_summary($selected_store_id, (int)$current_user->tenant_id) : ["products" => 0, "qty" => 0.0, "low" => 0, "out" => 0];
+
 require_once 'navbar.php';
 require_once 'sidebar.php';
 ?>
@@ -166,6 +177,44 @@ require_once 'sidebar.php';
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
+
+<?php if (tenant_admin_scope() && count($all_accessible_stores) > 1): ?>
+<form method="GET" action="stores.php" class="form-inline mb-3">
+    <label class="mr-2">Store</label>
+    <select name="store" class="form-control form-control-sm mr-2" onchange="this.form.submit()">
+        <?php foreach ($all_accessible_stores as $st): ?>
+            <option value="<?php echo (int)$st["warehouse_id"]; ?>" <?php echo (int)$st["warehouse_id"] === (int)$selected_store_id ? "selected" : ""; ?>><?php echo e(store_label($st)); ?></option>
+        <?php endforeach; ?>
+    </select>
+</form>
+<?php endif; ?>
+
+<div class="row mb-3">
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Total Products Available</div>
+            <div class="h4 mb-0"><?php echo (int)$selected_store_summary["products"]; ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Total Stock Quantity</div>
+            <div class="h4 mb-0"><?php echo e(format_quantity($selected_store_summary["qty"])); ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Low Stock Items</div>
+            <div class="h4 mb-0"><?php echo (int)$selected_store_summary["low"]; ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Out of Stock Products</div>
+            <div class="h4 mb-0"><?php echo (int)$selected_store_summary["out"]; ?></div>
+        </div></div>
+    </div>
+</div>
 
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">

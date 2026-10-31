@@ -1454,3 +1454,50 @@ function category_tree($tenant_id) {
     $walk(0, 0);
     return $flat;
 }
+/** Stock summary metrics for a single shop (aggregated across its stores). */
+function shop_stock_summary($shop_id, $tenant_id) {
+    global $conn;
+    $shop_id = (int)$shop_id;
+    $tenant_id = (int)$tenant_id;
+    $out = ["products" => 0, "qty" => 0.0, "low" => 0, "out" => 0];
+    if ($shop_id <= 0 || $tenant_id <= 0) return $out;
+    $stores = fetch_all("SELECT warehouse_id FROM warehouses WHERE tenant_id = ? AND shop_id = ? AND location_type = 'store'", $tenant_id, $shop_id);
+    $ids = array_map(fn($r) => (int)$r["warehouse_id"], $stores);
+    if (!$ids) return $out;
+    $ph = implode(",", array_fill(0, count($ids), "?"));
+    $params = array_merge([$tenant_id], $ids);
+    $rows = fetch_all("SELECT s.product_id, COALESCE(SUM(s.quantity),0) AS qty, p.min_stock_level FROM inventory_stock s JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND s.warehouse_id IN ($ph) GROUP BY s.product_id, p.min_stock_level", ...$params);
+    foreach ($rows as $r) {
+        $qty = (float)$r["qty"];
+        $out["products"]++;
+        $out["qty"] += $qty;
+        if ($qty <= 0) {
+            $out["out"]++;
+        } elseif ($qty <= (float)$r["min_stock_level"]) {
+            $out["low"]++;
+        }
+    }
+    return $out;
+}
+
+/** Stock summary metrics for a single store (warehouse). */
+function store_stock_summary($warehouse_id, $tenant_id) {
+    $warehouse_id = (int)$warehouse_id;
+    $tenant_id = (int)$tenant_id;
+    $out = ["products" => 0, "qty" => 0.0, "low" => 0, "out" => 0];
+    if ($warehouse_id <= 0 || $tenant_id <= 0) return $out;
+    $rows = fetch_all("SELECT s.quantity, p.min_stock_level, s.reorder_level FROM inventory_stock s JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND s.warehouse_id = ?", $tenant_id, $warehouse_id);
+    foreach ($rows as $r) {
+        $qty = (float)$r["quantity"];
+        $threshold = $r["reorder_level"] !== null ? (float)$r["reorder_level"] : (float)$r["min_stock_level"];
+        $out["products"]++;
+        $out["qty"] += $qty;
+        if ($qty <= 0) {
+            $out["out"]++;
+        } elseif ($qty <= $threshold) {
+            $out["low"]++;
+        }
+    }
+    return $out;
+}
+

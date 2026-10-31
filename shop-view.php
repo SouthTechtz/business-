@@ -5,7 +5,16 @@ require_permission_any(['manage_shops', 'manage_inventory', 'manage_pos', 'manag
 $page_title = 'Shop Dashboard';
 
 $tenant_id = (int)$current_user->tenant_id;
-$shop_id = (int)($_GET['id'] ?? 0);
+$accessible_shops = accessible_shops(null, true);
+$shop_ids = array_map(fn($s) => (int)$s["shop_id"], $accessible_shops);
+$requested_shop_id = (int)($_GET['id'] ?? 0);
+if ($requested_shop_id > 0 && !in_array($requested_shop_id, $shop_ids, true)) {
+    $requested_shop_id = 0;
+}
+if ($requested_shop_id <= 0) {
+    $requested_shop_id = $shop_ids[0] ?? 0;
+}
+$shop_id = $requested_shop_id;
 $shop = assert_shop_access($shop_id, true);
 
 $warehouses = fetch_all(
@@ -17,24 +26,44 @@ $warehouses = fetch_all(
 );
 $warehouse_ids = array_map(fn($w) => (int)$w['warehouse_id'], $warehouses);
 
+$stock_rows = [];
 $total_products = 0;
 $total_qty = 0.0;
 $capital = 0.0;
+$low_stock = 0;
+$out_of_stock = 0;
 if ($warehouse_ids) {
-    $ph = implode(',', array_fill(0, count($warehouse_ids), '?'));
+    $ph = implode(",", array_fill(0, count($warehouse_ids), "?"));
     $params = array_merge([$tenant_id], $warehouse_ids);
-    $row = fetch_one(
-        "SELECT COUNT(DISTINCT s.product_id) AS products,
-                COALESCE(SUM(s.quantity), 0) AS qty,
-                COALESCE(SUM(s.quantity * p.purchase_price), 0) AS capital
+    $stock_rows = fetch_all(
+        "SELECT s.warehouse_id, w.name warehouse_name, p.product_id, p.name product_name, p.code product_code,
+                p.sku, p.purchase_price, p.sale_price, p.min_stock_level, s.quantity, s.reorder_level, s.last_counted_at
            FROM inventory_stock s
            JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
-          WHERE s.tenant_id = ? AND s.warehouse_id IN ($ph)",
+           JOIN warehouses w ON w.warehouse_id = s.warehouse_id AND w.tenant_id = s.tenant_id
+          WHERE s.tenant_id = ? AND s.warehouse_id IN ($ph)
+          ORDER BY w.name, p.name",
         ...$params
     );
-    $total_products = (int)($row['products'] ?? 0);
-    $total_qty = (float)($row['qty'] ?? 0);
-    $capital = (float)($row['capital'] ?? 0);
+
+    $agg = [];
+    foreach ($stock_rows as $r) {
+        $pid = (int)$r["product_id"];
+        if (!isset($agg[$pid])) {
+            $agg[$pid] = ["qty" => 0.0, "min" => (float)$r["min_stock_level"]];
+        }
+        $agg[$pid]["qty"] += (float)$r["quantity"];
+        $capital += (float)$r["quantity"] * (float)$r["purchase_price"];
+    }
+    $total_products = count($agg);
+    foreach ($agg as $a) {
+        $total_qty += $a["qty"];
+        if ($a["qty"] <= 0) {
+            $out_of_stock++;
+        } elseif ($a["qty"] <= $a["min"]) {
+            $low_stock++;
+        }
+    }
 }
 
 $active_transfers = 0;
@@ -95,6 +124,17 @@ $cur = tenant_currency();
     <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock</a>
 </div>
 
+<?php if (tenant_admin_scope() && count($accessible_shops) > 1): ?>
+<form method="GET" action="shop-view.php" class="form-inline mb-3">
+    <label class="mr-2">Shop</label>
+    <select name="id" class="form-control form-control-sm mr-2" onchange="this.form.submit()">
+        <?php foreach ($accessible_shops as $sh): ?>
+            <option value="<?php echo (int)$sh["shop_id"]; ?>" <?php echo (int)$sh["shop_id"] === (int)$shop_id ? "selected" : ""; ?>><?php echo e($sh["name"]); ?></option>
+        <?php endforeach; ?>
+    </select>
+</form>
+<?php endif; ?>
+
 <div class="row mb-3">
     <div class="col-md-3 col-sm-6 mb-2">
         <div class="card"><div class="card-body">
@@ -106,6 +146,18 @@ $cur = tenant_currency();
         <div class="card"><div class="card-body">
             <div class="text-muted small">Total Stock Quantity</div>
             <div class="h4 mb-0"><?php echo e(format_quantity($total_qty)); ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Low Stock Items</div>
+            <div class="h4 mb-0"><?php echo $low_stock; ?></div>
+        </div></div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Out of Stock Products</div>
+            <div class="h4 mb-0"><?php echo $out_of_stock; ?></div>
         </div></div>
     </div>
     <div class="col-md-3 col-sm-6 mb-2">
