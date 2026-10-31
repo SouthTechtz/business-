@@ -318,7 +318,6 @@ require_once 'sidebar.php';
         </div>
     </div>
     <div class="d-flex align-items-center">
-        <a href="pos-session.php" class="btn btn-light mr-2" title="POS session location"><i class="fa fa-lock mr-1"></i> POS Session</a>
         <a href="sales.php" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back to Sales</a>
     </div>
 </div>

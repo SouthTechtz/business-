@@ -71,7 +71,6 @@ $cur = tenant_currency();
         <h1 class="page-title">Sales</h1>
         <div class="page-sub"><?php echo count($orders); ?> sale(s) in the selected period.</div>
     </div>
-    <a href="pos-session.php" class="btn btn-light"><i class="fa fa-lock mr-1"></i> POS Session</a>
     <a href="sale-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> New Sale</a>
     <a href="export-sales.php?<?php echo e(http_build_query(array_filter(['status' => $status, 'customer' => $customer_id > 0 ? $customer_id : '', 'warehouse' => $warehouse_filter > 0 ? $warehouse_filter : '', 'date_from' => $date_from, 'date_to' => $date_to], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
 </div>

@@ -63,6 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$locked_invoice) {
             throw new Exception('Invoice not found.');
         }
+        $posted_version = (string)($_POST['invoice_version'] ?? '');
+        if ($posted_version === '' || $posted_version !== (string)$locked_invoice['updated_at']) {
+            throw new Exception('This invoice was changed since you opened it. Reload and try again.');
+        }
         $invoice = $locked_invoice;
         $items = fetch_all("SELECT * FROM invoice_items WHERE invoice_id = ?", $id);
 
