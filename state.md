@@ -1025,3 +1025,72 @@ If approved, a future phase could:
 - `godown.php`, `godown-transfers.php`, `godown-transfer-add.php`: Godown and transfer workflow.
 - `inventory.php`: tabbed inventory with scoped cards.
 
+
+# Detailed Inventory, Warehouse, Godown & Shop Structure Audit (Live DB)
+
+## Live Schema Snapshot
+
+### shops
+- `shop_id` PK, `tenant_id`, `name`, `code`, `address`, `phone`, `is_active`, timestamps.
+- No shop-to-warehouse ownership in this table; shops are independent.
+
+### warehouses
+- `warehouse_id` PK, `tenant_id`, `shop_id` (nullable), `name`, `code`, `address`, `phone`, `manager_user_id`, `is_active`, `is_godown` (virtual generated), `location_type` enum(store/godown), `created_at`, `updated_at`, `godown_tenant_key` (stored generated unique).
+- `shop_id` is nullable: stores may be linked to a shop, but godowns are independent.
+- `location_type` distinguishes store vs godown.
+
+### inventory_stock
+- `stock_id` PK, `tenant_id`, `product_id`, `warehouse_id`, `quantity`, `reorder_level`, dates, `last_counted_at`, `updated_at`.
+- Unique on (`product_id`, `warehouse_id`).
+- Stock is per warehouse (store/godown), not per shop directly.
+
+### inventory_movements
+- `movement_id`, `tenant_id`, `product_id`, `warehouse_id`, `movement_type`, `quantity`, `reference_id`, `reference_type`, `created_by`, `notes`, dates.
+- Every balance change should have a movement.
+
+### stock_transfers
+- `transfer_id`, `tenant_id`, `transfer_number`, `source_warehouse_id`, `destination_shop_id` (nullable), `destination_warehouse_id`, `status` enum, `has_discrepancy`, notes, cancel/reason, audit columns, timestamps.
+- Destination must be a warehouse (store); `destination_shop_id` is redundant linkage.
+
+### stock_transfer_items
+- `item_id`, `tenant_id`, `transfer_id`, `line_no`, `product_id`, requested/dispatched/received/damaged/shortage/excess quantities, `line_notes`, timestamps.
+
+### user_shops
+- `user_shop_id`, `tenant_id`, `user_id`, `shop_id`, `created_at`.
+- Shop-scoped user access.
+
+### user_godowns
+- `user_godown_id`, `tenant_id`, `user_id`, `warehouse_id`, `created_at`.
+- Godown-scoped user access (warehouse_id).
+
+### godown_receipts
+- `receipt_id`, `tenant_id`, `receipt_number`, `godown_id`, `product_id`, `supplier_id`, `quantity`, `source_reference`, notes, `received_by`, `received_at`, `created_at`.
+- Stock intake into a specific godown.
+
+### orders / pos_orders / invoices
+- Reference `shop_id` and `warehouse_id` for fulfillment location.
+
+## Current Architectural Observations
+
+1. Shops and warehouses are partially independent: `warehouses.shop_id` is nullable, allowing godowns independent of shops. However, stores often linked to shops via `shop_id`.
+2. Inventory balances are tied to `warehouse_id`, not `shop_id`. A shop does not own stock directly; it relies on its stores.
+3. Godown is represented as a warehouse with `location_type='godown'` (or `is_godown=1`).
+4. User access split: `user_shops` for shops, `user_godowns` for godowns (warehouses). No unified location assignment.
+5. Transfers require a destination warehouse; `destination_shop_id` redundant.
+6. No `inventory_locations` shared identity table; location identity is `warehouse_id`.
+7. No reserved/in-transit columns in `inventory_stock`; reservations tracked in `order_stock_reservations` and transfer statuses.
+
+## Risks / Migration Considerations
+- `warehouses.shop_id` nullable but many queries assume store belongs to shop.
+- `is_godown` virtual generated; `location_type` enum.
+- Duplicate migration history possible.
+- Need preserve historical movements and transfers.
+- Need add reserved/in-transit handling carefully.
+
+## Recommended Next Steps (Phase 1)
+- Design shared `inventory_locations` or reuse `warehouses` as location identity.
+- Keep shops/warehouses as independent entities.
+- Migrate user access to unified location assignments.
+- Update queries to treat godown/store/shop as independent locations.
+- Add reservation/in-transit tracking.
+
