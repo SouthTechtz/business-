@@ -21,6 +21,22 @@ if (($store['location_type'] ?? '') !== 'store') {
     redirect('stores.php');
 }
 
+// Fetch all available products across tenant for the modal selection
+$all_products = fetch_all(
+    "SELECT product_id, name, code, sku FROM products WHERE tenant_id = ? ORDER BY name",
+    $tenant_id
+);
+
+// Fetch stock availability restricting store source to ONLY Godown or Other Stores with qty > 0
+$available_store_sources = fetch_all(
+    "SELECT s.product_id, s.warehouse_id, s.quantity, w.name AS warehouse_name, w.location_type
+       FROM inventory_stock s
+       JOIN warehouses w ON w.warehouse_id = s.warehouse_id AND w.tenant_id = s.tenant_id
+      WHERE s.tenant_id = ? AND s.quantity > 0 AND w.location_type IN ('godown', 'store') AND w.warehouse_id != ?",
+    $tenant_id,
+    $warehouse_id
+);
+
 // Summary metrics
 $row = fetch_one(
     "SELECT COUNT(DISTINCT s.product_id) AS products,
@@ -83,7 +99,9 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
         <h1 class="page-title"><?php echo e($store['name']); ?> — Store Dashboard</h1>
         <div class="page-sub">Store code: <?php echo e($store['code']); ?> &middot; Shop: <?php echo e($shop['name'] ?? '—'); ?> &middot; <?php echo count($stock_rows); ?> stock row(s)</div>
     </div>
-    <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock Transfer</a>
+    <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#requestStoreStockModal">
+        <i class="fa fa-plus mr-1"></i> Request Stock Transfer
+    </button>
 </div>
 
 <?php if (tenant_admin_scope() && count($accessible_stores) > 1): ?>
@@ -97,7 +115,6 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
 </form>
 <?php endif; ?>
 
-<div class="mb-3"><a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock</a></div>
 <div class="row mb-3">
     <div class="col-md-4 col-sm-6 mb-2">
         <div class="card"><div class="card-body">
@@ -189,5 +206,84 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
         </div>
     </div>
 </div>
+
+<!-- Request Stock Popup Modal -->
+<div class="modal fade" id="requestStoreStockModal" tabindex="-1" role="dialog" aria-labelledby="requestStoreStockModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <form action="stock-transfer-process.php" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="requestStoreStockModalLabel">Request Stock Transfer (Store)</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="destination_warehouse_id" value="<?php echo (int)$warehouse_id; ?>">
+                    
+                    <div class="form-group">
+                        <label>Select Product <span class="text-danger">*</span></label>
+                        <select name="product_id" id="store_product_select" class="form-control" required onchange="filterStoreSources()">
+                            <option value="">-- Choose Product --</option>
+                            <?php foreach ($all_products as $p): ?>
+                                <option value="<?php echo (int)$p['product_id']; ?>">
+                                    <?php echo e($p['name']); ?> (<?php echo e($p['code']); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Source Location (Godown or Other Store with available stock) <span class="text-danger">*</span></label>
+                        <select name="source_warehouse_id" id="store_source_select" class="form-control" required>
+                            <option value="">-- Select Product First --</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Quantity <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" min="0.01" name="quantity" class="form-control" placeholder="Enter quantity" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Notes / Reason</label>
+                        <textarea name="notes" class="form-control" rows="2" placeholder="Optional notes..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Submit Request</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+const storeStockData = <?php echo json_encode($available_store_sources); ?>;
+
+function filterStoreSources() {
+    const selectedProductId = parseInt(document.getElementById('store_product_select').value);
+    const sourceSelect = document.getElementById('store_source_select');
+    sourceSelect.innerHTML = '<option value="">-- Choose Source Location --</option>';
+
+    if (!selectedProductId) return;
+
+    // Logic: Store can request ONLY from Godowns or other Stores with qty > 0
+    const matchingSources = storeStockData.filter(item => parseInt(item.product_id) === selectedProductId && parseFloat(item.quantity) > 0);
+
+    if (matchingSources.length === 0) {
+        sourceSelect.innerHTML = '<option value="">No godown or store currently has stock for this product</option>';
+        return;
+    }
+
+    matchingSources.forEach(source => {
+        const opt = document.createElement('option');
+        opt.value = source.warehouse_id;
+        opt.textContent = `[${source.location_type.toUpperCase()}] ${source.warehouse_name} — Available: ${source.quantity}`;
+        sourceSelect.appendChild(opt);
+    });
+}
+</script>
 
 <?php require_once 'footer.php'; ?>

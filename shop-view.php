@@ -26,6 +26,25 @@ $warehouses = fetch_all(
 );
 $warehouse_ids = array_map(fn($w) => (int)$w['warehouse_id'], $warehouses);
 
+// Default destination warehouse for this shop
+$default_dest_warehouse_id = $warehouse_ids[0] ?? 0;
+
+// Fetch all available products across tenant for the modal selection
+$all_products = fetch_all(
+    "SELECT product_id, name, code, sku FROM products WHERE tenant_id = ? ORDER BY name",
+    $tenant_id
+);
+
+// Fetch stock availability across Godowns, Stores, and Shops for modal filtering
+$available_sources_stock = fetch_all(
+    "SELECT s.product_id, s.warehouse_id, s.quantity, w.name AS warehouse_name, w.location_type, sh.name AS shop_name
+       FROM inventory_stock s
+       JOIN warehouses w ON w.warehouse_id = s.warehouse_id AND w.tenant_id = s.tenant_id
+  LEFT JOIN shops sh ON sh.shop_id = w.shop_id AND sh.tenant_id = w.tenant_id
+      WHERE s.tenant_id = ? AND s.quantity > 0",
+    $tenant_id
+);
+
 $stock_rows = [];
 $total_products = 0;
 $total_qty = 0.0;
@@ -79,22 +98,6 @@ if ($warehouse_ids) {
     $active_transfers = (int)($row['c'] ?? 0);
 }
 
-$stock_rows = [];
-if ($warehouse_ids) {
-    $ph = implode(',', array_fill(0, count($warehouse_ids), '?'));
-    $params = array_merge([$tenant_id], $warehouse_ids);
-    $stock_rows = fetch_all(
-        "SELECT s.warehouse_id, w.name warehouse_name, p.product_id, p.name product_name, p.code product_code,
-                p.sku, p.purchase_price, p.sale_price, p.min_stock_level, s.quantity, s.reorder_level, s.last_counted_at
-           FROM inventory_stock s
-           JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
-           JOIN warehouses w ON w.warehouse_id = s.warehouse_id AND w.tenant_id = s.tenant_id
-          WHERE s.tenant_id = ? AND s.warehouse_id IN ($ph)
-          ORDER BY w.name, p.name",
-        ...$params
-    );
-}
-
 $movement_rows = [];
 if ($warehouse_ids) {
     $ph = implode(',', array_fill(0, count($warehouse_ids), '?'));
@@ -121,7 +124,9 @@ $cur = tenant_currency();
         <h1 class="page-title"><?php echo e($shop['name']); ?> — Shop Dashboard</h1>
         <div class="page-sub">Shop code: <?php echo e($shop['code']); ?> &middot; <?php echo count($warehouses); ?> store(s) &middot; <?php echo count($stock_rows); ?> stock row(s)</div>
     </div>
-    <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock</a>
+    <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#requestStockModal">
+        <i class="fa fa-plus mr-1"></i> Request Stock
+    </button>
 </div>
 
 <?php if (tenant_admin_scope() && count($accessible_shops) > 1): ?>
@@ -135,7 +140,6 @@ $cur = tenant_currency();
 </form>
 <?php endif; ?>
 
-<div class="mb-3"><a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock</a></div>
 <div class="row mb-3">
     <div class="col-md-3 col-sm-6 mb-2">
         <div class="card"><div class="card-body">
@@ -234,5 +238,88 @@ $cur = tenant_currency();
         </div>
     </div>
 </div>
+
+<!-- Request Stock Popup Modal -->
+<div class="modal fade" id="requestStockModal" tabindex="-1" role="dialog" aria-labelledby="requestStockModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <form action="stock-transfer-process.php" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="requestStockModalLabel">Request Stock Transfer (Shop)</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="destination_warehouse_id" value="<?php echo $default_dest_warehouse_id; ?>">
+                    
+                    <div class="form-group">
+                        <label>Select Product <span class="text-danger">*</span></label>
+                        <select name="product_id" id="shop_product_select" class="form-control" required onchange="filterShopSources()">
+                            <option value="">-- Choose Product --</option>
+                            <?php foreach ($all_products as $p): ?>
+                                <option value="<?php echo (int)$p['product_id']; ?>">
+                                    <?php echo e($p['name']); ?> (<?php echo e($p['code']); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Source Location (Godown, Store, or Shop with available stock) <span class="text-danger">*</span></label>
+                        <select name="source_warehouse_id" id="shop_source_select" class="form-control" required>
+                            <option value="">-- Select Product First --</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Quantity <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" min="0.01" name="quantity" class="form-control" placeholder="Enter quantity" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Notes / Reason</label>
+                        <textarea name="notes" class="form-control" rows="2" placeholder="Optional notes..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Submit Request</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+const shopStockData = <?php echo json_encode($available_sources_stock); ?>;
+
+function filterShopSources() {
+    const selectedProductId = parseInt(document.getElementById('shop_product_select').value);
+    const sourceSelect = document.getElementById('shop_source_select');
+    sourceSelect.innerHTML = '<option value="">-- Choose Source Location --</option>';
+
+    if (!selectedProductId) return;
+
+    // Logic: Shop can request from Godowns, Stores, or other Shops as long as qty > 0
+    const matchingSources = shopStockData.filter(item => parseInt(item.product_id) === selectedProductId && parseFloat(item.quantity) > 0);
+
+    if (matchingSources.length === 0) {
+        sourceSelect.innerHTML = '<option value="">No locations currently have stock for this product</option>';
+        return;
+    }
+
+    matchingSources.forEach(source => {
+        let labelType = source.location_type.toUpperCase();
+        if (source.shop_name) {
+            labelType += ` (${source.shop_name})`;
+        }
+        const opt = document.createElement('option');
+        opt.value = source.warehouse_id;
+        opt.textContent = `[${labelType}] ${source.warehouse_name} — Available: ${source.quantity}`;
+        sourceSelect.appendChild(opt);
+    });
+}
+</script>
 
 <?php require_once 'footer.php'; ?>

@@ -982,3 +982,46 @@ If approved, a future phase could:
 5. Add a **unified activity timeline** per entity combining movements, transfers, and audit logs.
 
 > **No changes were made.** Please review this report and confirm which objectives to implement before any code or schema changes. If any schema change is required, a detailed impact report and confirmation will be provided per policy.
+
+## Inventory, Warehouse, Godown & Shop Structure Audit (2026-10-31)
+
+### 1. Core entities
+- **Tenant**: Root isolation boundary. Every business table is scoped by `tenant_id`.
+- **Shop** (`shops`): A business location/grouping. Fields: `shop_id`, `tenant_id`, `name`, `code`, `address`, `phone`, `is_active`. A shop groups one or more stores (warehouses).
+- **Store / Warehouse** (`warehouses`): A physical storage location. Fields include `warehouse_id`, `tenant_id`, `shop_id`, `name`, `code`, `location_type` (`store` or `godown`), `is_active`, `is_godown`. A store belongs to exactly one shop; a Godown is independent of shops.
+- **Inventory Stock** (`inventory_stock`): Per-product, per-warehouse balance. Unique on `(product_id, warehouse_id)`. Fields: `quantity`, `reorder_level`, dates, `last_counted_at`.
+- **Inventory Movements** (`inventory_movements`): Ledger of every stock change (type, qty, reference, notes, dates).
+
+### 2. Godown (Central Warehouse)
+- A tenant has a single active central Godown (`location_type = 'godown'`), created via `ensure_central_godown()`.
+- Godown is independent of shops and accessed via `user_godowns` or admin scope.
+- Stock intake recorded in `godown_receipts`; transfers move stock Godown ? Store.
+- Godown stock is never treated as shop POS availability.
+
+### 3. Shops & Stores relationship
+- Shop (1) ? many Stores (warehouses with `location_type='store'` and `shop_id`).
+- User access is shop-scoped via `user_shops`; store access derives from shop access.
+- Admins (`tenant_admin_scope()`) see all shops/stores; restricted users see only mapped shops/stores.
+- Helpers: `accessible_shops()`, `accessible_stores()`, `accessible_warehouse_ids()`, `shop_is_accessible()`, `store_is_accessible()`, `find_accessible_store()`, `assert_shop_access()`, `assert_store_access()`.
+
+### 4. Inventory views
+- `inventory.php`: tabs for Godown, Stores, Shops, each with location selector, filters, and tab-scoped summary cards (Available Products, Stock Qty, Low Stock, Out of Stock).
+- `shop-view.php` / `store-view.php`: entity dashboards with stock summary cards and movement history.
+- `shops.php` / `stores.php`: management pages with role-based scoping and stock summary cards.
+
+### 5. Stock transfers
+- `stock_transfers` + `stock_transfer_items`: source warehouse ? destination warehouse (destination store/shop).
+- Status flow: draft ? approved ? dispatched ? received/discrepancy/cancelled.
+- Permission-gated approval/dispatch/receipt; requesters can create drafts for accessible shops/stores.
+
+### 6. Data integrity & scoping
+- All queries filter by `tenant_id` and resolved `shop_id`/`warehouse_id`.
+- Restricted users cannot access unauthorized locations via URL tampering (assert_* guards).
+- Summary metrics aggregate per product across a shop's stores.
+
+### 7. Key files
+- `helpers.php`: access helpers, stock summary helpers.
+- `shops.php`, `stores.php`, `shop-view.php`, `store-view.php`: management/entity views.
+- `godown.php`, `godown-transfers.php`, `godown-transfer-add.php`: Godown and transfer workflow.
+- `inventory.php`: tabbed inventory with scoped cards.
+
