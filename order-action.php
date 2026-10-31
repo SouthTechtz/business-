@@ -62,6 +62,11 @@ try {
             if ($shop_id <= 0 || !shop_is_accessible($shop_id, false)) {
                 order_action_redirect($back, 'danger', 'Select an active shop you have access to before confirming.');
             }
+            // Prefer the shop independent inventory location when initialized.
+            if ($shop_id > 0 && shop_inventory_ready($shop_id)) {
+                $wh = shop_inventory_warehouse_id($shop_id);
+                if ($wh) $warehouse_id = (int)$wh;
+            }
             if ($warehouse_id <= 0) {
                 order_action_redirect($back, 'danger', 'Select the store that will supply this order.');
             }
