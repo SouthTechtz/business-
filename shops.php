@@ -36,16 +36,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('shops.php');
         }
 
-        $id = db_insert('shops', [
-            'tenant_id' => $current_user->tenant_id,
-            'name' => $name,
-            'code' => $code,
-            'address' => $address !== '' ? $address : null,
-            'phone' => $phone !== '' ? $phone : null,
-            'is_active' => 1,
-        ]);
-        if (!$id) {
-            flash_set('danger', 'Could not create the shop.');
+        $conn->begin_transaction();
+        try {
+            $id = db_insert('shops', [
+                'tenant_id' => $current_user->tenant_id,
+                'name' => $name,
+                'code' => $code,
+                'address' => $address !== '' ? $address : null,
+                'phone' => $phone !== '' ? $phone : null,
+                'is_active' => 1,
+            ]);
+            if (!$id) { throw new RuntimeException('Could not create the shop.'); }
+            $loc_code = $code;
+            $dup_loc = fetch_one("SELECT 1 FROM warehouses WHERE tenant_id = ? AND code = ?", $current_user->tenant_id, $loc_code);
+            if ($dup_loc) { $loc_code = $loc_code . '-' . $id; }
+            db_insert('warehouses', [
+                'tenant_id' => $current_user->tenant_id,
+                'shop_id' => $id,
+                'name' => $name,
+                'code' => $loc_code,
+                'is_active' => 1,
+                'location_type' => 'shop',
+            ]);
+            if (!tenant_admin_scope()) {
+                db_insert('user_shops', [
+                    'tenant_id' => $current_user->tenant_id,
+                    'user_id' => $current_user->user_id,
+                    'shop_id' => $id,
+                ]);
+            }
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            flash_set('danger', 'Could not create the shop: ' . $e->getMessage());
             redirect('shops.php');
         }
 
