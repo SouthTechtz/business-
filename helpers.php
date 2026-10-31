@@ -453,6 +453,26 @@ function accessible_locations($include_inactive = false, $tenant_id = null) {
     return fetch_all("SELECT w.*, s.name shop_name, s.code shop_code FROM warehouses w LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.warehouse_id IN ($ph){$active_sql} ORDER BY w.name", ...$params);
 }
 
+/** The independent inventory location (warehouse) for a shop, or null. */
+function shop_inventory_warehouse_id($shop_id, $tenant_id = null) {
+    global $current_user;
+    $shop_id = (int)$shop_id;
+    if ($shop_id <= 0) return null;
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $row = fetch_one("SELECT warehouse_id FROM warehouses WHERE tenant_id = ? AND shop_id = ? AND location_type = 'shop' AND is_active = 1 LIMIT 1", $tenant_id, $shop_id);
+    return $row ? (int)$row['warehouse_id'] : null;
+}
+
+/** Whether a shop has an initialized, non-empty independent inventory location. */
+function shop_inventory_ready($shop_id, $tenant_id = null) {
+    global $current_user;
+    $wh = shop_inventory_warehouse_id($shop_id, $tenant_id);
+    if (!$wh) return false;
+    $tid = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $row = fetch_one("SELECT COALESCE(SUM(quantity),0) AS q FROM inventory_stock WHERE tenant_id = ? AND warehouse_id = ?", $tid, $wh);
+    return $row && (float)$row['q'] > 0;
+}
+
 /** Display label for a store row that includes shop_name/name. */
 function store_label($store) {
     $shop = trim((string)($store['shop_name'] ?? ''));
