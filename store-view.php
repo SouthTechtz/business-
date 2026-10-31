@@ -189,13 +189,4 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
     </div>
 </div>
 
-<div class="card">
-    <div class="card-body">
-        <h5 class="card-title">Transfer &amp; Request Controls</h5>
-        <p class="text-muted mb-3">Quick actions to request stock transfers from the Central Godown or other storage facilities.</p>
-        <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock Transfer</a>
-        <a href="inventory.php" class="btn btn-light ml-2"><i class="fa fa-cubes mr-1"></i> View Inventory</a>
-    </div>
-</div>
-
 <?php require_once 'footer.php'; ?>
