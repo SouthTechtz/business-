@@ -960,4 +960,5 @@ require_once 'sidebar.php';
     });
 </script>
 
+<div class="mb-3"><a href="transfer-note.php?id=<?php echo (int)$transfer_id; ?>" class="btn btn-secondary" target="_blank"><i class="fa fa-print mr-1"></i> Goods Transfer Note</a></div>
 <?php require_once 'footer.php'; ?>
