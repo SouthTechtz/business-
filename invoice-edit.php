@@ -21,6 +21,11 @@ $invoice_store = find_accessible_store($invoice_warehouse_id, true);
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $linked_order_check = fetch_one("SELECT order_id FROM orders WHERE fulfilled_invoice_id = ? AND tenant_id = ?", $id, $current_user->tenant_id);
+    if ($linked_order_check) {
+        flash_set('danger', 'This invoice is linked to an order and cannot be edited.');
+        redirect('invoice-details.php?id=' . $id);
+    }
     $issue_date = $_POST['issue_date'] ?? $invoice['issue_date'];
     $due_date = ($_POST['due_date'] ?? '') ?: null;
     $status_id = (int)($_POST['status_id'] ?? $invoice['status_id']);

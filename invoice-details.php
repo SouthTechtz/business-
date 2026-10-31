@@ -57,6 +57,11 @@ $cur = tenant_currency();
             <a href="payment-add.php?invoice=<?php echo $id; ?>" class="btn btn-success"><i class="fa fa-money mr-1"></i> Record Payment</a>
         <?php endif; ?>
         <a href="invoice-print.php?id=<?php echo $id; ?>" class="btn btn-outline-primary"><i class="fa fa-print mr-1"></i> Print</a>
+        <form method="POST" action="invoice-cancel.php" class="d-inline" onsubmit="return confirm('Cancel this invoice and restore stock?');">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="invoice_id" value="<?php echo (int)$id; ?>">
+            <button type="submit" class="btn btn-danger"><i class="fa fa-times mr-1"></i> Cancel Invoice</button>
+        </form>
         <a href="invoices.php" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back</a>
     </div>
 </div>

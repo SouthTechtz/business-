@@ -9,7 +9,7 @@ define('DB_USER', 'root');
 define('DB_PASS', '');
 define('DB_NAME', 'u839560293_agensupply');
 
-define('BASE_URL', 'https://agengeneralsuplly.dezl.org/');
+define('BASE_URL', 'http://localhost/business');
 define('APP_NAME', 'DEZL BUSINESS SYSTEM');
 
 date_default_timezone_set('Africa/Dar_es_Salaam');
