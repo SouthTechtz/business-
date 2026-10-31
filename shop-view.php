@@ -234,13 +234,4 @@ $cur = tenant_currency();
     </div>
 </div>
 
-<div class="card">
-    <div class="card-body">
-        <h5 class="card-title">Action Hub</h5>
-        <p class="text-muted mb-3">Request stock directly from the Central Godown or peer locations for this shop's stores.</p>
-        <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock Transfer</a>
-        <a href="stores.php" class="btn btn-light ml-2"><i class="fa fa-building mr-1"></i> Manage Stores</a>
-    </div>
-</div>
-
 <?php require_once 'footer.php'; ?>
