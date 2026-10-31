@@ -18,6 +18,13 @@ if (!$invoice_warehouse_id || !store_is_accessible($invoice_warehouse_id, true))
 }
 $invoice_store = find_accessible_store($invoice_warehouse_id, true);
 
+// Cancelled invoices cannot be edited.
+$invoice_status = fetch_one("SELECT name FROM document_statuses WHERE status_id = ? AND tenant_id = ?", (int)$invoice['status_id'], $current_user->tenant_id);
+if ($invoice_status && strcasecmp((string)$invoice_status['name'], 'Cancelled') === 0) {
+    flash_set('danger', 'Cancelled invoices cannot be edited.');
+    redirect('invoice-details.php?id=' . $id);
+}
+
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -29,6 +36,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $issue_date = $_POST['issue_date'] ?? $invoice['issue_date'];
     $due_date = ($_POST['due_date'] ?? '') ?: null;
     $status_id = (int)($_POST['status_id'] ?? $invoice['status_id']);
+    $selected_status = fetch_one("SELECT name FROM document_statuses WHERE status_id = ? AND tenant_id = ?", $status_id, $current_user->tenant_id);
+    if ($selected_status && strcasecmp((string)$selected_status['name'], 'Cancelled') === 0) {
+        $error = 'Use the Cancel Invoice button to cancel an invoice.';
+    }
     $reference = trim($_POST['reference'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
     $terms = trim($_POST['terms'] ?? '');
