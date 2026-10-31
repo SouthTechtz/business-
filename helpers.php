@@ -96,10 +96,14 @@ function accessible_shops($tenant_id = null, $include_inactive = false) {
     }
     return fetch_all(
         "SELECT s.* FROM shops s
-         JOIN user_shops us ON us.shop_id = s.shop_id AND us.tenant_id = s.tenant_id
-         WHERE s.tenant_id = ? AND us.user_id = ?{$active_sql}
+         WHERE s.tenant_id = ?{$active_sql}
+           AND (
+             EXISTS (SELECT 1 FROM user_shops us WHERE us.tenant_id = s.tenant_id AND us.user_id = ? AND us.shop_id = s.shop_id)
+             OR EXISTS (SELECT 1 FROM user_inventory_locations uil JOIN warehouses w ON w.warehouse_id = uil.location_id AND w.tenant_id = uil.tenant_id WHERE uil.tenant_id = s.tenant_id AND uil.user_id = ? AND w.shop_id = s.shop_id AND w.location_type = 'shop')
+           )
          ORDER BY s.name",
         $tenant_id,
+        $current_user->user_id,
         $current_user->user_id
     );
 }
@@ -205,7 +209,14 @@ function shop_is_accessible($shop_id, $include_inactive = true) {
         $current_user->user_id,
         $shop_id
     );
-    return (bool)$mapped;
+    if ($mapped) return true;
+    $loc = fetch_one(
+        "SELECT 1 FROM user_inventory_locations uil JOIN warehouses w ON w.warehouse_id = uil.location_id AND w.tenant_id = uil.tenant_id WHERE uil.tenant_id = ? AND uil.user_id = ? AND w.shop_id = ? AND w.location_type = 'shop'",
+        $current_user->tenant_id,
+        $current_user->user_id,
+        $shop_id
+    );
+    return (bool)$loc;
 }
 
 /** Return an accessible store row, or null. */
@@ -231,7 +242,14 @@ function find_accessible_store($warehouse_id, $include_inactive = false, $includ
 
     if (!$include_inactive && (!(int)$store['is_active'] || !(int)$store['shop_is_active'])) return null;
     if (!$include_godown && (int)($store['is_godown'] ?? 0) === 1) return null;
-    return shop_is_accessible((int)$store['shop_id'], $include_inactive) ? $store : null;
+    if (shop_is_accessible((int)$store['shop_id'], $include_inactive)) return $store;
+    global $current_user;
+    if ($current_user && tenant_admin_scope()) return $store;
+    if ($current_user) {
+        $loc = fetch_one("SELECT 1 FROM user_inventory_locations WHERE tenant_id = ? AND user_id = ? AND location_id = ?", $current_user->tenant_id, $current_user->user_id, (int)$store['warehouse_id']);
+        if ($loc) return $store;
+    }
+    return null;
 }
 
 /** Whether the current user may access a store. */
