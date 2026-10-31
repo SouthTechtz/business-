@@ -236,8 +236,11 @@ try {
                 }
             }
             if ($warehouse_id <= 0) {
-                $auto_stores = accessible_stores($shop_id, false);
-                $warehouse_id = $auto_stores ? (int)$auto_stores[0]['warehouse_id'] : 0;
+                $wh = shop_inventory_warehouse_id($shop_id);
+                if ($wh) $warehouse_id = (int)$wh;
+            }
+            if ($warehouse_id <= 0) {
+                lead_action_redirect($back, 'danger', 'The selected shop has no active inventory location.');
             }
             // A store is optional. The order is always linked to the shop, and
             // stock reservation is skipped when the shop has no active store.

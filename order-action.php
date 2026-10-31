@@ -62,20 +62,8 @@ try {
             if ($shop_id <= 0 || !shop_is_accessible($shop_id, false)) {
                 order_action_redirect($back, 'danger', 'Select an active shop you have access to before confirming.');
             }
-            // Prefer the shop independent inventory location when initialized.
-            if ($shop_id > 0 && shop_inventory_ready($shop_id)) {
-                $wh = shop_inventory_warehouse_id($shop_id);
-                if ($wh) $warehouse_id = (int)$wh;
-            }
-            if ($warehouse_id <= 0) {
-                order_action_redirect($back, 'danger', 'Select the store that will supply this order.');
-            }
-            $store = find_accessible_store($warehouse_id, false);
-            if (!$store) {
-                order_action_redirect($back, 'danger', 'Select an active store you have access to.');
-            }
-            if ((int)$store['shop_id'] !== $shop_id) {
-                order_action_redirect($back, 'danger', 'The selected store does not belong to the selected shop.');
+            if ($shop_id <= 0 || !shop_is_accessible($shop_id, false)) {
+                order_action_redirect($back, "danger", "Select an active shop you have access to before confirming.");
             }
 
             $had_active_reservation = false;
@@ -88,6 +76,11 @@ try {
                 );
                 if (!$locked || $locked['status'] !== 'under_review') {
                     throw new RuntimeException('This order is no longer under review. Reload and try again.');
+                }
+                $warehouse_id = (int)($locked['warehouse_id'] ?? 0);
+                $store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;
+                if (!$store || (int)$store['shop_id'] !== $shop_id) {
+                    throw new RuntimeException('The order fulfillment location is invalid or inaccessible.');
                 }
                 $existing_reservations = fetch_all(
                     "SELECT DISTINCT warehouse_id

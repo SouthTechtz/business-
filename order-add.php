@@ -24,9 +24,15 @@ if ($lead_id > 0) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $shop_id = !empty($_POST['shop_id']) ? (int)$_POST['shop_id'] : null;
     $warehouse_id = !empty($_POST['warehouse_id']) ? (int)$_POST['warehouse_id'] : null;
-    if (!empty($shop_id) && shop_inventory_ready((int)$shop_id)) {
+    if (!empty($shop_id)) {
         $wh = shop_inventory_warehouse_id((int)$shop_id);
-        if ($wh) $warehouse_id = (int)$wh;
+        if (!$wh) {
+            $error = 'The selected shop does not have an active inventory location.';
+            $shop_id = null;
+            $warehouse_id = null;
+        } else {
+            $warehouse_id = (int)$wh;
+        }
     }
     $contact_id = !empty($_POST['contact_id']) ? (int)$_POST['contact_id'] : null;
     $customer_name = trim($_POST['customer_name'] ?? '');
@@ -48,8 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$valid_contact) $contact_id = null;
     }
 
-    if ($customer_name === '') {
-        $error = 'Customer name is required.';
+    if ($customer_name === '' || $error !== '') {
+        if ($customer_name === '') $error = 'Customer name is required.';
     } else {
         $conn->begin_transaction();
         try {
