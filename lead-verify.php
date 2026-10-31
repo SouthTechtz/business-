@@ -37,6 +37,10 @@ if ($shop_id <= 0 && $shops) {
 // The store is never chosen by the user. Pick the first active store for the
 // shop internally, and allow a shop-level order when the shop has no store.
 if ($shop_id > 0) {
+    if ($warehouse_id <= 0 && shop_inventory_ready($shop_id)) {
+        $wh = shop_inventory_warehouse_id($shop_id);
+        if ($wh) $warehouse_id = (int)$wh;
+    }
     $store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;
     if (!$store || (int)$store['shop_id'] !== $shop_id) {
         $auto_stores = accessible_stores($shop_id, false);
