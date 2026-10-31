@@ -80,15 +80,11 @@ $activities = fetch_all(
 
 $statuses = lead_statuses();
 $transitions = lead_allowed_transitions($lead['status']);
-if ($storefront_request) {
-    $transitions = array_values(array_filter($transitions, function ($transition) {
-        return !in_array($transition, ['verified', 'converted'], true);
-    }));
-}
 $can_verify_request = $storefront_request
     && tenant_admin_scope()
     && $can_orders
-    && !in_array($lead['status'], ['lost'], true);
+    && empty($storefront_request['order_id'])
+    && $lead['status'] !== 'cancelled';
 $staff = users_with_permission('manage_leads');
 $status = $lead['status'];
 
@@ -158,7 +154,7 @@ require_once 'sidebar.php';
                         <tr><th>Next follow-up</th><td><?php echo $lead['next_follow_up_at'] ? e(date('M d, Y', strtotime($lead['next_follow_up_at']))) : '—'; ?></td></tr>
                         <tr><th>Converted</th><td><?php echo $lead['converted_at'] ? e(date('M d, Y H:i', strtotime($lead['converted_at']))) : '—'; ?></td></tr>
                         <?php if ($lead['lost_reason']): ?>
-                            <tr><th>Lost reason</th><td><?php echo e($lead['lost_reason']); ?></td></tr>
+                            <tr><th>Cancellation reason</th><td><?php echo e($lead['lost_reason']); ?></td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
@@ -196,20 +192,21 @@ require_once 'sidebar.php';
             <div class="card-header"><h5 class="card-title">Status</h5></div>
             <div class="card-body">
                 <?php if ($transitions): ?>
-                    <form method="POST" action="lead-action.php"<?php echo $storefront_request ? ' onsubmit="return this.querySelector(\'[name=status]\').value !== \'converted\' || confirm(\'Confirm this request and create an Order?\');"' : ''; ?>>
+                    <form method="POST" action="lead-action.php" id="leadStatusForm">
                         <?php echo csrf_field(); ?>
                         <input type="hidden" name="action" value="set_status">
                         <input type="hidden" name="lead_id" value="<?php echo $id; ?>">
                         <div class="form-group">
                             <label class="small">Move to status</label>
                             <select name="status" class="form-control form-control-sm" id="leadStatus" required>
+                                <option value="" disabled selected>— Select status —</option>
                                 <?php foreach ($transitions as $next): ?>
-                                    <option value="<?php echo e($next); ?>"><?php echo e($storefront_request && $next === 'converted' ? 'Confirm request & create Order' : ($statuses[$next] ?? $next)); ?></option>
+                                    <option value="<?php echo e($next); ?>"><?php echo e($statuses[$next] ?? $next); ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="form-group" id="lostReasonWrap" style="display:none;">
-                            <label class="small">Lost reason <span class="text-danger">*</span></label>
+                            <label class="small">Cancellation reason</label>
                             <input type="text" name="lost_reason" class="form-control form-control-sm" maxlength="255">
                         </div>
                         <button type="submit" class="btn btn-sm btn-outline-primary btn-block">Update Status</button>
@@ -407,11 +404,28 @@ require_once 'sidebar.php';
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
     $(function () {
         $('#leadStatus').on('change', function () {
-            $('#lostReasonWrap').toggle($(this).val() === 'lost');
-        }).trigger('change');
+            $('#lostReasonWrap').toggle($(this).val() === 'cancelled');
+        });
+
+        $('#leadStatusForm').on('submit', function (e) {
+            if ($('#leadStatus').val() !== 'confirmed') return;
+            e.preventDefault();
+            var form = this;
+            Swal.fire({
+                title: 'Confirm this lead?',
+                text: 'Do you want to confirm this lead and process it into an order?',
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, confirm',
+                cancelButtonText: 'Cancel'
+            }).then(function (result) {
+                if (result.isConfirmed) form.submit();
+            });
+        });
     });
 </script>
 

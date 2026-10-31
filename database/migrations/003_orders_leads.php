@@ -161,7 +161,7 @@ try {
             `email` varchar(191) DEFAULT NULL,
             `location` varchar(255) DEFAULT NULL,
             `source` varchar(20) NOT NULL DEFAULT 'staff',
-            `status` varchar(20) NOT NULL DEFAULT 'new',
+            `status` varchar(20) NOT NULL DEFAULT 'pending',
             `assigned_to` int(10) unsigned DEFAULT NULL,
             `next_follow_up_at` date DEFAULT NULL,
             `last_contacted_at` datetime DEFAULT NULL,

@@ -67,8 +67,7 @@ try {
                 );
                 if ($is_contact) {
                     $stmt = $conn->prepare(
-                        "UPDATE leads SET last_contacted_at = NOW(),
-                                status = CASE WHEN status = 'new' THEN 'contacted' ELSE status END
+                        "UPDATE leads SET last_contacted_at = NOW()
                           WHERE lead_id = ? AND tenant_id = ?"
                     );
                     $stmt->bind_param('ii', $id, $current_user->tenant_id);
@@ -135,58 +134,10 @@ try {
             lead_action_redirect($back, 'success', 'Lead assigned to ' . $assignee_name . '.');
             break;
 
-        case 'verify':
-            // Verification is an administrative approval step before an order
-            // is created. Keep it separate from general lead follow-up work.
-            if (!tenant_admin_scope()) {
-                http_response_code(403);
-                die('Only a system administrator can verify leads.');
-            }
-            if ($lead['source'] === 'storefront' && fetch_one(
-                "SELECT request_id FROM storefront_lead_requests WHERE lead_id = ? AND tenant_id = ?",
-                $id,
-                (int)$current_user->tenant_id
-            )) {
-                flash_set('info', 'Review this order request and select its shop and store before verification.');
-                redirect('lead-verify.php?id=' . $id);
-            }
-            if (in_array($lead['status'], ['verified', 'converted', 'lost'], true)) {
-                lead_action_redirect($back, 'info', 'This lead cannot be verified again.');
-            }
-
-            $conn->begin_transaction();
-            try {
-                $stmt = $conn->prepare(
-                    "UPDATE leads SET status = 'verified'
-                      WHERE lead_id = ? AND tenant_id = ?
-                        AND status NOT IN ('verified', 'converted', 'lost')"
-                );
-                $stmt->bind_param('ii', $id, $current_user->tenant_id);
-                if (!$stmt->execute()) throw new RuntimeException($stmt->error);
-                if ($stmt->affected_rows !== 1) {
-                    throw new RuntimeException('This lead was changed by someone else. Reload and try again.');
-                }
-                $stmt->close();
-                record_lead_activity(
-                    $id,
-                    (int)$current_user->tenant_id,
-                    'status_change',
-                    'Verified by administrator',
-                    'Status: ' . ($statuses[$lead['status']] ?? $lead['status']) . ' â†’ Verified'
-                );
-                $conn->commit();
-            } catch (Throwable $ex) {
-                $conn->rollback();
-                throw $ex;
-            }
-            audit_log('verify', 'lead', $id, 'Lead verified by administrator');
-            lead_action_redirect($back, 'success', 'Lead verified. It is ready to be converted into an Order.');
-            break;
-
         case 'delete':
             $back = 'leads.php';
-            if (!in_array((string)$lead['status'], ['new', 'contacted', 'qualified'], true)) {
-                lead_action_redirect($back, 'danger', 'Only unverified leads can be deleted.');
+            if (!in_array((string)$lead['status'], ['pending', 'follow_up', 'cancelled'], true)) {
+                lead_action_redirect($back, 'danger', 'Only unconfirmed leads can be deleted.');
             }
 
             $conn->begin_transaction();
@@ -199,8 +150,8 @@ try {
                 if (!$locked_lead) {
                     throw new RuntimeException('This lead no longer exists.');
                 }
-                if (!in_array((string)$locked_lead['status'], ['new', 'contacted', 'qualified'], true)) {
-                    throw new RuntimeException('Only unverified leads can be deleted.');
+                if (!in_array((string)$locked_lead['status'], ['pending', 'follow_up', 'cancelled'], true)) {
+                    throw new RuntimeException('Only unconfirmed leads can be deleted.');
                 }
 
                 $request = fetch_one(
@@ -267,26 +218,29 @@ try {
                 http_response_code(403);
                 die('Only an authorized system administrator can verify order requests.');
             }
-            if ($lead['source'] !== 'storefront' || in_array($lead['status'], ['lost'], true)) {
+            if ($lead['source'] !== 'storefront' || $lead['status'] === 'cancelled') {
                 lead_action_redirect($back, 'danger', 'Only an active storefront order request can be verified.');
             }
             $shop_id = (int)($_POST['shop_id'] ?? 0);
             $warehouse_id = (int)($_POST['warehouse_id'] ?? 0);
-            $back = 'lead-verify.php?id=' . $id . '&shop_id=' . $shop_id . '&warehouse_id=' . $warehouse_id;
+            $back = 'lead-verify.php?id=' . $id . '&shop_id=' . $shop_id;
             if ($shop_id <= 0 || !shop_is_accessible($shop_id, false)) {
                 lead_action_redirect($back, 'danger', 'Select an active shop you are authorized to manage.');
             }
-            // Store is chosen automatically from the confirmed shop; the user does not pick it.
-            if ($warehouse_id <= 0) {
-                $auto_stores = accessible_stores($shop_id, false);
-                if ($auto_stores) {
-                    $warehouse_id = (int)$auto_stores[0]['warehouse_id'];
+            // The store is never chosen by the user: keep the posted store only
+            // when it belongs to the shop, otherwise pick the first active one.
+            if ($warehouse_id > 0) {
+                $store = find_accessible_store($warehouse_id, false);
+                if (!$store || (int)$store['shop_id'] !== $shop_id) {
+                    $warehouse_id = 0;
                 }
             }
-            $store = find_accessible_store($warehouse_id, false);
-            if (!$store || (int)$store['shop_id'] !== $shop_id) {
-                lead_action_redirect($back, 'danger', 'No active store is available for the selected shop.');
+            if ($warehouse_id <= 0) {
+                $auto_stores = accessible_stores($shop_id, false);
+                $warehouse_id = $auto_stores ? (int)$auto_stores[0]['warehouse_id'] : 0;
             }
+            // A store is optional. The order is always linked to the shop, and
+            // stock reservation is skipped when the shop has no active store.
 
             $reserved_lines = 0;
             $order_number = '';
@@ -302,22 +256,32 @@ try {
                     $id,
                     (int)$current_user->tenant_id
                 );
-                if (!$locked_lead || !$request || $locked_lead['status'] === 'lost') {
+                if (!$locked_lead || !$request || $locked_lead['status'] === 'cancelled') {
                     throw new RuntimeException('This order request is no longer available for verification.');
                 }
-                $valid_location = fetch_one(
-                    "SELECT s.shop_id, w.warehouse_id
-                       FROM shops s
-                       JOIN warehouses w ON w.shop_id = s.shop_id AND w.tenant_id = s.tenant_id
-                      WHERE s.tenant_id = ? AND s.shop_id = ? AND w.warehouse_id = ?
-                        AND s.is_active = 1 AND w.is_active = 1
+                $valid_shop = fetch_one(
+                    "SELECT shop_id FROM shops
+                      WHERE tenant_id = ? AND shop_id = ? AND is_active = 1
                       FOR UPDATE",
                     (int)$current_user->tenant_id,
-                    $shop_id,
-                    $warehouse_id
+                    $shop_id
                 );
-                if (!$valid_location) {
-                    throw new RuntimeException('The selected shop or store is no longer active or does not belong to this tenant.');
+                if (!$valid_shop) {
+                    throw new RuntimeException('The selected shop is no longer active or does not belong to this tenant.');
+                }
+                if ($warehouse_id > 0) {
+                    $valid_store = fetch_one(
+                        "SELECT warehouse_id FROM warehouses
+                          WHERE tenant_id = ? AND warehouse_id = ? AND shop_id = ?
+                            AND is_active = 1 AND location_type = 'store'
+                          FOR UPDATE",
+                        (int)$current_user->tenant_id,
+                        $warehouse_id,
+                        $shop_id
+                    );
+                    if (!$valid_store) {
+                        throw new RuntimeException('The selected store is no longer active or does not belong to the selected shop.');
+                    }
                 }
 
                 $order_id = (int)($request['converted_order_id'] ?? 0);
@@ -362,7 +326,7 @@ try {
                         throw new RuntimeException('The existing order is not a storefront order and needs administrator review.');
                     }
                     if (in_array($order['status'], ['confirmed', 'fulfilled'], true)
-                        && ((int)$order['shop_id'] !== $shop_id || (int)$order['warehouse_id'] !== $warehouse_id)) {
+                        && ((int)$order['shop_id'] !== $shop_id || (int)($order['warehouse_id'] ?? 0) !== $warehouse_id)) {
                         throw new RuntimeException('The existing confirmed order is assigned to a different shop or store.');
                     }
                     if (in_array($order['status'], ['rejected', 'cancelled', 'fulfilled'], true)) {
@@ -373,7 +337,8 @@ try {
                             "UPDATE orders SET status = 'under_review', shop_id = ?, warehouse_id = ?
                               WHERE order_id = ? AND tenant_id = ? AND status IN ('new', 'under_review')"
                         );
-                        $stmt->bind_param('iiii', $shop_id, $warehouse_id, $order_id, $current_user->tenant_id);
+                        $warehouse_db = $warehouse_id > 0 ? $warehouse_id : null;
+                        $stmt->bind_param('iiii', $shop_id, $warehouse_db, $order_id, $current_user->tenant_id);
                         if (!$stmt->execute()) throw new RuntimeException($stmt->error);
                         $stmt->close();
                     }
@@ -388,16 +353,26 @@ try {
                     if (!$items) throw new RuntimeException('This request has no products to convert.');
 
                     $order_number = next_document_number($current_user->tenant_id, 'order', 'ORD');
-                    $contact_id = $locked_lead['contact_id'] ? (int)$locked_lead['contact_id'] : null;
+                    $contact_id = null;
+                    if (!empty($locked_lead['contact_id'])) {
+                        $contact = fetch_one(
+                            "SELECT contact_id FROM contacts WHERE contact_id = ? AND tenant_id = ?",
+                            (int)$locked_lead['contact_id'],
+                            (int)$current_user->tenant_id
+                        );
+                        if ($contact) $contact_id = (int)$contact['contact_id'];
+                    }
                     $stmt = $conn->prepare(
                         "INSERT INTO orders (tenant_id, order_number, contact_id, lead_id, customer_name,
                             customer_phone, customer_location, customer_email, source, status, currency_code,
                             subtotal, total, shop_id, warehouse_id, created_by)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'storefront', 'under_review', ?, ?, ?, ?, ?, ?)"
                     );
+                    $order_warehouse_id = $warehouse_id > 0 ? $warehouse_id : null;
                     $stmt->bind_param('isiisssssddiii', $current_user->tenant_id, $order_number, $contact_id, $id,
                         $locked_lead['contact_name'], $locked_lead['phone'], $locked_lead['location'], $locked_lead['email'],
-                        $request['currency_code'], $request['subtotal'], $request['subtotal'], $shop_id, $warehouse_id, $current_user->user_id);
+                        $request['currency_code'], $request['subtotal'], $request['subtotal'], $shop_id,
+                        $order_warehouse_id, $current_user->user_id);
                     if (!$stmt->execute()) throw new RuntimeException($stmt->error);
                     $order_id = (int)$stmt->insert_id;
                     $stmt->close();
@@ -425,28 +400,32 @@ try {
                     $stmt->close();
                 }
 
-                $reserved_lines = reserve_order_stock(
-                    $order_id,
-                    (int)$current_user->tenant_id,
-                    $shop_id,
-                    $warehouse_id,
-                    (int)$current_user->user_id,
-                    'selected shop has low stock for now'
-                );
+                if ($warehouse_id > 0) {
+                    $reserved_lines = reserve_order_stock(
+                        $order_id,
+                        (int)$current_user->tenant_id,
+                        $shop_id,
+                        $warehouse_id,
+                        (int)$current_user->user_id,
+                        'This shop has limited stock for the request.'
+                    );
+                }
 
                 $stmt = $conn->prepare(
                     "UPDATE leads SET status = 'confirmed', converted_at = NOW(), lost_reason = NULL
-                      WHERE lead_id = ? AND tenant_id = ? AND status <> 'lost'"
+                      WHERE lead_id = ? AND tenant_id = ? AND status <> 'cancelled'"
                 );
                 $stmt->bind_param('ii', $id, $current_user->tenant_id);
                 if (!$stmt->execute()) throw new RuntimeException($stmt->error);
-                if ($stmt->affected_rows !== 1 && $locked_lead['status'] !== 'converted') {
+                if ($stmt->affected_rows !== 1 && $locked_lead['status'] !== 'confirmed') {
                     throw new RuntimeException('This lead changed while verification was being completed.');
                 }
                 $stmt->close();
                 record_lead_activity($id, (int)$current_user->tenant_id, 'status_change',
                     'Verified and converted to Order ' . $order_number,
-                    (int)$reserved_lines . ' stock line(s) reserved at the selected store; physical stock is deducted only when the order is fulfilled.',
+                    $warehouse_id > 0
+                        ? (int)$reserved_lines . ' stock line(s) reserved at the shop’s store; physical stock is deducted only when the order is fulfilled.'
+                        : 'The shop has no active store, so stock reservation was skipped.',
                     null,
                     $order_id
                 );
@@ -461,9 +440,11 @@ try {
                 $id,
                 'Verified and converted to Order ' . $order_number . '; ' . (int)$reserved_lines . ' stock line(s) reserved'
             );
-            $reservation_message = (int)$reserved_lines > 0
-                ? (int)$reserved_lines . ' stock line(s) are reserved at the selected store. Physical stock will be deducted when the order is fulfilled.'
-                : 'No physical stock reservation was required.';
+            $reservation_message = $warehouse_id <= 0
+                ? 'The shop has no active store, so stock reservation was skipped.'
+                : ((int)$reserved_lines > 0
+                    ? (int)$reserved_lines . ' stock line(s) are reserved at the shop’s store. Physical stock will be deducted when the order is fulfilled.'
+                    : 'No physical stock reservation was required.');
             flash_set('success', 'Request verified and converted to Order ' . $order_number . '. ' . $reservation_message);
             redirect('order-view.php?id=' . $order_id);
             break;
@@ -475,142 +456,47 @@ try {
             }
             $allowed = lead_allowed_transitions((string)$lead['status']);
             if (!in_array($target, $allowed, true)) {
-                lead_action_redirect($back, 'danger', 'That status change is not allowed from ' . $statuses[$lead['status']] . '.');
+                lead_action_redirect($back, 'danger', 'That status change is not allowed from ' . ($statuses[$lead['status']] ?? $lead['status']) . '.');
             }
-            $storefront_request_exists = $lead['source'] === 'storefront'
+            $storefront_request = $lead['source'] === 'storefront'
                 ? fetch_one(
-                    "SELECT request_id FROM storefront_lead_requests WHERE lead_id = ? AND tenant_id = ?",
+                    "SELECT request_id, converted_order_id FROM storefront_lead_requests WHERE lead_id = ? AND tenant_id = ?",
                     $id,
                     (int)$current_user->tenant_id
                 )
                 : null;
-            if ($storefront_request_exists && in_array($target, ['verified', 'converted'], true)) {
-                lead_action_redirect(
-                    'lead-verify.php?id=' . $id,
-                    'danger',
-                    'Storefront requests must be verified from the request page so the responsible shop, store, and stock can be validated.'
-                );
+            // Storefront requests must be confirmed on the shop-aware page so the
+            // order is linked to a shop before any stock is reserved.
+            if ($target === 'confirmed' && $storefront_request && empty($storefront_request['converted_order_id'])) {
+                flash_set('info', 'Choose the responsible shop to confirm this request and create the order.');
+                redirect('lead-verify.php?id=' . $id);
             }
             $lost_reason = trim((string)($_POST['lost_reason'] ?? ''));
-            if ($target === 'lost' && mb_strlen($lost_reason) < 3) {
-                lead_action_redirect($back, 'danger', 'Enter a reason of at least 3 characters when marking a lead lost.');
-            }
 
             $conn->begin_transaction();
             try {
-                $activity_order_id = null;
-                $activity_notes = null;
-                if ($target === 'converted') {
-                    if ($storefront_request_exists) {
-                        $request = fetch_one(
-                            "SELECT * FROM storefront_lead_requests
-                              WHERE lead_id = ? AND tenant_id = ? FOR UPDATE",
-                            $id,
-                            (int)$current_user->tenant_id
-                        );
-                        if (!$request) {
-                            throw new RuntimeException('The storefront request could not be found.');
-                        }
-
-                        if (!empty($request['converted_order_id'])) {
-                            $activity_order_id = (int)$request['converted_order_id'];
-                        } else {
-                            $request_items = fetch_all(
-                                "SELECT * FROM storefront_lead_request_items
-                                  WHERE request_id = ? AND tenant_id = ? ORDER BY line_no",
-                                (int)$request['request_id'],
-                                (int)$current_user->tenant_id
-                            );
-                            if (!$request_items) {
-                                throw new RuntimeException('The storefront request has no items to convert.');
-                            }
-
-                            $order_number = next_document_number($current_user->tenant_id, 'order', 'ORD');
-                            $contact_id = $lead['contact_id'] ? (int)$lead['contact_id'] : null;
-                            $stmt = $conn->prepare(
-                                "INSERT INTO orders
-                                    (tenant_id, order_number, contact_id, lead_id, customer_name,
-                                     customer_phone, customer_location, source, status, currency_code,
-                                     subtotal, total, created_by)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, 'storefront', 'new', ?, ?, ?, ?)"
-                            );
-                            if (!$stmt) throw new RuntimeException($conn->error);
-                            $stmt->bind_param(
-                                'isiissssddi',
-                                $current_user->tenant_id,
-                                $order_number,
-                                $contact_id,
-                                $id,
-                                $lead['contact_name'],
-                                $lead['phone'],
-                                $lead['location'],
-                                $request['currency_code'],
-                                $request['subtotal'],
-                                $request['subtotal'],
-                                $current_user->user_id
-                            );
-                            if (!$stmt->execute()) throw new RuntimeException($stmt->error);
-                            $activity_order_id = (int)$stmt->insert_id;
-                            $stmt->close();
-
-                            $stmt = $conn->prepare(
-                                "INSERT INTO order_items
-                                    (tenant_id, order_id, line_no, product_id, product_code_snapshot,
-                                     product_name_snapshot, product_description_snapshot, unit_label_snapshot,
-                                     quantity, unit_price, tax_rate_snapshot, line_total)
-                                 SELECT tenant_id, ?, line_no, product_id, product_code_snapshot,
-                                        product_name_snapshot, product_description_snapshot, unit_label_snapshot,
-                                        quantity, unit_price, tax_rate_snapshot, line_total
-                                   FROM storefront_lead_request_items
-                                  WHERE request_id = ? AND tenant_id = ?"
-                            );
-                            if (!$stmt) throw new RuntimeException($conn->error);
-                            $stmt->bind_param('iii', $activity_order_id, $request['request_id'], $current_user->tenant_id);
-                            if (!$stmt->execute()) throw new RuntimeException($stmt->error);
-                            if ($stmt->affected_rows !== count($request_items)) {
-                                throw new RuntimeException('Could not copy all request items into the Order.');
-                            }
-                            $stmt->close();
-
-                            $stmt = $conn->prepare(
-                                "UPDATE storefront_lead_requests
-                                    SET converted_order_id = ?, converted_at = NOW()
-                                  WHERE request_id = ? AND tenant_id = ? AND converted_order_id IS NULL"
-                            );
-                            if (!$stmt) throw new RuntimeException($conn->error);
-                            $stmt->bind_param('iii', $activity_order_id, $request['request_id'], $current_user->tenant_id);
-                            if (!$stmt->execute()) throw new RuntimeException($stmt->error);
-                            if ($stmt->affected_rows !== 1) {
-                                throw new RuntimeException('This storefront request was already converted.');
-                            }
-                            $stmt->close();
-                            $activity_notes = 'Storefront request confirmed as Order ' . $order_number . '.';
-                        }
-                    }
-
+                if ($target === 'confirmed') {
                     $stmt = $conn->prepare(
                         "UPDATE leads SET status = 'confirmed', converted_at = NOW(), lost_reason = NULL
                           WHERE lead_id = ? AND tenant_id = ? AND status = ?"
                     );
                     $stmt->bind_param('iis', $id, $current_user->tenant_id, $lead['status']);
-                } elseif ($target === 'lost') {
+                    $activity_notes = 'Lead confirmed.';
+                } elseif ($target === 'cancelled') {
                     $stmt = $conn->prepare(
                         "UPDATE leads SET status = 'cancelled', lost_reason = ?
                           WHERE lead_id = ? AND tenant_id = ? AND status = ?"
                     );
-                    $stmt->bind_param('siis', $lost_reason, $id, $current_user->tenant_id, $lead['status']);
-                } elseif ($target === 'new') {
-                    $stmt = $conn->prepare(
-                        "UPDATE leads SET status = 'new', lost_reason = NULL, converted_at = NULL
-                          WHERE lead_id = ? AND tenant_id = ? AND status = ?"
-                    );
-                    $stmt->bind_param('iis', $id, $current_user->tenant_id, $lead['status']);
+                    $reason_db = $lost_reason !== '' ? $lost_reason : null;
+                    $stmt->bind_param('siis', $reason_db, $id, $current_user->tenant_id, $lead['status']);
+                    $activity_notes = $lost_reason !== '' ? $lost_reason : 'Lead cancelled.';
                 } else {
                     $stmt = $conn->prepare(
-                        "UPDATE leads SET status = ?
+                        "UPDATE leads SET status = ?, lost_reason = NULL, converted_at = NULL
                           WHERE lead_id = ? AND tenant_id = ? AND status = ?"
                     );
                     $stmt->bind_param('siis', $target, $id, $current_user->tenant_id, $lead['status']);
+                    $activity_notes = null;
                 }
                 if (!$stmt->execute()) throw new RuntimeException($stmt->error);
                 if ($stmt->affected_rows !== 1) throw new RuntimeException('This lead was changed by someone else. Reload and try again.');
@@ -620,24 +506,28 @@ try {
                     $id,
                     (int)$current_user->tenant_id,
                     'status_change',
-                    'Status: ' . $statuses[$lead['status']] . ' â†’ ' . $statuses[$target],
-                    $target === 'lost' ? $lost_reason : $activity_notes,
-                    null,
-                    $activity_order_id
+                    'Status: ' . ($statuses[$lead['status']] ?? $lead['status']) . ' → ' . $statuses[$target],
+                    $activity_notes
                 );
                 $conn->commit();
             } catch (Throwable $ex) {
                 $conn->rollback();
                 throw $ex;
             }
-            audit_log('set_status', 'lead', $id, 'Status changed to ' . $target . ($activity_order_id ? '; Order #' . $activity_order_id . ' created' : ''));
-            lead_action_redirect(
-                $back,
-                'success',
-                $activity_order_id && $storefront_request_exists
-                    ? 'Request confirmed and Order created.'
-                    : 'Lead status updated to ' . $statuses[$target] . '.'
-            );
+            audit_log('set_status', 'lead', $id, 'Status changed to ' . $target);
+
+            if ($target === 'confirmed' && can('manage_orders') && $lead['source'] !== 'storefront') {
+                $linked = fetch_one(
+                    "SELECT order_id FROM orders WHERE lead_id = ? AND tenant_id = ? LIMIT 1",
+                    $id,
+                    (int)$current_user->tenant_id
+                );
+                if (!$linked) {
+                    flash_set('success', 'Lead confirmed. Add the order lines to complete the conversion.');
+                    redirect('order-add.php?lead_id=' . $id . ($lead['contact_id'] ? '&contact_id=' . (int)$lead['contact_id'] : ''));
+                }
+            }
+            lead_action_redirect($back, 'success', 'Lead status updated to ' . $statuses[$target] . '.');
             break;
 
         case 'link_order':

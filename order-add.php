@@ -6,6 +6,21 @@ $page_title = 'New Order';
 
 $error = '';
 
+// A confirmed lead can hand over its customer details via lead_id. The lead is
+// optional: a normal order is still created from the same form.
+$lead = null;
+$lead_id = (int)($_GET['lead_id'] ?? $_POST['lead_id'] ?? 0);
+if ($lead_id > 0) {
+    $lead = fetch_one(
+        "SELECT lead_id, contact_id, contact_name, company_name, phone, email, location
+           FROM leads
+          WHERE lead_id = ? AND tenant_id = ?",
+        $lead_id,
+        (int)$current_user->tenant_id
+    );
+    if (!$lead) $lead_id = 0;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $shop_id = !empty($_POST['shop_id']) ? (int)$_POST['shop_id'] : null;
     $warehouse_id = !empty($_POST['warehouse_id']) ? (int)$_POST['warehouse_id'] : null;
@@ -18,21 +33,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $amount_paid = (float)($_POST['Amount_paid'] ?? 0);
     $notes = trim($_POST['notes'] ?? '');
 
+    // Ignore stale or foreign contact/lead references instead of failing on a
+    // foreign-key error after the customer has filled in the form.
+    if ($contact_id !== null) {
+        $valid_contact = fetch_one(
+            "SELECT contact_id FROM contacts WHERE contact_id = ? AND tenant_id = ?",
+            $contact_id,
+            (int)$current_user->tenant_id
+        );
+        if (!$valid_contact) $contact_id = null;
+    }
+
     if ($customer_name === '') {
         $error = 'Customer name is required.';
     } else {
         $conn->begin_transaction();
         try {
             // Generate order number
-            $order_number = 'ORD-' . date('Ymd') . '-' . rand(1000, 9999);
+            $order_number = next_document_number($current_user->tenant_id, 'order', 'ORD');
+            $order_lead_id = $lead_id > 0 ? $lead_id : null;
 
             $stmt = $conn->prepare(
-                "INSERT INTO orders (tenant_id, shop_id, warehouse_id, contact_id, customer_name, customer_phone, customer_location, status, stage, Amount_paid, notes, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())"
+                "INSERT INTO orders (tenant_id, order_number, lead_id, shop_id, warehouse_id, contact_id, customer_name, customer_phone, customer_location, status, stage, Amount_paid, notes, created_by, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())"
             );
             $stmt->bind_param(
-                'iiiissssdsis',
+                'isiiiisssssdsi',
                 $current_user->tenant_id,
+                $order_number,
+                $order_lead_id,
                 $shop_id,
                 $warehouse_id,
                 $contact_id,
@@ -63,6 +92,18 @@ $shops = accessible_shops(null, true);
 $warehouses = accessible_stores(null, false);
 $contacts = fetch_all("SELECT contact_id, first_name, last_name, company_name FROM contacts WHERE tenant_id = ? ORDER BY first_name", $current_user->tenant_id);
 
+$prefill_contact_id = isset($_POST['contact_id'])
+    ? (int)$_POST['contact_id']
+    : (int)($lead['contact_id'] ?? 0);
+$prefill_name = trim($_POST['customer_name'] ?? '');
+if ($prefill_name === '' && $lead) {
+    $prefill_name = trim((string)($lead['company_name'] ?? ''));
+    if ($prefill_name === '') $prefill_name = (string)$lead['contact_name'];
+}
+$prefill_phone = $_POST['customer_phone'] ?? (string)($lead['phone'] ?? '');
+$prefill_location = trim($_POST['customer_location'] ?? '');
+if ($prefill_location === '' && $lead) $prefill_location = (string)($lead['location'] ?? '');
+
 require_once 'navbar.php';
 require_once 'sidebar.php';
 ?>
@@ -80,18 +121,25 @@ require_once 'sidebar.php';
 <div class="card">
     <div class="card-body">
         <form method="POST" action="order-add.php">
+            <?php if ($lead_id > 0): ?>
+                <input type="hidden" name="lead_id" value="<?php echo $lead_id; ?>">
+                <div class="alert alert-info py-2">
+                    <i class="fa fa-link mr-1"></i>
+                    This order is linked to lead <strong><?php echo e($lead['contact_name']); ?></strong>. Customer details have been filled in from the lead.
+                </div>
+            <?php endif; ?>
             <div class="row">
                 <div class="col-md-4 form-group">
                     <label>Customer Name <span class="text-danger">*</span></label>
-                    <input type="text" name="customer_name" class="form-control" required value="<?php echo e($_POST['customer_name'] ?? ''); ?>">
+                    <input type="text" name="customer_name" class="form-control" required value="<?php echo e($prefill_name); ?>">
                 </div>
                 <div class="col-md-4 form-group">
                     <label>Customer Phone</label>
-                    <input type="text" name="customer_phone" class="form-control" value="<?php echo e($_POST['customer_phone'] ?? ''); ?>">
+                    <input type="text" name="customer_phone" class="form-control" value="<?php echo e($prefill_phone); ?>">
                 </div>
                 <div class="col-md-4 form-group">
                     <label>Customer Location</label>
-                    <input type="text" name="customer_location" class="form-control" value="<?php echo e($_POST['customer_location'] ?? ''); ?>">
+                    <input type="text" name="customer_location" class="form-control" value="<?php echo e($prefill_location); ?>">
                 </div>
 
                 <div class="col-md-4 form-group">
@@ -117,7 +165,7 @@ require_once 'sidebar.php';
                     <select name="contact_id" class="form-control">
                         <option value="">— None —</option>
                         <?php foreach ($contacts as $c): ?>
-                            <option value="<?php echo (int)$c['contact_id']; ?>"><?php echo e(trim($c['first_name'] . ' ' . $c['last_name']) ?: $c['company_name']); ?></option>
+                            <option value="<?php echo (int)$c['contact_id']; ?>" <?php echo $prefill_contact_id === (int)$c['contact_id'] ? 'selected' : ''; ?>><?php echo e(trim($c['first_name'] . ' ' . $c['last_name']) ?: $c['company_name']); ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>

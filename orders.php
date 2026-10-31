@@ -241,16 +241,22 @@ function order_stage_class($stage) {
                 <tbody>
                     <!-- TOP SUMMARY ROW -->
                     <tr class="table-top-summary">
-                        <td colspan="5" class="text-dark font-weight-bold">
+                        <td class="text-dark font-weight-bold">
                             <i class="fa fa-calculator mr-1 text-muted"></i> Summary (<span id="orderListCount"><?php echo count($orders); ?></span> orders shown):
                         </td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
                         <td class="text-right text-success font-weight-bold" id="topTotalPaid">
                             <?php echo e(money($total_paid_sum, $cur)); ?>
                         </td>
                         <td class="text-right text-dark font-weight-bold" id="topTotalAmount">
                             <?php echo e(money($total_amount_sum, $cur)); ?>
                         </td>
-                        <td colspan="3"></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
                     </tr>
 
                     <!-- ORDER ROWS -->

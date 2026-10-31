@@ -20,7 +20,7 @@ $request = $lead ? fetch_one(
      WHERE r.lead_id = ? AND r.tenant_id = ?",
     $id, (int)$current_user->tenant_id
 ) : null;
-if (!$lead || !$request || $lead['source'] !== 'storefront' || $lead['status'] === 'lost') {
+if (!$lead || !$request || $lead['source'] !== 'storefront' || $lead['status'] === 'cancelled') {
     flash_set('danger', 'That lead does not have an active storefront order request to verify.');
     redirect('leads.php');
 }
@@ -29,30 +29,32 @@ $shops = accessible_shops(null, false);
 $shop_id = (int)($_GET['shop_id'] ?? 0);
 $warehouse_id = (int)($_GET['warehouse_id'] ?? 0);
 if ($shop_id > 0 && !shop_is_accessible($shop_id, false)) $shop_id = 0;
-$stores = $shop_id > 0 ? accessible_stores($shop_id, false) : [];
-$store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;
-if (!$store || ($shop_id > 0 && (int)$store['shop_id'] !== $shop_id)) {
+if ($shop_id <= 0 && $shops) {
+    // Everyone starts on their assigned (or only) shop. Administrators with
+    // several shops can switch using the selector below.
+    $shop_id = (int)$shops[0]['shop_id'];
+}
+// The store is never chosen by the user. Pick the first active store for the
+// shop internally, and allow a shop-level order when the shop has no store.
+if ($shop_id > 0) {
+    $store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;
+    if (!$store || (int)$store['shop_id'] !== $shop_id) {
+        $auto_stores = accessible_stores($shop_id, false);
+        $warehouse_id = $auto_stores ? (int)$auto_stores[0]['warehouse_id'] : 0;
+        $store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;
+    }
+} else {
     $warehouse_id = 0;
     $store = null;
 }
-if ($store && $shop_id === 0) {
-    $shop_id = (int)$store['shop_id'];
-    $stores = accessible_stores($shop_id, false);
-}
-
-// Normal (non-admin) users work from their assigned shop; admins choose one.
-if ($shop_id <= 0 && !tenant_admin_scope() && $shops) {
-    $shop_id = (int)$shops[0]['shop_id'];
-}
-// Store is not part of the confirmation location choice: auto-select the first
-// active store in the chosen shop.
-if ($shop_id > 0 && $warehouse_id <= 0) {
-    $auto_stores = accessible_stores($shop_id, false);
-    if ($auto_stores) {
-        $warehouse_id = (int)$auto_stores[0]['warehouse_id'];
+$current_shop_name = '';
+foreach ($shops as $shop_row) {
+    if ((int)$shop_row['shop_id'] === $shop_id) {
+        $current_shop_name = (string)$shop_row['name'];
+        break;
     }
-    $stores = accessible_stores($shop_id, false);
 }
+$show_shop_selector = count($shops) > 1;
 
 $items = fetch_all(
     "SELECT ri.*, p.sale_price AS current_price, p.is_service,
@@ -109,26 +111,34 @@ require_once 'sidebar.php';
             <tr><td><?php echo e($item['product_name_snapshot']); ?><small class="text-muted d-block"><?php echo e($item['product_code_snapshot']); ?></small></td>
                 <td class="text-right"><?php echo e((float)$item['quantity']); ?></td><td class="text-right"><?php echo e(money($item['unit_price'], $request['currency_code'])); ?></td>
                 <td class="text-right"><?php echo $item['current_price'] === null ? '—' : e(money($item['current_price'], $request['currency_code'])); ?></td>
-                <td class="text-right <?php echo $low ? 'text-danger font-weight-bold' : ''; ?>"><?php echo $warehouse_id ? e((float)($item['available_stock'] ?? 0)) : 'Select a store'; ?>
+                <td class="text-right <?php echo $low ? 'text-danger font-weight-bold' : ''; ?>"><?php echo $warehouse_id ? e((float)($item['available_stock'] ?? 0)) : '—'; ?>
                     <?php if ($warehouse_id): ?><small class="d-block text-muted">On hand <?php echo e((float)($item['on_hand_stock'] ?? 0)); ?> · reserved <?php echo e((float)($item['reserved_stock'] ?? 0)); ?></small><?php endif; ?>
                     <?php if ($low): ?><small class="d-block">Insufficient</small><?php endif; ?>
                 </td></tr>
         <?php endforeach; ?></tbody>
     </table></div></div></div>
-    <?php if ($warehouse_id && $insufficient): ?><div class="alert alert-warning"><strong>selected shop has low stock for now</strong><br><small>Choose another store or reduce the requested quantity before verifying this order.</small></div><?php endif; ?>
+    <?php if ($warehouse_id && $insufficient): ?><div class="alert alert-warning"><strong>This shop has limited stock for the request.</strong><br><small>Reduce the requested quantity or confirm the order now and replenish stock before fulfilment.</small></div><?php endif; ?>
+    <?php if ($shop_id && !$warehouse_id): ?><div class="alert alert-info"><strong>No active store found for this shop.</strong><br><small>The order will still be created at shop level; stock reservation will be skipped until a store is available.</small></div><?php endif; ?>
 </div><div class="col-lg-4 mb-3">
     <div class="card"><div class="card-header"><h5 class="card-title">Customer / Contact</h5></div><div class="card-body"><strong><?php echo e($lead['contact_name']); ?></strong><br><?php echo e($lead['phone'] ?: $lead['contact_phone'] ?: $lead['mobile'] ?: 'No phone recorded'); ?>
         <?php if ($lead['customer_number']): ?><small class="text-muted d-block">Customer #<?php echo e($lead['customer_number']); ?></small><?php endif; ?>
         <?php if ($lead['location']): ?><small class="text-muted d-block"><?php echo e($lead['location']); ?></small><?php endif; ?></div></div>
     <div class="card"><div class="card-header"><h5 class="card-title">Verification Location</h5></div><div class="card-body">
-        <form method="GET" action="lead-verify.php" id="locationForm"><input type="hidden" name="id" value="<?php echo $id; ?>">
-            <div class="form-group"><label>Responsible Shop <span class="text-danger">*</span></label><select name="shop_id" id="verifyShop" class="form-control" required><option value="">— Select shop —</option><?php foreach ($shops as $shop): ?><option value="<?php echo (int)$shop['shop_id']; ?>" <?php echo $shop_id === (int)$shop['shop_id'] ? 'selected' : ''; ?>><?php echo e($shop['name']); ?></option><?php endforeach; ?></select></div>
-            </form><hr>
-        <form method="POST" action="lead-action.php" onsubmit="return confirm('Verify this request, create the linked order, and reserve stock at the selected store?');">
+        <?php if ($show_shop_selector): ?>
+            <form method="GET" action="lead-verify.php" id="locationForm"><input type="hidden" name="id" value="<?php echo $id; ?>">
+                <div class="form-group"><label>Responsible Shop <span class="text-danger">*</span></label><select name="shop_id" id="verifyShop" class="form-control" required><option value="">— Select shop —</option><?php foreach ($shops as $shop): ?><option value="<?php echo (int)$shop['shop_id']; ?>" <?php echo $shop_id === (int)$shop['shop_id'] ? 'selected' : ''; ?>><?php echo e($shop['name']); ?></option><?php endforeach; ?></select>
+                    <small class="form-text text-muted">Availability loads immediately when you choose a shop.</small>
+                </div>
+            </form>
+        <?php else: ?>
+            <div class="form-group"><label>Responsible Shop</label><div class="form-control-plaintext font-weight-semibold"><?php echo e($current_shop_name ?: 'No accessible shop'); ?></div></div>
+        <?php endif; ?>
+        <hr>
+        <form method="POST" action="lead-action.php" onsubmit="return confirm('Verify this request, create the linked order, and reserve stock where available?');">
             <?php echo csrf_field(); ?><input type="hidden" name="action" value="verify_request"><input type="hidden" name="lead_id" value="<?php echo $id; ?>"><input type="hidden" name="shop_id" value="<?php echo $shop_id; ?>"><input type="hidden" name="warehouse_id" value="<?php echo $warehouse_id; ?>">
-            <button type="submit" class="btn btn-success btn-block" <?php echo (!$shop_id || !$warehouse_id || $insufficient) ? 'disabled' : ''; ?>><i class="fa fa-check mr-1"></i> Verify & Create Order</button>
-        </form><small class="text-muted d-block mt-2">The order will be created under review using the request’s saved prices. Stock is reserved at the selected store immediately. Physical stock is deducted only when the order is fulfilled by an invoice.</small>
+            <button type="submit" class="btn btn-success btn-block" <?php echo (!$shop_id || $insufficient) ? 'disabled' : ''; ?>><i class="fa fa-check mr-1"></i> Verify &amp; Create Order</button>
+        </form><small class="text-muted d-block mt-2">The order is created under review at the selected shop using the request’s saved prices.<?php echo $warehouse_id ? ' Stock is reserved at the shop’s first active store immediately; physical stock is deducted only when the order is fulfilled by an invoice.' : ' No store is active for this shop, so stock reservation is skipped.'; ?></small>
     </div></div>
 </div></div>
-<script>$(function(){ $('#verifyShop').on('change', function(){ $('#locationForm').trigger('submit'); }); });</script>
+<?php if ($show_shop_selector): ?><script>$(function(){ $('#verifyShop').on('change', function(){ $('#locationForm').trigger('submit'); }); });</script><?php endif; ?>
 <?php require_once 'footer.php'; ?>
