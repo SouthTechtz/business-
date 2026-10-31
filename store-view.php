@@ -97,6 +97,7 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
 </form>
 <?php endif; ?>
 
+<div class="mb-3"><a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Request Stock</a></div>
 <div class="row mb-3">
     <div class="col-md-4 col-sm-6 mb-2">
         <div class="card"><div class="card-body">

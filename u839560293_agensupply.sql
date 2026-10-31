@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Oct 30, 2026 at 11:35 AM
+-- Generation Time: Oct 31, 2026 at 08:25 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -60,7 +60,10 @@ INSERT INTO `activities` (`activity_id`, `tenant_id`, `contact_id`, `lead_id`, `
 (85, 1, NULL, 4, 64, 'Verified and converted to Order ORD-000024', 'status_change', '1 stock line(s) reserved at the selected store; physical stock is deducted only when the order is fulfilled.', NULL, NULL, 'completed', 1, NULL, '2026-10-28 05:45:29'),
 (86, 1, NULL, 51, NULL, 'Storefront order request received', 'created', 'Requested items are awaiting staff confirmation.', NULL, NULL, 'completed', NULL, NULL, '2026-10-29 12:37:05'),
 (87, 1, NULL, 51, 65, 'Verified and converted to Order ORD-000025', 'status_change', '1 stock line(s) reserved at the selected store; physical stock is deducted only when the order is fulfilled.', NULL, NULL, 'completed', 1, NULL, '2026-10-29 12:42:45'),
-(88, 1, NULL, 52, NULL, 'Storefront order request received', 'created', 'Requested items are awaiting staff confirmation.', NULL, NULL, 'completed', NULL, NULL, '2026-10-30 08:10:22');
+(88, 1, NULL, 52, NULL, 'Storefront order request received', 'created', 'Requested items are awaiting staff confirmation.', NULL, NULL, 'completed', NULL, NULL, '2026-10-30 08:10:22'),
+(89, 1, NULL, 1, NULL, 'Verified by administrator', 'status_change', 'Status: Confirmed â†’ Verified', NULL, NULL, 'completed', 1, NULL, '2026-10-31 05:22:14'),
+(90, 1, NULL, 53, NULL, 'Storefront order request received', 'created', 'Requested items are awaiting staff confirmation.', NULL, NULL, 'completed', NULL, NULL, '2026-10-31 06:15:56'),
+(93, 1, NULL, 1, NULL, 'Status: Pending → Confirmed', 'status_change', 'Lead confirmed.', NULL, NULL, 'completed', 1, NULL, '2026-10-31 06:58:54');
 
 -- --------------------------------------------------------
 
@@ -122,7 +125,29 @@ INSERT INTO `audit_logs` (`log_id`, `tenant_id`, `user_id`, `action`, `entity_ty
 (36, 1, 1, 'create', 'pos_order', 12, 'Sale POS-20261029-054 created', '2026-10-29 15:07:41'),
 (37, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-30 05:11:05'),
 (38, 1, 1, 'create', 'quotation', 1, 'Quotation QUO-000001 created', '2026-10-30 05:11:25'),
-(39, 1, 1, 'convert', 'quotation', 1, 'Quotation QUO-000001 converted to invoice #9', '2026-10-30 05:12:05');
+(39, 1, 1, 'convert', 'quotation', 1, 'Quotation QUO-000001 converted to invoice #9', '2026-10-30 05:12:05'),
+(48, 1, 1, 'create', 'quotation', 2, 'Quotation QUO-000001 created', '2026-10-30 12:45:01'),
+(49, 1, 1, 'create', 'stock_transfer', 10, 'Transfer TRF-000001 requested from Makongo to DEZL INVESTMENT LIMITED / Main Shop with 1 product line(s).', '2026-10-30 12:48:26'),
+(50, 1, 1, 'approve', 'stock_transfer', 10, 'Transfer TRF-000001 approved. No stock changed.', '2026-10-30 12:48:52'),
+(51, 1, 1, 'dispatch', 'stock_transfer', 10, 'Transfer TRF-000001 dispatched; source stock deducted once and now in transit.', '2026-10-30 12:49:10'),
+(52, 1, 1, 'verify', 'lead', 1, 'Lead verified by administrator', '2026-10-31 05:22:14'),
+(53, 1, 1, 'logout', 'user', 1, 'User signed out', '2026-10-31 06:12:34'),
+(54, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:13:40'),
+(55, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:46:17'),
+(56, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:46:53'),
+(57, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:47:20'),
+(58, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:47:36'),
+(59, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:47:53'),
+(60, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:48:47'),
+(61, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:49:59'),
+(62, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:51:12'),
+(64, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:52:27'),
+(65, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:52:36'),
+(66, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:53:05'),
+(67, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:54:58'),
+(68, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:55:14'),
+(69, 1, 1, 'login', 'user', 1, 'User signed in', '2026-10-31 06:55:47'),
+(71, 1, 1, 'set_status', 'lead', 1, 'Status changed to confirmed', '2026-10-31 06:58:54');
 
 -- --------------------------------------------------------
 
@@ -165,7 +190,8 @@ INSERT INTO `contacts` (`contact_id`, `tenant_id`, `contact_type_id`, `customer_
 (5, 1, 1, NULL, 'Tumaini', 'Kassim', 'Tumaini Pharmacy', 'tumaini@example.com', '+255 716 345 005', NULL, 'Dodoma', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, '2026-10-29 05:04:18'),
 (6, 1, 1, NULL, 'Azam', 'Rashid', 'Azam Distribution', 'azam@example.com', '+255 717 345 006', NULL, 'Mbeya', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, '2026-10-29 05:04:18'),
 (7, 1, 1, 'CUS-000005', 'emmanuel', NULL, NULL, NULL, '0765432212', NULL, 'Kigamboni', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, '2026-10-29 12:37:05'),
-(8, 1, 1, 'CUS-000006', 'Mlingo', NULL, NULL, NULL, '0987654321', NULL, 'Buguruni', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, '2026-10-30 08:10:22');
+(8, 1, 1, 'CUS-000006', 'Mlingo', NULL, NULL, NULL, '0987654321', NULL, 'Buguruni', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, '2026-10-30 08:10:22'),
+(9, 1, 1, 'CUS-000007', 'Bikwisa', NULL, NULL, NULL, '0712345678', NULL, 'BAGAMOYO', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, '2026-10-31 06:15:56');
 
 -- --------------------------------------------------------
 
@@ -221,9 +247,11 @@ CREATE TABLE `document_sequences` (
 --
 
 INSERT INTO `document_sequences` (`tenant_id`, `sequence_key`, `next_value`, `updated_at`) VALUES
-(1, 'customer', 7, '2026-10-30 08:10:22'),
-(1, 'lead', 8, '2026-10-30 08:10:22'),
-(1, 'order', 26, '2026-10-29 12:42:45');
+(1, 'customer', 8, '2026-10-31 06:15:56'),
+(1, 'lead', 9, '2026-10-31 06:15:56'),
+(1, 'order', 27, '2026-10-31 06:59:08'),
+(1, 'quotation', 2, '2026-10-30 12:45:01'),
+(1, 'stock_transfer', 2, '2026-10-30 12:48:26');
 
 -- --------------------------------------------------------
 
@@ -427,7 +455,9 @@ INSERT INTO `inventory_movements` (`movement_id`, `tenant_id`, `product_id`, `wa
 (15, 1, 6, 13, 'restock', 1.00, NULL, NULL, 1, '', NULL, NULL, '2026-10-29 12:19:09'),
 (16, 1, 8, 13, 'restock', 10.00, NULL, NULL, 1, '', NULL, NULL, '2026-10-29 12:23:41'),
 (17, 1, 7, 13, 'restock', 1.00, NULL, NULL, 1, '', NULL, NULL, '2026-10-29 12:24:22'),
-(18, 1, 6, 1, 'sale', 5.00, 12, 'pos_order', 1, NULL, NULL, NULL, '2026-10-29 15:07:41');
+(18, 1, 6, 1, 'sale', 5.00, 12, 'pos_order', 1, NULL, NULL, NULL, '2026-10-29 15:07:41'),
+(25, 1, 8, 13, 'restock', 10.00, NULL, NULL, 1, '', NULL, NULL, '2026-10-30 12:46:35'),
+(26, 1, 8, 13, 'godown_transfer_out', 10.00, 10, 'stock_transfer', 1, 'Transfer TRF-000001 dispatched to DEZL INVESTMENT LIMITED / Main Shop', NULL, NULL, '2026-10-30 12:49:10');
 
 -- --------------------------------------------------------
 
@@ -463,7 +493,7 @@ INSERT INTO `inventory_stock` (`stock_id`, `tenant_id`, `product_id`, `warehouse
 (8, 1, 8, 1, 0.00, 4.00, NULL, NULL, NULL, '2026-10-29 05:04:20'),
 (16, 1, 10, 13, 30.00, 5.00, NULL, NULL, '2026-10-30 08:19:55', '2026-10-30 05:19:59'),
 (17, 1, 6, 13, 35.00, 3.00, NULL, NULL, '2026-10-29 15:19:09', '2026-10-30 05:18:23'),
-(18, 1, 8, 13, 10.00, 4.00, NULL, NULL, NULL, '2026-10-29 12:23:40'),
+(18, 1, 8, 13, 10.00, 4.00, NULL, NULL, '2026-10-30 15:46:35', '2026-10-30 12:49:10'),
 (19, 1, 7, 13, 1.00, 5.00, NULL, NULL, NULL, '2026-10-29 12:24:22');
 
 -- --------------------------------------------------------
@@ -623,13 +653,14 @@ CREATE TABLE `leads` (
 --
 
 INSERT INTO `leads` (`lead_id`, `tenant_id`, `lead_number`, `contact_id`, `contact_name`, `company_name`, `phone`, `email`, `location`, `source`, `status`, `assigned_to`, `next_follow_up_at`, `last_contacted_at`, `notes`, `lost_reason`, `converted_at`, `created_by`, `created_at`, `updated_at`) VALUES
-(1, 1, 'LEAD-000001', 10, 'bashiru ally', 'Bs', '0629102021', 'bashiru@gmail.com', 'KINONDONI DISTRICT DAR ES SALAAM', 'staff', 'confirmed', NULL, '2026-10-27', NULL, 'soap', NULL, NULL, 1, '2026-10-27 11:08:45', '2026-10-30 10:27:10'),
-(3, 1, 'LEAD-000002', 15, 'maria', NULL, '0787654322', NULL, 'gomzi', 'storefront', 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-27 13:06:37', '2026-10-30 10:27:10'),
-(4, 1, 'LEAD-000003', 16, 'boss', NULL, '0999999999', NULL, 'mbagala', 'storefront', 'confirmed', NULL, NULL, NULL, NULL, NULL, '2026-10-28 08:45:29', NULL, '2026-10-27 13:26:13', '2026-10-30 10:27:10'),
-(5, 1, 'LEAD-000004', 17, 'husen', NULL, '+255754696088', NULL, 'UBUNGO DISTRICT', 'storefront', 'confirmed', NULL, NULL, NULL, NULL, NULL, '2026-10-28 08:43:18', NULL, '2026-10-27 13:59:48', '2026-10-30 10:27:10'),
-(6, 1, 'LEAD-000005', 18, 'mapunda', NULL, '+255687039380', NULL, 'KINONDONI DISTRICT', 'storefront', 'confirmed', NULL, NULL, NULL, NULL, NULL, '2026-10-28 05:27:19', NULL, '2026-10-27 15:21:54', '2026-10-30 10:27:10'),
+(1, 1, 'LEAD-000001', NULL, 'bashiru ally', 'Bs', '0629102021', 'bashiru@gmail.com', 'KINONDONI DISTRICT DAR ES SALAAM', 'staff', 'confirmed', NULL, '2026-10-27', NULL, 'soap', NULL, '2026-10-31 09:58:53', 1, '2026-10-27 11:08:45', '2026-10-31 06:58:53'),
+(3, 1, 'LEAD-000002', NULL, 'maria', NULL, '0787654322', NULL, 'gomzi', 'storefront', 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-27 13:06:37', '2026-10-31 06:52:21'),
+(4, 1, 'LEAD-000003', NULL, 'boss', NULL, '0999999999', NULL, 'mbagala', 'storefront', 'confirmed', NULL, NULL, NULL, NULL, NULL, '2026-10-28 08:45:29', NULL, '2026-10-27 13:26:13', '2026-10-31 06:49:53'),
+(5, 1, 'LEAD-000004', NULL, 'husen', NULL, '+255754696088', NULL, 'UBUNGO DISTRICT', 'storefront', 'confirmed', NULL, NULL, NULL, NULL, NULL, '2026-10-28 08:43:18', NULL, '2026-10-27 13:59:48', '2026-10-31 06:49:53'),
+(6, 1, 'LEAD-000005', NULL, 'mapunda', NULL, '+255687039380', NULL, 'KINONDONI DISTRICT', 'storefront', 'confirmed', NULL, NULL, NULL, NULL, NULL, '2026-10-28 05:27:19', NULL, '2026-10-27 15:21:54', '2026-10-31 06:49:53'),
 (51, 1, 'LEAD-000006', 7, 'emmanuel', NULL, '0765432212', NULL, 'Kigamboni', 'storefront', 'confirmed', NULL, NULL, NULL, NULL, NULL, '2026-10-29 15:42:45', NULL, '2026-10-29 12:37:05', '2026-10-30 10:27:10'),
-(52, 1, 'LEAD-000007', 8, 'Mlingo', NULL, '0987654321', NULL, 'Buguruni', 'storefront', 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-30 08:10:22', '2026-10-30 10:27:10');
+(52, 1, 'LEAD-000007', 8, 'Mlingo', NULL, '0987654321', NULL, 'Buguruni', 'storefront', 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-30 08:10:22', '2026-10-30 10:27:10'),
+(53, 1, 'LEAD-000008', 9, 'Bikwisa', NULL, '0712345678', NULL, 'BAGAMOYO', 'storefront', 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-31 06:15:56', '2026-10-31 06:46:03');
 
 -- --------------------------------------------------------
 
@@ -680,12 +711,13 @@ CREATE TABLE `orders` (
 --
 
 INSERT INTO `orders` (`order_id`, `tenant_id`, `order_number`, `contact_id`, `lead_id`, `customer_name`, `customer_phone`, `customer_location`, `customer_email`, `source`, `status`, `currency_code`, `subtotal`, `total`, `shop_id`, `warehouse_id`, `notes`, `assigned_to`, `created_by`, `confirmed_by`, `confirmed_at`, `rejected_by`, `rejected_at`, `rejection_reason`, `cancelled_by`, `cancelled_at`, `cancel_reason`, `fulfilled_by`, `fulfilled_at`, `fulfilled_invoice_id`, `fulfilled_invoice_number`, `created_at`, `updated_at`, `Amount_paid`, `stage`) VALUES
-(3, 1, 'ORD-000001', 10, NULL, 'bashiru ally', '0629102021', 'KINONDONI DISTRICT DAR ES SALAAM', 'bashiru@gmail.com', 'staff', 'unpaid', 'TZS', 60000.00, 60000.00, NULL, NULL, '', NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-27 11:05:25', '2026-10-29 13:41:17', 0.00, 'shop'),
+(3, 1, 'ORD-000001', NULL, NULL, 'bashiru ally', '0629102021', 'KINONDONI DISTRICT DAR ES SALAAM', 'bashiru@gmail.com', 'staff', 'unpaid', 'TZS', 60000.00, 60000.00, NULL, NULL, '', NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-27 11:05:25', '2026-10-31 06:49:53', 0.00, 'shop'),
 (4, 1, 'ORD-000002', NULL, NULL, 'agnes', '+255754696088', 'UBUNGO DISTRICT', NULL, 'storefront', 'unpaid', 'TZS', 2000.00, 2000.00, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-27 12:42:41', '2026-10-29 13:41:17', 0.00, 'shop'),
-(62, 1, 'ORD-000022', 18, 6, 'mapunda', '+255687039380', 'KINONDONI DISTRICT', NULL, 'storefront', 'unpaid', 'TZS', 2000.00, 2000.00, 7, 11, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-28 02:27:19', '2026-10-29 13:41:17', 0.00, 'shop'),
-(63, 1, 'ORD-000023', 17, 5, 'husen', '+255754696088', 'UBUNGO DISTRICT', NULL, 'storefront', 'unpaid', 'TZS', 2000.00, 2000.00, 7, 11, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-28 05:43:18', '2026-10-29 13:41:17', 0.00, 'shop'),
-(64, 1, 'ORD-000024', 16, 4, 'boss', '0999999999', 'mbagala', NULL, 'storefront', 'unpaid', 'TZS', 2000.00, 2000.00, 7, 11, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-28 05:45:29', '2026-10-29 13:41:17', 0.00, 'shop'),
-(65, 1, 'ORD-000025', 7, 51, 'emmanuel', '0765432212', 'Kigamboni', NULL, 'storefront', 'paid', 'TZS', 28000.00, 28000.00, 1, 1, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-29 12:42:45', '2026-10-29 14:38:34', 28000.00, 'transport');
+(62, 1, 'ORD-000022', NULL, 6, 'mapunda', '+255687039380', 'KINONDONI DISTRICT', NULL, 'storefront', 'unpaid', 'TZS', 2000.00, 2000.00, 7, 11, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-28 02:27:19', '2026-10-31 06:49:53', 0.00, 'shop'),
+(63, 1, 'ORD-000023', NULL, 5, 'husen', '+255754696088', 'UBUNGO DISTRICT', NULL, 'storefront', 'unpaid', 'TZS', 2000.00, 2000.00, 7, 11, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-28 05:43:18', '2026-10-31 06:49:53', 0.00, 'shop'),
+(64, 1, 'ORD-000024', NULL, 4, 'boss', '0999999999', 'mbagala', NULL, 'storefront', 'unpaid', 'TZS', 2000.00, 2000.00, 7, 11, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-28 05:45:29', '2026-10-31 06:49:53', 0.00, 'shop'),
+(65, 1, 'ORD-000025', 7, 51, 'emmanuel', '0765432212', 'Kigamboni', NULL, 'storefront', 'paid', 'TZS', 28000.00, 28000.00, 1, 1, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-29 12:42:45', '2026-10-29 14:38:34', 28000.00, 'transport'),
+(72, 1, 'ORD-000026', NULL, 1, 'Bs', '0629102021', 'KINONDONI DISTRICT DAR ES SALAAM', NULL, 'staff', 'unpaid', 'TZS', 0.00, 0.00, NULL, NULL, '', NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-31 06:59:08', '2026-10-31 06:59:08', 0.00, 'shop');
 
 --
 -- Triggers `orders`
@@ -737,11 +769,11 @@ CREATE TABLE `order_items` (
 --
 
 INSERT INTO `order_items` (`order_item_id`, `tenant_id`, `order_id`, `line_no`, `product_id`, `product_code_snapshot`, `product_name_snapshot`, `product_description_snapshot`, `unit_label_snapshot`, `quantity`, `unit_price`, `tax_rate_snapshot`, `line_total`, `notes`, `created_at`) VALUES
-(2, 1, 3, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 30.00, 2000.00, 1.00, 60000.00, NULL, '2026-10-27 11:05:25'),
-(3, 1, 4, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-27 12:42:41'),
-(63, 1, 62, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-28 02:27:19'),
-(64, 1, 63, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-28 05:43:18'),
-(65, 1, 64, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-28 05:45:29'),
+(2, 1, 3, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 30.00, 2000.00, 1.00, 60000.00, NULL, '2026-10-27 11:05:25'),
+(3, 1, 4, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-27 12:42:41'),
+(63, 1, 62, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-28 02:27:19'),
+(64, 1, 63, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-28 05:43:18'),
+(65, 1, 64, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, NULL, '2026-10-28 05:45:29'),
 (66, 1, 65, 1, 6, 'PRD-006', 'Bluetooth Speaker', '', '', 1.00, 28000.00, 18.00, 28000.00, NULL, '2026-10-29 12:42:45');
 
 -- --------------------------------------------------------
@@ -1191,6 +1223,13 @@ CREATE TABLE `quotations` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `quotations`
+--
+
+INSERT INTO `quotations` (`quotation_id`, `tenant_id`, `quotation_number`, `warehouse_id`, `contact_id`, `issue_date`, `valid_until`, `status`, `reference`, `notes`, `terms`, `subtotal`, `tax_amount`, `total`, `converted_invoice_id`, `converted_at`, `created_by`, `created_at`, `updated_at`) VALUES
+(2, 1, 'QUO-000001', 1, 6, '2026-10-30', '2026-11-29', 'draft', '', '', '', 256500.00, 46170.00, 302670.00, NULL, NULL, 1, '2026-10-30 12:45:01', '2026-10-30 12:45:01');
+
 -- --------------------------------------------------------
 
 --
@@ -1211,6 +1250,15 @@ CREATE TABLE `quotation_items` (
   `total` decimal(12,2) NOT NULL,
   `discount` decimal(12,2) NOT NULL DEFAULT 0.00
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `quotation_items`
+--
+
+INSERT INTO `quotation_items` (`quotation_item_id`, `tenant_id`, `quotation_id`, `warehouse_id`, `product_id`, `description`, `quantity`, `unit_price`, `tax_amount`, `subtotal`, `total`, `discount`) VALUES
+(2, 1, 2, 1, 6, 'Bluetooth Speaker', 3.00, 28000.00, 15120.00, 84000.00, 99120.00, 0.00),
+(3, 1, 2, 1, 8, 'Cooking Oil 5L', 5.00, 19500.00, 17550.00, 97500.00, 115050.00, 0.00),
+(4, 1, 2, 1, 2, 'Soda 300ml (Crate)', 5.00, 15000.00, 13500.00, 75000.00, 88500.00, 0.00);
 
 -- --------------------------------------------------------
 
@@ -1380,6 +1428,13 @@ CREATE TABLE `stock_transfers` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
+-- Dumping data for table `stock_transfers`
+--
+
+INSERT INTO `stock_transfers` (`transfer_id`, `tenant_id`, `transfer_number`, `source_warehouse_id`, `destination_shop_id`, `destination_warehouse_id`, `status`, `has_discrepancy`, `notes`, `cancel_reason`, `discrepancy_resolution`, `requested_by`, `requested_at`, `approved_by`, `approved_at`, `dispatched_by`, `dispatched_at`, `received_by`, `received_at`, `discrepancy_resolved_by`, `discrepancy_resolved_at`, `cancelled_by`, `cancelled_at`, `created_at`, `updated_at`) VALUES
+(10, 1, 'TRF-000001', 13, 1, 1, 'dispatched', 0, 'order of bra bra', NULL, NULL, 1, '2026-10-30 15:48:26', 1, '2026-10-30 15:48:52', 1, '2026-10-30 15:49:10', NULL, NULL, NULL, NULL, NULL, NULL, '2026-10-30 12:48:26', '2026-10-30 12:49:10');
+
+--
 -- Triggers `stock_transfers`
 --
 DELIMITER $$
@@ -1441,6 +1496,13 @@ CREATE TABLE `stock_transfer_items` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ;
 
+--
+-- Dumping data for table `stock_transfer_items`
+--
+
+INSERT INTO `stock_transfer_items` (`item_id`, `tenant_id`, `transfer_id`, `line_no`, `product_id`, `requested_quantity`, `dispatched_quantity`, `received_quantity`, `damaged_quantity`, `shortage_quantity`, `excess_quantity`, `line_notes`, `created_at`, `updated_at`) VALUES
+(9, 1, 10, 1, 8, 10.00, 10.00, 0.00, 0.00, 0.00, 0.00, NULL, '2026-10-30 12:48:26', '2026-10-30 12:49:10');
+
 -- --------------------------------------------------------
 
 --
@@ -1468,7 +1530,8 @@ INSERT INTO `storefront_lead_requests` (`request_id`, `tenant_id`, `lead_id`, `c
 (4, 1, 5, 'TZS', 2000.00, 63, '2026-10-27 13:59:48', '2026-10-28 08:43:18'),
 (5, 1, 6, 'TZS', 2000.00, 62, '2026-10-27 15:21:54', '2026-10-28 05:27:19'),
 (47, 1, 51, 'TZS', 28000.00, 65, '2026-10-29 12:37:05', '2026-10-29 15:42:45'),
-(48, 1, 52, 'TZS', 28000.00, NULL, '2026-10-30 08:10:22', NULL);
+(48, 1, 52, 'TZS', 28000.00, NULL, '2026-10-30 08:10:22', NULL),
+(49, 1, 53, 'TZS', 28000.00, NULL, '2026-10-31 06:15:56', NULL);
 
 -- --------------------------------------------------------
 
@@ -1498,12 +1561,13 @@ CREATE TABLE `storefront_lead_request_items` (
 --
 
 INSERT INTO `storefront_lead_request_items` (`request_item_id`, `tenant_id`, `request_id`, `line_no`, `product_id`, `product_code_snapshot`, `product_name_snapshot`, `product_description_snapshot`, `unit_label_snapshot`, `quantity`, `unit_price`, `tax_rate_snapshot`, `line_total`, `created_at`) VALUES
-(2, 1, 2, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 13:06:38'),
-(3, 1, 3, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 13:26:13'),
-(4, 1, 4, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 13:59:48'),
-(5, 1, 5, 1, 30, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 15:21:54'),
+(2, 1, 2, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 13:06:38'),
+(3, 1, 3, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 13:26:13'),
+(4, 1, 4, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 13:59:48'),
+(5, 1, 5, 1, NULL, 'PRD-001', 'soap', 'for home uses', 'Litre', 1.00, 2000.00, 1.00, 2000.00, '2026-10-27 15:21:54'),
 (47, 1, 47, 1, 6, 'PRD-006', 'Bluetooth Speaker', '', '', 1.00, 28000.00, 18.00, 28000.00, '2026-10-29 12:37:05'),
-(48, 1, 48, 1, 6, 'PRD-006', 'Bluetooth Speaker', '', '', 1.00, 28000.00, 18.00, 28000.00, '2026-10-30 08:10:22');
+(48, 1, 48, 1, 6, 'PRD-006', 'Bluetooth Speaker', '', '', 1.00, 28000.00, 18.00, 28000.00, '2026-10-30 08:10:22'),
+(49, 1, 49, 1, 6, 'PRD-006', 'Bluetooth Speaker', '', '', 1.00, 28000.00, 18.00, 28000.00, '2026-10-31 06:15:56');
 
 -- --------------------------------------------------------
 
@@ -1523,7 +1587,7 @@ CREATE TABLE `storefront_request_notification_reads` (
 --
 
 INSERT INTO `storefront_request_notification_reads` (`tenant_id`, `user_id`, `last_seen_lead_id`, `updated_at`) VALUES
-(1, 1, 52, '2026-10-30 08:28:13'),
+(1, 1, 53, '2026-10-31 06:16:09'),
 (1, 20, 6, '2026-10-28 06:55:53');
 
 -- --------------------------------------------------------
@@ -1595,7 +1659,7 @@ CREATE TABLE `system_settings` (
 --
 
 INSERT INTO `system_settings` (`setting_id`, `tenant_id`, `company_name`, `company_email`, `company_phone`, `company_address`, `default_currency`, `invoice_prefix`, `invoice_next_number`, `apply_tax`, `logo_path`) VALUES
-(1, 1, 'DEZL INVESTMENT LIMITED', 'dezlinvestment@gmail.com', '+255 677004313', 'Nyerere Road, Dar es Salaam', 'TZS', 'INV-', 1009, 1, NULL);
+(1, 1, 'DEZL INVESTMENT LIMITED', '', '', '', 'TZS', 'INV-', 1001, 0, 'uploads/logo_1_1793423956.png');
 
 -- --------------------------------------------------------
 
@@ -1640,7 +1704,7 @@ CREATE TABLE `tenants` (
 --
 
 INSERT INTO `tenants` (`tenant_id`, `name`, `email`, `phone`, `address`, `currency_code`, `created_at`) VALUES
-(1, 'DEZL INVESTMENT LIMITED', 'dezlinvestment@gmail.com', '+255 677004313', 'Nyerere Road, Dar es Salaam', 'TZS', '2026-08-28 12:52:20');
+(1, 'DEZL INVESTMENT LIMITED', '', '', '', 'TZS', '2026-08-28 12:52:20');
 
 -- --------------------------------------------------------
 
@@ -1712,7 +1776,7 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`user_id`, `tenant_id`, `username`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `is_active`, `last_login`, `created_at`) VALUES
-(1, 1, 'admin', 'dezlinvestment@gmail.com', '$2y$10$fcpe/kqLWziTy77xn6Gp0OkZdLIIn67EIFd5uhWymJ9tv2jzkm64y', 'System', 'Administrator', '+255677004313', 1, '2026-10-30 08:11:05', '2026-08-28 13:20:03'),
+(1, 1, 'admin', 'dezlinvestment@gmail.com', '$2y$10$fcpe/kqLWziTy77xn6Gp0OkZdLIIn67EIFd5uhWymJ9tv2jzkm64y', 'System', 'Administrator', '+255677004313', 1, '2026-10-31 09:55:47', '2026-08-28 13:20:03'),
 (20, 1, 'kariakoo', 'kariakoo@gmail.com', '$2y$10$HPON84u97/FrPCj5X/SwHupTjZzp.p0/0lGhSiovQ8hU1LwvXguEq', 'kariakoo', 'shop', '+255688228112', 1, '2026-10-29 09:13:43', '2026-10-28 01:34:48');
 
 -- --------------------------------------------------------
@@ -2313,19 +2377,19 @@ ALTER TABLE `warehouses`
 -- AUTO_INCREMENT for table `activities`
 --
 ALTER TABLE `activities`
-  MODIFY `activity_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=89;
+  MODIFY `activity_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=94;
 
 --
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=48;
+  MODIFY `log_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=72;
 
 --
 -- AUTO_INCREMENT for table `contacts`
 --
 ALTER TABLE `contacts`
-  MODIFY `contact_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+  MODIFY `contact_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `contact_types`
@@ -2373,7 +2437,7 @@ ALTER TABLE `godown_receipts`
 -- AUTO_INCREMENT for table `inventory_movements`
 --
 ALTER TABLE `inventory_movements`
-  MODIFY `movement_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
+  MODIFY `movement_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=27;
 
 --
 -- AUTO_INCREMENT for table `inventory_stock`
@@ -2403,19 +2467,19 @@ ALTER TABLE `journal_entries`
 -- AUTO_INCREMENT for table `leads`
 --
 ALTER TABLE `leads`
-  MODIFY `lead_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=53;
+  MODIFY `lead_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=54;
 
 --
 -- AUTO_INCREMENT for table `orders`
 --
 ALTER TABLE `orders`
-  MODIFY `order_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=66;
+  MODIFY `order_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=73;
 
 --
 -- AUTO_INCREMENT for table `order_items`
 --
 ALTER TABLE `order_items`
-  MODIFY `order_item_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=67;
+  MODIFY `order_item_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=69;
 
 --
 -- AUTO_INCREMENT for table `order_stock_reservations`
@@ -2493,13 +2557,13 @@ ALTER TABLE `purchases`
 -- AUTO_INCREMENT for table `quotations`
 --
 ALTER TABLE `quotations`
-  MODIFY `quotation_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `quotation_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `quotation_items`
 --
 ALTER TABLE `quotation_items`
-  MODIFY `quotation_item_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `quotation_item_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `roles`
@@ -2523,7 +2587,7 @@ ALTER TABLE `shops`
 -- AUTO_INCREMENT for table `stock_transfers`
 --
 ALTER TABLE `stock_transfers`
-  MODIFY `transfer_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `transfer_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `stock_transfer_items`
@@ -2535,13 +2599,13 @@ ALTER TABLE `stock_transfer_items`
 -- AUTO_INCREMENT for table `storefront_lead_requests`
 --
 ALTER TABLE `storefront_lead_requests`
-  MODIFY `request_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=49;
+  MODIFY `request_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=50;
 
 --
 -- AUTO_INCREMENT for table `storefront_lead_request_items`
 --
 ALTER TABLE `storefront_lead_request_items`
-  MODIFY `request_item_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=49;
+  MODIFY `request_item_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=50;
 
 --
 -- AUTO_INCREMENT for table `storefront_subscribers`
