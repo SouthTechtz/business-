@@ -276,9 +276,16 @@ try {
             if ($shop_id <= 0 || !shop_is_accessible($shop_id, false)) {
                 lead_action_redirect($back, 'danger', 'Select an active shop you are authorized to manage.');
             }
+            // Store is chosen automatically from the confirmed shop; the user does not pick it.
+            if ($warehouse_id <= 0) {
+                $auto_stores = accessible_stores($shop_id, false);
+                if ($auto_stores) {
+                    $warehouse_id = (int)$auto_stores[0]['warehouse_id'];
+                }
+            }
             $store = find_accessible_store($warehouse_id, false);
             if (!$store || (int)$store['shop_id'] !== $shop_id) {
-                lead_action_redirect($back, 'danger', 'Select an active store that belongs to the selected shop.');
+                lead_action_redirect($back, 'danger', 'No active store is available for the selected shop.');
             }
 
             $reserved_lines = 0;
