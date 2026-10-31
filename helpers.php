@@ -431,6 +431,28 @@ function next_pos_session_number($tenant_id) {
     return $number;
 }
 
+/** All inventory locations (godown/store/shop) accessible to the current user. */
+function accessible_locations($include_inactive = false, $tenant_id = null) {
+    global $current_user;
+    if (!$current_user) return [];
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    if ($tenant_id !== (int)$current_user->tenant_id) return [];
+    if (tenant_admin_scope()) {
+        $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+        return fetch_all("SELECT w.*, s.name shop_name, s.code shop_code FROM warehouses w LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id WHERE w.tenant_id = ?{$active_sql} ORDER BY w.name", $tenant_id);
+    }
+    $ids = accessible_warehouse_ids($tenant_id, $include_inactive, true);
+    if ($ids === null) $ids = [];
+    $uil = fetch_all("SELECT location_id FROM user_inventory_locations WHERE tenant_id = ? AND user_id = ?", $tenant_id, $current_user->user_id);
+    foreach ($uil as $r) $ids[] = (int)$r['location_id'];
+    $ids = array_values(array_unique($ids));
+    if (!$ids) return [];
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+    $params = array_merge([$tenant_id], $ids);
+    return fetch_all("SELECT w.*, s.name shop_name, s.code shop_code FROM warehouses w LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.warehouse_id IN ($ph){$active_sql} ORDER BY w.name", ...$params);
+}
+
 /** Display label for a store row that includes shop_name/name. */
 function store_label($store) {
     $shop = trim((string)($store['shop_name'] ?? ''));

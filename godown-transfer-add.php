@@ -15,7 +15,7 @@ if (!$godown) {
 }
 
 $shops = accessible_shops(null, false);
-$stores = accessible_stores(null, false);
+$stores = accessible_locations(false);
 
 // Source may be the Central Godown, another shop, or any available store.
 $source_options = fetch_all(
@@ -23,7 +23,7 @@ $source_options = fetch_all(
        FROM warehouses w
        LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
       WHERE w.tenant_id = ? AND w.is_active = 1
-        AND w.location_type IN ('godown', 'store')
+        AND w.location_type IN ('godown', 'store', 'shop')
       ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, w.name",
     $tenant_id
 );
@@ -115,7 +115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             "SELECT w.*, s.name shop_name FROM warehouses w
               LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1
-               AND w.location_type IN ('godown', 'store')",
+               AND w.location_type IN ('godown', 'store', 'shop')",
             $source_warehouse_id,
             $tenant_id
         );
@@ -123,31 +123,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('Select an active Godown or store as the source location.');
         }
         $source_label = trim(($source_row['shop_name'] ?? '') . ' / ' . $source_row['name'], ' /');
-        if ($destination_shop_id <= 0) {
-            throw new RuntimeException('Select the destination shop.');
+        // Destination is any accessible location; derive shop from it (if any).
+        $destination_warehouse = fetch_one("SELECT * FROM warehouses WHERE warehouse_id = ? AND tenant_id = ? AND is_active = 1", $destination_warehouse_id, $tenant_id);
+        if (!$destination_warehouse) {
+            throw new RuntimeException('Select an active destination location you can access.');
         }
-        if (!shop_is_accessible($destination_shop_id, false)) {
-            throw new RuntimeException('Select an active shop you have access to.');
+        $accessible_dest_ids = array_map(fn($r) => (int)$r['warehouse_id'], accessible_locations(false));
+        if (!in_array($destination_warehouse_id, $accessible_dest_ids, true)) {
+            throw new RuntimeException('Select an active destination location you can access.');
         }
-        $destination_shop = fetch_one(
-            "SELECT * FROM shops WHERE shop_id = ? AND tenant_id = ? AND is_active = 1",
-            $destination_shop_id,
-            $tenant_id
-        );
-        if (!$destination_shop) {
-            throw new RuntimeException('The selected destination shop is not active.');
-        }
-
-        $destination_store = find_accessible_store($destination_warehouse_id, false, false);
-        if (!$destination_store) {
-            throw new RuntimeException('Select an active shop store you can access. The central Godown cannot be a destination.');
-        }
-        if ((int)$destination_store['shop_id'] !== $destination_shop_id) {
-            throw new RuntimeException('The destination store does not belong to the selected shop.');
-        }
-        if ((string)$destination_store['location_type'] !== 'store') {
-            throw new RuntimeException('The central Godown cannot be a transfer destination.');
-        }
+        $destination_shop_id = (int)($destination_warehouse['shop_id'] ?? 0);
         if ($destination_warehouse_id === $source_warehouse_id) {
             throw new RuntimeException('The source and destination cannot be the same location.');
         }
@@ -229,7 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $locked_source = fetch_one(
             "SELECT w.* FROM warehouses w
-              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store')
+              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store', 'shop')
                 AND w.is_active = 1
               FOR UPDATE",
             $source_warehouse_id,
@@ -382,27 +367,19 @@ require_once 'sidebar.php';
                         </select>
                         <small class="text-muted">Request from the Central Godown, another shop, or any available store.</small>
                     </div>
-                    <div class="form-group">
-                        <label>Destination Shop <span class="text-danger">*</span></label>
-                        <select name="destination_shop_id" id="destination_shop" class="form-control" required>
-                            <option value="">— Select Shop —</option>
-                            <?php foreach ($shops as $shop): ?>
-                                <option value="<?php echo (int)$shop['shop_id']; ?>" <?php echo $prefill_shop_id === (int)$shop['shop_id'] ? 'selected' : ''; ?>><?php echo e($shop['name'] . ' (' . $shop['code'] . ')'); ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Destination Store <span class="text-danger">*</span></label>
-                        <select name="destination_warehouse_id" id="destination_store" class="form-control" required>
-                            <option value="">— Select Destination Store —</option>
-                            <?php foreach ($stores as $store): ?>
-                                <option value="<?php echo (int)$store['warehouse_id']; ?>" data-shop="<?php echo (int)$store['shop_id']; ?>" <?php echo ($prefill_shop_id === (int)$store['shop_id'] ? '' : 'disabled') . ' ' . ($prefill_store_id === (int)$store['warehouse_id'] ? 'selected' : ''); ?>>
-                                    <?php echo e($store['shop_name'] . ' / ' . $store['name']); ?>
+                                        <div class="form-group">
+                        <label>Destination Location <span class="text-danger">*</span></label>
+                        <select name="destination_warehouse_id" id="destination_location" class="form-control" required>
+                            <option value="">— Select Destination —</option>
+                            <?php foreach ($locations as $loc): ?>
+                                <option value="<?php echo (int)$loc['warehouse_id']; ?>" <?php echo $prefill_dest_id === (int)$loc['warehouse_id'] ? 'selected' : ''; ?>>
+                                    <?php echo e(trim(($loc['shop_name'] ?? '') . ' / ' . $loc['name'], ' /') . ' (' . $loc['location_type'] . ')'); ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <small class="text-muted">Only ordinary shop stores appear here. POS and orders cannot use the central Godown.</small>
+                        <small class="text-muted">Any accessible Godown, Store or Shop.</small>
                     </div>
+</div>
                     <div class="form-group mb-0">
                         <label>Notes</label>
                         <textarea name="notes" class="form-control" rows="3" maxlength="2000" placeholder="Optional request or dispatch instructions"></textarea>
