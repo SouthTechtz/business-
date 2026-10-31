@@ -23,7 +23,7 @@
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["sales.php", "sale-add.php", "sale-details.php", "sale-edit.php"]) ? "active" : ""; ?>">
                 <a href="sales.php"><i class="fa fa-shopping-cart"></i><span>Sales</span></a>
             </li>
-            <li class="<?php echo basename($_SERVER["PHP_SELF"]) == 'sales-return-add.php' ? 'active' : ''; ?>">
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) == 'sales-returns.php' ? 'active' : ''; ?>">
                 <a href="sales-return-add.php"><i class="fa fa-undo"></i><span>Sales Returns</span></a>
             </li>
             <?php endif; ?>

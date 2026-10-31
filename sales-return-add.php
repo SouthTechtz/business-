@@ -3,7 +3,7 @@ require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_pos');
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') { redirect('sales.php'); }
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') { redirect('sales-returns.php'); }
 verify_csrf();
 
 $tenant_id = (int)$current_user->tenant_id;
@@ -14,13 +14,13 @@ $quantities = $_POST['quantity'] ?? [];
 
 if ($source_type !== 'pos' || $source_id <= 0) {
     flash_set('danger', 'Invalid source transaction.');
-    redirect('sales.php');
+    redirect('sales-returns.php');
 }
 
 $order = fetch_one("SELECT * FROM pos_orders WHERE order_id = ? AND tenant_id = ?", $source_id, $tenant_id);
 if (!$order || $order['status'] !== 'completed') {
     flash_set('danger', 'Original sale not found or not completed.');
-    redirect('sales.php');
+    redirect('sales-returns.php');
 }
 $warehouse_id = (int)($order['warehouse_id'] ?? 0);
 $shop_id = null;
@@ -46,14 +46,14 @@ foreach ($product_ids as $idx => $pid_raw) {
     if ($pid <= 0 || $qty <= 0) continue;
     if (!isset($orig_map[$pid])) {
         flash_set('danger', 'Product not in original sale.');
-        redirect('sales.php');
+        redirect('sales-returns.php');
     }
     $orig_qty = (float)$orig_map[$pid]['quantity'];
     $already = $prev_map[$pid] ?? 0.0;
     $remaining = $orig_qty - $already;
     if ($qty > $remaining + 0.0001) {
         flash_set('danger', 'Return quantity exceeds remaining returnable quantity.');
-        redirect('sales.php');
+        redirect('sales-returns.php');
     }
     $unit_price = (float)$orig_map[$pid]['unit_price'];
     $refund = $qty * $unit_price;
@@ -63,7 +63,7 @@ foreach ($product_ids as $idx => $pid_raw) {
 
 if (!$items_to_return) {
     flash_set('danger', 'No items to return.');
-    redirect('sales.php');
+    redirect('sales-returns.php');
 }
 
 $conn->begin_transaction();
@@ -115,9 +115,9 @@ try {
     }
     $conn->commit();
     flash_set('success', 'Sales return processed. Refund: ' . number_format($total_refund, 2));
-    redirect('sales.php');
+    redirect('sales-returns.php');
 } catch (Throwable $e) {
     $conn->rollback();
     flash_set('danger', 'Could not process return: ' . $e->getMessage());
-    redirect('sales.php');
+    redirect('sales-returns.php');
 }
