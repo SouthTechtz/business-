@@ -223,17 +223,6 @@ require_once 'sidebar.php';
                         </td>
                         <td><?php echo e(date('M d, Y', strtotime($l['created_at']))); ?></td>
                         <td class="text-right">
-                            <button type="button" class="btn btn-action btn-light btn-lead-preview" title="Quick preview"><i class="fa fa-eye"></i></button>
-                            <?php if ($can_verify_leads && $can_orders && !empty($l['has_storefront_request']) && !in_array($l['status'], ['converted', 'lost'], true)): ?>
-                                <a href="lead-verify.php?id=<?php echo (int)$l['lead_id']; ?>" class="btn btn-action btn-success" title="Review and verify order request"><i class="fa fa-check"></i></a>
-                            <?php elseif ($can_verify_leads && empty($l['has_storefront_request']) && !in_array($l['status'], ['verified', 'converted', 'lost'], true)): ?>
-                            <form method="POST" action="lead-action.php" class="d-inline" onsubmit="return confirm('Verify this lead? It will then be ready for conversion into an order.');">
-                                <?php echo csrf_field(); ?>
-                                <input type="hidden" name="action" value="verify">
-                                <input type="hidden" name="lead_id" value="<?php echo (int)$l['lead_id']; ?>">
-                                <button type="submit" class="btn btn-action btn-success" title="Verify lead"><i class="fa fa-check"></i></button>
-                            </form>
-                            <?php endif; ?>
                             <div class="dropdown d-inline-block">
                                 <button type="button" class="btn btn-action btn-light" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Lead actions" aria-label="Lead actions for <?php echo e($l['lead_number']); ?>">
                                     <i class="fa fa-ellipsis-v"></i>
@@ -360,4 +349,6 @@ require_once 'sidebar.php';
 </script>
 
 
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script>$(function(){ $(document).on("change", "#lp_status_select", function(){ if (this.value === "confirmed") { var form = $(this).closest("form"); Swal.fire({title:"Confirm order?", text:"Do you want to confirm the order and process the lead?", icon:"question", showCancelButton:true}).then(function(result){ if (result.isConfirmed) { form.submit(); } }); } }); });</script>
 <?php require_once 'footer.php'; ?>
