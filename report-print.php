@@ -2,18 +2,14 @@
 require_once 'config.php';
 require_once 'auth_check.php';
 require_permission('view_reports');
+require_once 'reporting.php';
 
 $cur = tenant_currency();
 $type = $_GET['type'] ?? 'income';
-$from = isset($_GET['from']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['from']) ? $_GET['from'] : null;
-$to = isset($_GET['to']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['to']) ? $_GET['to'] : null;
-
-function date_filter($col, $from, $to) {
-    if ($from && $to) return "$col BETWEEN '$from' AND '$to'";
-    if ($from) return "$col >= '$from'";
-    if ($to) return "$col <= '$to'";
-    return '1=1';
-}
+$period_result = report_resolve_period($_GET);
+$from = $period_result['from'];
+$to = $period_result['to'];
+$period_error = $period_result['error'];
 
 $settings = fetch_one("SELECT * FROM system_settings WHERE tenant_id = ?", $current_user->tenant_id);
 $company = $settings['company_name'] ?? 'Business';
@@ -28,24 +24,35 @@ $title = '';
 $rows = [];
 $totals = [];
 
+$pos_scope = report_sales_warehouse_condition('o', 'warehouse_id');
+$inv_scope = report_sales_warehouse_condition('i', 'warehouse_id');
+$payment_scope = report_sales_warehouse_condition('i', 'warehouse_id');
+$stock_scope = report_inventory_location_condition('s', 'warehouse_id', true, true);
+
 switch ($type) {
     case 'income':
         $title = 'Income Statement (Profit & Loss)';
-        $df = date_filter('o.order_date', $from, $to);
+        $pos_date = report_date_condition('o.order_date', $from, $to);
         $income_sales = fetch_one(
             "SELECT COALESCE(SUM(CASE WHEN status = 'completed' THEN total END), 0) total,
                     COALESCE(SUM(CASE WHEN status = 'completed' THEN tax_amount END), 0) vat
-             FROM pos_orders o WHERE o.tenant_id = ? AND $df", $current_user->tenant_id
+             FROM pos_orders o WHERE o.tenant_id = ?" . $pos_scope['sql'] . $pos_date['sql'],
+            $current_user->tenant_id, ...array_merge($pos_scope['params'], $pos_date['params'])
         );
-        $dff = date_filter('p.payment_date', $from, $to);
+        $payment_date = report_date_condition('p.payment_date', $from, $to);
         $income_inv = fetch_one(
-            "SELECT COALESCE(SUM(p.amount), 0) total FROM payments p WHERE p.tenant_id = ? AND $dff", $current_user->tenant_id
+            "SELECT COALESCE(SUM(p.amount), 0) total
+             FROM payments p
+             JOIN invoices i ON i.invoice_id = p.invoice_id
+             WHERE p.tenant_id = ? AND i.tenant_id = ?" . $payment_scope['sql'] . $payment_date['sql'],
+            $current_user->tenant_id, $current_user->tenant_id, ...array_merge($payment_scope['params'], $payment_date['params'])
         );
-        $dfe = date_filter('e.expense_date', $from, $to);
+        $expense_date = report_date_condition('e.expense_date', $from, $to);
         $expenses = fetch_all(
             "SELECT COALESCE(c.name, 'Uncategorised') category_name, SUM(e.amount) total
              FROM expenses e LEFT JOIN expense_categories c ON c.expense_category_id = e.category_id
-             WHERE e.tenant_id = ? AND $dfe GROUP BY e.category_id ORDER BY total DESC", $current_user->tenant_id
+             WHERE e.tenant_id = ?" . $expense_date['sql'] . " GROUP BY e.category_id ORDER BY total DESC",
+            $current_user->tenant_id, ...$expense_date['params']
         );
         $exp_total = 0;
         foreach ($expenses as $ex) $exp_total += (float)$ex['total'];
@@ -76,12 +83,13 @@ switch ($type) {
 
     case 'sales':
         $title = 'Sales Report (POS)';
-        $df = date_filter('o.order_date', $from, $to);
+        $sales_date = report_date_condition('o.order_date', $from, $to);
         $rows = fetch_all(
             "SELECT o.order_number, o.order_date, o.status, o.total, o.tax_amount,
                     CONCAT(COALESCE(c.first_name,''), ' ', COALESCE(c.last_name,'')) customer_name, c.company_name
              FROM pos_orders o LEFT JOIN contacts c ON c.contact_id = o.contact_id
-             WHERE o.tenant_id = ? AND $df ORDER BY o.order_date DESC", $current_user->tenant_id
+             WHERE o.tenant_id = ?" . $pos_scope['sql'] . $sales_date['sql'] . " ORDER BY o.order_date DESC",
+            $current_user->tenant_id, ...array_merge($pos_scope['params'], $sales_date['params'])
         );
         $totals['total'] = array_sum(array_map(fn($r) => (float)$r['total'], $rows));
         $totals['count'] = count($rows);
@@ -89,15 +97,16 @@ switch ($type) {
 
     case 'payments':
         $title = 'Payments Received Report';
-        $df = date_filter('p.payment_date', $from, $to);
+        $payment_date = report_date_condition('p.payment_date', $from, $to);
         $rows = fetch_all(
             "SELECT p.payment_date, p.amount, m.name method_name, i.invoice_number,
                     CONCAT(COALESCE(c.first_name,''), ' ', COALESCE(c.last_name,'')) customer_name, c.company_name
              FROM payments p
              LEFT JOIN payment_methods m ON m.payment_method_id = p.payment_method_id
-             LEFT JOIN invoices i ON i.invoice_id = p.invoice_id
+             JOIN invoices i ON i.invoice_id = p.invoice_id
              LEFT JOIN contacts c ON c.contact_id = p.contact_id
-             WHERE p.tenant_id = ? AND $df ORDER BY p.payment_date DESC", $current_user->tenant_id
+             WHERE p.tenant_id = ? AND i.tenant_id = ?" . $payment_scope['sql'] . $payment_date['sql'] . " ORDER BY p.payment_date DESC",
+            $current_user->tenant_id, $current_user->tenant_id, ...array_merge($payment_scope['params'], $payment_date['params'])
         );
         $totals['total'] = array_sum(array_map(fn($r) => (float)$r['amount'], $rows));
         $totals['count'] = count($rows);
@@ -105,13 +114,14 @@ switch ($type) {
 
     case 'expenses':
         $title = 'Expenses Report';
-        $df = date_filter('e.expense_date', $from, $to);
+        $expense_date = report_date_condition('e.expense_date', $from, $to);
         $rows = fetch_all(
             "SELECT e.expense_date, e.description, e.amount, COALESCE(c.name,'Uncategorised') category_name, m.name method_name
              FROM expenses e
              LEFT JOIN expense_categories c ON c.expense_category_id = e.category_id
              LEFT JOIN payment_methods m ON m.payment_method_id = e.payment_method_id
-             WHERE e.tenant_id = ? AND $df ORDER BY e.expense_date DESC", $current_user->tenant_id
+             WHERE e.tenant_id = ?" . $expense_date['sql'] . " ORDER BY e.expense_date DESC",
+            $current_user->tenant_id, ...$expense_date['params']
         );
         $totals['total'] = array_sum(array_map(fn($r) => (float)$r['amount'], $rows));
         $totals['count'] = count($rows);
@@ -119,12 +129,13 @@ switch ($type) {
 
     case 'receivables':
         $title = 'Receivables Report (Outstanding Invoices)';
-        $df = date_filter('i.issue_date', $from, $to);
+        $receivable_date = report_date_condition('i.issue_date', $from, $to);
         $rows = fetch_all(
             "SELECT i.invoice_number, i.issue_date, i.due_date, i.total, i.amount_paid, i.amount_due,
                     CONCAT(COALESCE(c.first_name,''), ' ', COALESCE(c.last_name,'')) customer_name, c.company_name
              FROM invoices i LEFT JOIN contacts c ON c.contact_id = i.contact_id
-             WHERE i.tenant_id = ? AND i.is_paid = 0 AND $df ORDER BY i.due_date ASC", $current_user->tenant_id
+             WHERE i.tenant_id = ? AND i.is_paid = 0" . $inv_scope['sql'] . $receivable_date['sql'] . " ORDER BY i.due_date ASC",
+            $current_user->tenant_id, ...array_merge($inv_scope['params'], $receivable_date['params'])
         );
         $totals['total'] = array_sum(array_map(fn($r) => (float)$r['amount_due'], $rows));
         $totals['count'] = count($rows);
@@ -138,19 +149,21 @@ switch ($type) {
              FROM products p
              LEFT JOIN inventory_stock s ON s.product_id = p.product_id AND s.tenant_id = p.tenant_id
              LEFT JOIN warehouses w ON w.warehouse_id = s.warehouse_id
-             WHERE p.tenant_id = ? AND p.is_service = 0
-             GROUP BY p.product_id, s.warehouse_id ORDER BY p.name", $current_user->tenant_id
+             WHERE p.tenant_id = ? AND p.is_service = 0" . $stock_scope['sql'] . "
+             GROUP BY p.product_id, s.warehouse_id ORDER BY p.name",
+            $current_user->tenant_id, ...$stock_scope['params']
         );
         $totals['count'] = count($rows);
         break;
 
     case 'activity':
         $title = 'System Activity Summary';
-        $df = date_filter('l.created_at', $from, $to);
+        $activity_date = report_date_condition('l.created_at', $from, $to);
         $rows = fetch_all(
             "SELECT action, entity_type, COUNT(*) count
-             FROM audit_logs l WHERE l.tenant_id = ? AND $df
-             GROUP BY action, entity_type ORDER BY count DESC", $current_user->tenant_id
+             FROM audit_logs l WHERE l.tenant_id = ?" . $activity_date['sql'] . "
+             GROUP BY action, entity_type ORDER BY count DESC",
+            $current_user->tenant_id, ...$activity_date['params']
         );
         $totals['count'] = array_sum(array_map(fn($r) => (int)$r['count'], $rows));
         break;
@@ -213,6 +226,10 @@ switch ($type) {
         </div>
     </div>
     <div class="report-meta">Generated on <?php echo e($today); ?> &middot; Currency: <?php echo e($cur); ?></div>
+
+    <?php if ($period_error !== ''): ?>
+        <div class="alert alert-danger"><?php echo e($period_error); ?> No date filter was applied.</div>
+    <?php endif; ?>
 
     <?php if ($type === 'income'): ?>
         <table class="table table-bordered">

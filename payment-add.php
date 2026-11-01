@@ -11,67 +11,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $amount = (float)($_POST['amount'] ?? 0);
     $payment_date = $_POST['payment_date'] ?? date('Y-m-d H:i:s');
     $method_id = (int)($_POST['payment_method_id'] ?? 0);
+    $submission_token = trim((string)($_POST['submission_token'] ?? ''));
 
-    $invoice = fetch_one("SELECT * FROM invoices WHERE invoice_id = ? AND tenant_id = ?", $invoice_id, $current_user->tenant_id);
-    if (!$invoice) {
-        $error = 'Invoice not found.';
-    } elseif ((int)($invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$invoice['warehouse_id'], true)) {
-        $error = 'You do not have access to the store for this invoice.';
-    } elseif ($amount <= 0) {
-        $error = 'Payment amount must be greater than zero.';
-    } elseif ($amount > (float)$invoice['amount_due']) {
-        $error = 'Payment cannot exceed the balance due (' . money($invoice['amount_due'], tenant_currency()) . ').';
+    if ($submission_token === '') {
+        $error = 'Missing payment submission token. Reload and try again.';
     } else {
-        $conn->begin_transaction();
-        try {
-            $stmt = $conn->prepare(
-                "INSERT INTO payments (tenant_id, invoice_id, contact_id, amount, payment_date, payment_method_id, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)"
-            );
-            $method_db = $method_id ?: null;
-            $stmt->bind_param('iiidssi', $current_user->tenant_id, $invoice_id, $invoice['contact_id'], $amount, $payment_date, $method_db, $current_user->user_id);
-            $stmt->execute();
-            $payment_id = $stmt->insert_id;
-            $stmt->close();
-
-            $new_paid = (float)$invoice['amount_paid'] + $amount;
-            $new_due = max(0, (float)$invoice['total'] - $new_paid);
-            $is_paid = $new_due <= 0 ? 1 : 0;
-
-            $stmt = $conn->prepare("UPDATE invoices SET amount_paid = ?, amount_due = ?, is_paid = ? WHERE invoice_id = ? AND tenant_id = ?");
-            $stmt->bind_param('ddiii', $new_paid, $new_due, $is_paid, $invoice_id, $current_user->tenant_id);
-            $stmt->execute();
-            $stmt->close();
-
-            // Update status to Paid / Partially Paid when relevant
-            $status_map = fetch_all(
-                "SELECT status_id, name FROM document_statuses WHERE tenant_id = ? AND type = 'invoice'",
-                $current_user->tenant_id
-            );
-            $paid_status = null;
-            $partial_status = null;
-            foreach ($status_map as $s) {
-                if ($s['name'] === 'Paid') $paid_status = (int)$s['status_id'];
-                if ($s['name'] === 'Partially Paid') $partial_status = (int)$s['status_id'];
-            }
-            if ($is_paid && $paid_status) {
-                $stmt = $conn->prepare("UPDATE invoices SET status_id = ? WHERE invoice_id = ? AND tenant_id = ?");
-                $stmt->bind_param('iii', $paid_status, $invoice_id, $current_user->tenant_id);
-                $stmt->execute();
-            } elseif (!$is_paid && $partial_status && (int)$invoice['status_id'] !== $paid_status) {
-                $stmt = $conn->prepare("UPDATE invoices SET status_id = ? WHERE invoice_id = ? AND tenant_id = ?");
-                $stmt->bind_param('iii', $partial_status, $invoice_id, $current_user->tenant_id);
-                $stmt->execute();
-            }
-
-            $conn->commit();
-            audit_log('create', 'payment', $payment_id, 'Payment of ' . money($amount, tenant_currency()) . ' for invoice ' . $invoice['invoice_number']);
-            flash_set('success', 'Payment recorded successfully.');
-            redirect('receipts.php');
-        } catch (Exception $ex) {
-            $conn->rollback();
-            $error = 'Payment failed: ' . $ex->getMessage();
+    $conn->begin_transaction();
+    try {
+        $locked_invoice = fetch_one(
+            "SELECT * FROM invoices WHERE invoice_id = ? AND tenant_id = ? FOR UPDATE",
+            $invoice_id,
+            $current_user->tenant_id
+        );
+        if (!$locked_invoice) {
+            throw new Exception('Invoice not found.');
         }
+        if ((int)($locked_invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$locked_invoice['warehouse_id'], true)) {
+            throw new Exception('You do not have access to the store for this invoice.');
+        }
+        $status_name = '';
+        if ((int)($locked_invoice['status_id'] ?? 0) > 0) {
+            $st = fetch_one("SELECT name FROM document_statuses WHERE status_id = ? AND tenant_id = ?", (int)$locked_invoice['status_id'], $current_user->tenant_id);
+            $status_name = $st ? (string)$st['name'] : '';
+        }
+        if (strcasecmp($status_name, 'Cancelled') === 0 || (float)($locked_invoice['returned_amount'] ?? 0) + 0.0001 >= (float)$locked_invoice['total']) {
+            throw new Exception('Payments cannot be recorded against a cancelled or fully returned invoice.');
+        }
+        if ($amount <= 0) {
+            throw new Exception('Payment amount must be greater than zero.');
+        }
+        if ($amount > (float)$locked_invoice['amount_due'] + 0.0001) {
+            throw new Exception('Payment cannot exceed the balance due (' . money($locked_invoice['amount_due'], tenant_currency()) . ').');
+        }
+
+        $stmt = $conn->prepare(
+            "INSERT INTO payments (tenant_id, invoice_id, contact_id, amount, payment_date, payment_method_id, created_by, submission_token)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+        $method_db = $method_id ?: null;
+        $stmt->bind_param('iiidssis', $current_user->tenant_id, $invoice_id, $locked_invoice['contact_id'], $amount, $payment_date, $method_db, $current_user->user_id, $submission_token);
+        if (!$stmt->execute()) {
+            throw new Exception($stmt->error);
+        }
+        $payment_id = $stmt->insert_id;
+        $stmt->close();
+
+        $new_paid = (float)$locked_invoice['amount_paid'] + $amount;
+        $new_due = max(0, (float)$locked_invoice['total'] - (float)($locked_invoice['returned_amount'] ?? 0) - $new_paid);
+        // amount_due should reflect original total less returns and payments:
+        $new_due = max(0, (float)$locked_invoice['total'] - (float)($locked_invoice['returned_amount'] ?? 0) - $new_paid);
+        $refund_due = max(0, $new_paid - ((float)$locked_invoice['total'] - (float)($locked_invoice['returned_amount'] ?? 0)));
+        $is_paid = $new_due <= 0.0001 ? 1 : 0;
+
+        $stmt = $conn->prepare("UPDATE invoices SET amount_paid = ?, amount_due = ?, is_paid = ?, refund_due = ?, version = version + 1, updated_at = NOW() WHERE invoice_id = ? AND tenant_id = ?");
+        $stmt->bind_param('ddidii', $new_paid, $new_due, $is_paid, $refund_due, $invoice_id, $current_user->tenant_id);
+        $stmt->execute();
+        $stmt->close();
+
+        // Update status to Paid / Partially Paid when relevant
+        $status_map = fetch_all(
+            "SELECT status_id, name FROM document_statuses WHERE tenant_id = ? AND type = 'invoice'",
+            $current_user->tenant_id
+        );
+        $paid_status = null;
+        $partial_status = null;
+        foreach ($status_map as $s) {
+            if ($s['name'] === 'Paid') $paid_status = (int)$s['status_id'];
+            if ($s['name'] === 'Partially Paid') $partial_status = (int)$s['status_id'];
+        }
+        if ($new_due <= 0.0001 && $paid_status) {
+            $stmt = $conn->prepare("UPDATE invoices SET status_id = ? WHERE invoice_id = ? AND tenant_id = ?");
+            $stmt->bind_param('iii', $paid_status, $invoice_id, $current_user->tenant_id);
+            $stmt->execute();
+            $stmt->close();
+        } elseif ($new_due > 0.0001 && $partial_status && strcasecmp($status_name, 'Paid') !== 0) {
+            $stmt = $conn->prepare("UPDATE invoices SET status_id = ? WHERE invoice_id = ? AND tenant_id = ?");
+            $stmt->bind_param('iii', $partial_status, $invoice_id, $current_user->tenant_id);
+            $stmt->execute();
+            $stmt->close();
+        }
+
+        $conn->commit();
+        $invoice_number = $locked_invoice['invoice_number'];
+        audit_log('create', 'payment', $payment_id, 'Payment of ' . money($amount, tenant_currency()) . ' for invoice ' . $invoice_number);
+        flash_set('success', 'Payment recorded successfully.');
+        redirect('receipts.php');
+    } catch (Throwable $ex) {
+        $conn->rollback();
+        $error = 'Payment failed: ' . $ex->getMessage();
+    }
     }
 }
 
@@ -92,6 +120,7 @@ if ($scope_ids !== null) {
 $invoice_sql .= " ORDER BY i.issue_date DESC";
 $invoices = fetch_all($invoice_sql, ...$invoice_params);
 $methods = fetch_all("SELECT * FROM payment_methods WHERE tenant_id = ?", $current_user->tenant_id);
+$payment_token = bin2hex(random_bytes(16));
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
@@ -121,6 +150,8 @@ $cur = tenant_currency();
                     </div>
                 <?php else: ?>
                 <form method="POST" action="payment-add.php">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="submission_token" value="<?php echo e($payment_token); ?>">
                     <div class="form-group">
                         <label>Invoice <span class="text-danger">*</span></label>
                         <select name="invoice_id" class="form-control" required id="payInvoice" onchange="updateBalance()">

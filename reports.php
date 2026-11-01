@@ -5,44 +5,34 @@ require_permission('view_reports');
 $page_title = 'Reports';
 $cur = tenant_currency();
 
-// ---- Period filter (Today / This Week / This Month / This Year / Custom) ----
-$period = $_GET['period'] ?? '';
-$from = $_GET['from'] ?? '';
-$to = $_GET['to'] ?? '';
+require_once 'reporting.php';
 
-switch ($period) {
-    case 'today':
-        $from = $to = date('Y-m-d');
-        break;
-    case 'week':
-        $from = date('Y-m-d', strtotime('monday this week'));
-        $to = date('Y-m-d', strtotime('sunday this week'));
-        break;
-    case 'month':
-        $from = date('Y-m-01');
-        $to = date('Y-m-t');
-        break;
-    case 'year':
-        $from = date('Y-01-01');
-        $to = date('Y-12-31');
-        break;
-    case 'all':
-    default:
-        break;
-}
-if (isset($_GET['from']) && $_GET['from'] !== '' && $period === '') $from = $_GET['from'];
-if (isset($_GET['to']) && $_GET['to'] !== '' && $period === '') $to = $_GET['to'];
+// ---- Period filter (Today / This Week / This Month / This Year / Custom) ----
+$period_result = report_resolve_period($_GET);
+$period = $period_result['period'];
+$from = $period_result['from'];
+$to = $period_result['to'];
+$period_error = $period_result['error'];
 
 $has_range = $from !== '' && $to !== '';
-$date_where = $has_range ? " AND DATE_FORMAT(%s, '%Y-%m-%d') BETWEEN '$from' AND '$to'" : '';
 $qs = ($from ? "&from=" . urlencode($from) : '') . ($to ? "&to=" . urlencode($to) : '');
+
+$sales_summary = report_sales_summary($from, $to);
+$sales_by_shop = report_sales_by_shop($from, $to);
+$sales_by_product = report_sales_by_product($from, $to);
+$invoice_status_summary = report_invoice_status_summary($from, $to);
+
+// Shared safe location scope for sales reports.
+$pos_scope = report_sales_warehouse_condition('o', 'warehouse_id');
+$inv_scope = report_sales_warehouse_condition('i', 'warehouse_id');
+$payment_scope = report_sales_warehouse_condition('i', 'warehouse_id');
 
 // Monthly sales (invoices based, last 6 months)
 $monthly_sales = fetch_all(
     "SELECT DATE_FORMAT(issue_date, '%Y-%m') month, SUM(total) total, COUNT(*) invoices
-     FROM invoices WHERE tenant_id = ?
+     FROM invoices i WHERE i.tenant_id = ?" . $inv_scope['sql'] . "
      GROUP BY DATE_FORMAT(issue_date, '%Y-%m') ORDER BY month DESC LIMIT 6",
-    $current_user->tenant_id
+    $current_user->tenant_id, ...$inv_scope['params']
 );
 
 // Top products by invoice items
@@ -51,60 +41,28 @@ $top_products = fetch_all(
      FROM invoice_items ii
      JOIN invoices i ON i.invoice_id = ii.invoice_id
      JOIN products p ON p.product_id = ii.product_id
-     WHERE i.tenant_id = ?
+     WHERE i.tenant_id = ?" . $inv_scope['sql'] . "
      GROUP BY p.product_id ORDER BY total DESC LIMIT 5",
-    $current_user->tenant_id
+    $current_user->tenant_id, ...$inv_scope['params']
 );
 
 // Payments by month
 $payments_by_month = fetch_all(
-    "SELECT DATE_FORMAT(payment_date, '%Y-%m') month, SUM(amount) total, COUNT(*) count
-     FROM payments WHERE tenant_id = ?
+    "SELECT DATE_FORMAT(payment_date, '%Y-%m') month, SUM(p.amount) total, COUNT(*) count
+     FROM payments p
+     JOIN invoices i ON i.invoice_id = p.invoice_id
+     WHERE p.tenant_id = ? AND i.tenant_id = ?" . $payment_scope['sql'] . "
      GROUP BY DATE_FORMAT(payment_date, '%Y-%m') ORDER BY month DESC LIMIT 6",
-    $current_user->tenant_id
-);
-
-// Sales (POS) summary — period-scoped
-$pos_summary = fetch_one(
-    "SELECT COUNT(*) orders, COALESCE(SUM(CASE WHEN status = 'completed' THEN total END), 0) completed_total,
-            COALESCE(SUM(CASE WHEN status = 'cancelled' THEN total END), 0) cancelled_total
-     FROM pos_orders WHERE tenant_id = ?" . ($has_range ? sprintf(" AND DATE_FORMAT(order_date, '%%Y-%%m-%%d') BETWEEN '$from' AND '$to'") : ''),
-    $current_user->tenant_id
-);
-
-// Invoice totals — period-scoped
-$inv_summary = fetch_one(
-    "SELECT COUNT(*) invoices, COALESCE(SUM(total), 0) total, COALESCE(SUM(amount_due), 0) due, COALESCE(SUM(amount_paid), 0) paid
-     FROM invoices WHERE tenant_id = ?" . ($has_range ? sprintf(" AND DATE_FORMAT(issue_date, '%%Y-%%m-%%d') BETWEEN '$from' AND '$to'") : ''),
-    $current_user->tenant_id
+    $current_user->tenant_id, $current_user->tenant_id, ...$payment_scope['params']
 );
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
-?>
-
-<?php
-// Income statement summary (period-scoped)
-$income_sales = fetch_one(
-    "SELECT COALESCE(SUM(CASE WHEN status = 'completed' THEN total END), 0) total
-     FROM pos_orders WHERE tenant_id = ?" . ($has_range ? sprintf(" AND DATE_FORMAT(order_date, '%%Y-%%m-%%d') BETWEEN '$from' AND '$to'") : ''),
-    $current_user->tenant_id
-);
-$income_inv = fetch_one(
-    "SELECT COALESCE(SUM(amount), 0) total FROM payments WHERE tenant_id = ?" . ($has_range ? sprintf(" AND DATE_FORMAT(payment_date, '%%Y-%%m-%%d') BETWEEN '$from' AND '$to'") : ''),
-    $current_user->tenant_id
-);
-$exp_total = fetch_one(
-    "SELECT COALESCE(SUM(amount), 0) total FROM expenses WHERE tenant_id = ?" . ($has_range ? sprintf(" AND DATE_FORMAT(expense_date, '%%Y-%%m-%%d') BETWEEN '$from' AND '$to'") : ''),
-    $current_user->tenant_id
-);
-$total_income = (float)($income_sales['total'] ?? 0) + (float)($income_inv['total'] ?? 0);
-$total_exp = (float)($exp_total['total'] ?? 0);
-$net_income = $total_income - $total_exp;
 
 $reports = [
     ['income', 'Income Statement (TRA)', 'fa-balance-scale', 'Income, expenses, VAT and net income for tax submission.', 'wi-indigo'],
-    ['sales', 'Sales Report', 'fa-shopping-cart', 'Every POS sale with customer, VAT and totals.', 'wi-blue'],
+    ['sales', 'Sales Report', 'fa-shopping-cart', 'POS and Invoice sales, accepted returns, and net sales by Shop and product.', 'wi-blue'],
+    ['invoice-sales', 'Invoice Sales Report', 'fa-file-text', 'Invoice totals, return states, outstanding balances, and refund due.', 'wi-purple'],
     ['payments', 'Payments Received', 'fa-money', 'All money received from invoices and POS sales.', 'wi-green'],
     ['expenses', 'Expenses Report', 'fa-money', 'Every recorded expense grouped by category.', 'wi-red'],
     ['receivables', 'Outstanding Receivables', 'fa-exclamation-circle', 'Unpaid invoices and balances owed to you.', 'wi-amber'],
@@ -144,18 +102,21 @@ $reports = [
     </div>
 </div>
 
+<?php if (!empty($period_error)): ?>
+<div class="alert alert-danger"><?php echo e($period_error); ?></div>
+<?php endif; ?>
 <div class="row mb-3">
-    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-blue"><i class="fa fa-shopping-cart"></i></div><div class="widget-info"><div class="widget-value"><?php echo (int)($pos_summary['orders'] ?? 0); ?></div><div class="widget-label">Total POS Orders</div></div></div></div>
-    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-green"><i class="fa fa-money"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($pos_summary['completed_total'] ?? 0, $cur)); ?></div><div class="widget-label">Completed Sales</div></div></div></div>
-    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-purple"><i class="fa fa-file-text"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($inv_summary['total'] ?? 0, $cur)); ?></div><div class="widget-label">Invoiced Amount</div></div></div></div>
-    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-amber"><i class="fa fa-exclamation-circle"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($inv_summary['due'] ?? 0, $cur)); ?></div><div class="widget-label">Outstanding Balance</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-blue"><i class="fa fa-shopping-cart"></i></div><div class="widget-info"><div class="widget-value"><?php echo (int)$sales_summary['sale_count']; ?></div><div class="widget-label">Sales Transactions</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-green"><i class="fa fa-money"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['pos']['gross_sales'], $cur)); ?></div><div class="widget-label">Gross POS Sales</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-purple"><i class="fa fa-file-text"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['invoice']['gross_sales'], $cur)); ?></div><div class="widget-label">Gross Invoice Sales</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-indigo"><i class="fa fa-line-chart"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['net_sales'], $cur)); ?></div><div class="widget-label">Combined Net Sales</div></div></div></div>
 </div>
 
-<!-- Income summary -->
 <div class="row mb-3">
-    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-indigo"><i class="fa fa-arrow-circle-up"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($total_income, $cur)); ?></div><div class="widget-label">Total Income (Sales + Payments)</div></div></div></div>
-    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-red"><i class="fa fa-arrow-circle-down"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($total_exp, $cur)); ?></div><div class="widget-label">Total Expenses</div></div></div></div>
-    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon <?php echo $net_income >= 0 ? 'wi-green' : 'wi-red'; ?>"><i class="fa fa-line-chart"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($net_income, $cur)); ?></div><div class="widget-label">Net Income (Profit)</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-amber"><i class="fa fa-undo"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['pos']['accepted_returns'], $cur)); ?></div><div class="widget-label">POS Accepted Returns</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-amber"><i class="fa fa-undo"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['invoice']['accepted_returns'], $cur)); ?></div><div class="widget-label">Invoice Accepted Returns</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-red"><i class="fa fa-exclamation-circle"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['invoice']['outstanding_balance'], $cur)); ?></div><div class="widget-label">Outstanding Balance</div></div></div></div>
+    <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-red"><i class="fa fa-money"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['invoice']['refund_due'], $cur)); ?></div><div class="widget-label">Refund Due (Not Cash Refunded)</div></div></div></div>
 </div>
 
 <!-- Printable reports -->

@@ -68,7 +68,7 @@ try {
         }
         db_insert("inventory_movements", ["tenant_id"=>$tenant_id,"product_id"=>$pid,"warehouse_id"=>$wh,"movement_type"=>"invoice_cancel","quantity"=>$qty,"reference_id"=>$invoice_id,"reference_type"=>"invoice","created_by"=>$current_user->user_id,"notes"=>"Invoice cancelled"]);
     }
-    $stmt = $conn->prepare("UPDATE invoices SET status_id = ?, amount_due = 0 WHERE invoice_id = ? AND tenant_id = ?");
+    $stmt = $conn->prepare("UPDATE invoices SET status_id = ?, amount_due = 0, version = version + 1, updated_at = NOW() WHERE invoice_id = ? AND tenant_id = ?");
     $stmt->bind_param("iii", $cancelled_status_id, $invoice_id, $tenant_id);
     $stmt->execute();
     $stmt->close();

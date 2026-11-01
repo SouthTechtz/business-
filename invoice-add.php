@@ -62,6 +62,7 @@ if ($order_id > 0) {
     );
 }
 
+$shops = accessible_shops(null, true);
 $stores = accessible_stores(null, false);
 if (!$stores) {
     flash_set('danger', 'No active store is assigned to your account. Ask an administrator to grant shop/store access.');
@@ -91,10 +92,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $contact_id = $linked_order
         ? (int)$linked_order['contact_id']
         : (int)($_POST['contact_id'] ?? 0);
+$shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop_id'] : null);
     $warehouse_id = $linked_order
         ? (int)$linked_order['warehouse_id']
-        : (int)($_POST['warehouse_id'] ?? $selected_store_id);
-    $invoice_store = find_accessible_store($warehouse_id, false);
+        : 0;
+    if (!$linked_order) {
+        if ($shop_id) {
+            $shop_row = fetch_one("SELECT * FROM shops WHERE shop_id = ? AND tenant_id = ?", $shop_id, $current_user->tenant_id);
+            if (!$shop_row || !(int)$shop_row['is_active']) {
+                $error = 'The selected shop is not active or does not belong to your tenant.';
+                $shop_id = null;
+            } elseif (!shop_is_accessible($shop_id, true)) {
+                $error = 'You do not have access to the selected shop.';
+                $shop_id = null;
+            } else {
+                $resolved = shop_inventory_warehouse_id($shop_id, (int)$current_user->tenant_id);
+                if (!$resolved) {
+                    $error = 'The selected shop does not have an active inventory location.';
+                    $shop_id = null;
+                } else {
+                    $loc = find_accessible_store($resolved, false);
+                    if (!$loc) {
+                        $error = 'The selected shop inventory location is not active or accessible.';
+                        $shop_id = null;
+                    } else {
+                        $warehouse_id = (int)$resolved;
+                        $invoice_store = $loc;
+                    }
+                }
+            }
+        }
+        if ($warehouse_id <= 0) {
+            $warehouse_id = (int)($_POST['warehouse_id'] ?? $selected_store_id);
+            $invoice_store = find_accessible_store($warehouse_id, false);
+        }
+    } else {
+        $invoice_store = find_accessible_store($warehouse_id, false);
+    }
     $issue_date = $_POST['issue_date'] ?? date('Y-m-d');
     $due_date = $_POST['due_date'] ?? '';
     $status_id = (int)($_POST['status_id'] ?? 0);
@@ -453,6 +487,22 @@ $cur = tenant_currency();
                 <form method="POST" action="invoice-add.php" id="invoiceForm">
                     <?php echo csrf_field(); ?>
                     <?php if ($linked_order): ?><input type="hidden" name="order_id" value="<?php echo (int)$order_id; ?>"><?php endif; ?>
+<div class="row">
+                        <div class="col-md-4 form-group">
+                            <label>Shop (optional)</label>
+                            <?php if ($linked_order): ?>
+                                <div class="form-control-plaintext">Order-linked sale uses the shop and store already saved on the order.</div>
+                            <?php else: ?>
+                                <select name="shop_id" class="form-control">
+                                    <option value="">— No Shop / use selected store —</option>
+                                    <?php foreach ($shops as $sh): ?>
+                                        <option value="<?php echo (int)$sh['shop_id']; ?>" <?php echo (int)($_POST['shop_id'] ?? 0) === (int)$sh['shop_id'] ? 'selected' : ''; ?>><?php echo e($sh['name']); ?><?php echo (int)$sh['is_active'] !== 1 ? ' (inactive)' : ''; ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <small class="text-muted">If a shop is selected, its own inventory location is used.</small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
                     <div class="row">
                         <div class="col-md-4 form-group">
                             <label>Store <span class="text-danger">*</span></label>

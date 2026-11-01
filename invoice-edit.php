@@ -64,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new Exception('Invoice not found.');
         }
         $posted_version = (string)($_POST['invoice_version'] ?? '');
-        if ($posted_version === '' || $posted_version !== (string)$locked_invoice['updated_at']) {
+        if ($posted_version === '' || $posted_version !== (string)$locked_invoice['version']) {
             throw new Exception('This invoice was changed since you opened it. Reload and try again.');
         }
         $invoice = $locked_invoice;
@@ -207,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $is_paid = $amount_due <= 0 ? 1 : 0;
 
         $stmt = $conn->prepare(
-            "UPDATE invoices SET issue_date = ?, due_date = ?, status_id = ?, reference = ?, notes = ?, terms = ?, subtotal = ?, tax_amount = ?, total = ?, amount_due = ?, is_paid = ? WHERE invoice_id = ? AND tenant_id = ?"
+            "UPDATE invoices SET issue_date = ?, due_date = ?, status_id = ?, reference = ?, notes = ?, terms = ?, subtotal = ?, tax_amount = ?, total = ?, amount_due = ?, is_paid = ?, version = version + 1, updated_at = NOW() WHERE invoice_id = ? AND tenant_id = ?"
         );
         $stmt->bind_param('ssisssddddiii', $issue_date, $due_date, $status_id, $reference, $notes, $terms, $subtotal, $tax_total, $grand, $amount_due, $is_paid, $id, $current_user->tenant_id);
         $stmt->execute();
@@ -263,6 +263,8 @@ $cur = tenant_currency();
         <div class="card">
             <div class="card-body">
                 <form method="POST" action="invoice-edit.php?id=<?php echo $id; ?>">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="invoice_version" value="<?php echo e((int)$invoice['version']); ?>">
                     <div class="row">
                         <div class="col-md-3 form-group"><label>Issue Date</label><input type="date" name="issue_date" class="form-control" value="<?php echo e($invoice['issue_date']); ?>"></div>
                         <div class="col-md-3 form-group"><label>Due Date</label><input type="date" name="due_date" class="form-control" value="<?php echo e(!empty($invoice['due_date']) && $invoice['due_date'] !== '0000-00-00' ? $invoice['due_date'] : ''); ?>"></div>
