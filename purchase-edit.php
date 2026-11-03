@@ -6,7 +6,12 @@ $page_title = 'Edit Purchase';
 
 $tenant_id = (int)$current_user->tenant_id;
 $id = (int)($_GET['id'] ?? 0);
-$row = fetch_one("SELECT * FROM purchases WHERE purchase_id = ? AND tenant_id = ?", $id, $tenant_id);
+$purchase_scope = is_godown_manager() ? ' AND created_by = ?' : '';
+$purchase_params = [$id, $tenant_id];
+if (is_godown_manager()) {
+    $purchase_params[] = (int)$current_user->user_id;
+}
+$row = fetch_one("SELECT * FROM purchases WHERE purchase_id = ? AND tenant_id = ?{$purchase_scope}", ...$purchase_params);
 if (!$row) {
     flash_set('danger', 'Purchase not found.');
     redirect('purchases.php');
@@ -25,13 +30,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $purchase_date = trim((string)($_POST['purchase_date'] ?? ''));
     $notes = trim((string)($_POST['notes'] ?? ''));
 
-    if ($product_id <= 0 || $quantity <= 0 || $total < 0) {
+    $valid_product = fetch_one(
+        "SELECT product_id FROM products WHERE product_id = ? AND tenant_id = ? AND is_active = 1",
+        $product_id,
+        $tenant_id
+    );
+    $valid_supplier = $supplier_id > 0
+        ? fetch_one("SELECT supplier_id FROM suppliers WHERE supplier_id = ? AND tenant_id = ?", $supplier_id, $tenant_id)
+        : true;
+
+    if (!$valid_product || !$valid_supplier || $quantity <= 0 || $total < 0) {
         flash_set('danger', 'Please provide a valid product, quantity and total.');
     } else {
         $supplier_db = $supplier_id > 0 ? $supplier_id : null;
         $date_db = $purchase_date !== '' ? $purchase_date : null;
-        $stmt = $conn->prepare("UPDATE purchases SET product_id=?, supplier_id=?, quantity=?, total=?, amount_paid=?, purchase_date=?, notes=? WHERE purchase_id=? AND tenant_id=?");
-        $stmt->bind_param('iidddssii', $product_id, $supplier_db, $quantity, $total, $amount_paid, $date_db, $notes, $id, $tenant_id);
+        $update_scope = is_godown_manager() ? ' AND created_by = ?' : '';
+        $stmt = $conn->prepare("UPDATE purchases SET product_id=?, supplier_id=?, quantity=?, total=?, amount_paid=?, purchase_date=?, notes=? WHERE purchase_id=? AND tenant_id=?{$update_scope}");
+        if (is_godown_manager()) {
+            $stmt->bind_param('iidddssiii', $product_id, $supplier_db, $quantity, $total, $amount_paid, $date_db, $notes, $id, $tenant_id, $current_user->user_id);
+        } else {
+            $stmt->bind_param('iidddssii', $product_id, $supplier_db, $quantity, $total, $amount_paid, $date_db, $notes, $id, $tenant_id);
+        }
         if ($stmt->execute()) {
             flash_set('success', 'Purchase updated successfully.');
             redirect('purchases.php');

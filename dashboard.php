@@ -5,8 +5,32 @@ require_once 'auth_check.php';
 $page_title = 'Dashboard';
 $cur = tenant_currency();
 
-// Dashboard is optional — send users without access to their first available module
-if (!can('view_dashboard')) {
+if (is_godown_manager()) {
+    redirect('godown.php');
+}
+
+if (is_shop_manager() && !tenant_admin_scope()) {
+    $assigned_shops = accessible_shops(null, false);
+    if ($assigned_shops) {
+        redirect('shop-view.php?id=' . (int)$assigned_shops[0]['shop_id']);
+    }
+    if (can('request_godown_transfers')) redirect('godown-transfers.php');
+    redirect('profile.php');
+}
+
+if (!tenant_admin_scope()) {
+    $assigned_shops = accessible_shops(null, false);
+    if ($assigned_shops) {
+        redirect('shop-view.php?id=' . (int)$assigned_shops[0]['shop_id']);
+    }
+    $assigned_stores = accessible_stores(null, false);
+    if ($assigned_stores) {
+        redirect('store-view.php?id=' . (int)$assigned_stores[0]['warehouse_id']);
+    }
+}
+
+// The tenant-wide dashboard is reserved for tenant administrators.
+if (!tenant_admin_scope() || !can('view_dashboard')) {
     foreach ([
         'manage_pos'      => 'sales.php',
         'manage_invoices' => 'invoices.php',

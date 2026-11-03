@@ -35,7 +35,7 @@ function stage1_page_assert($base, $path, $expectedText) {
 }
 
 foreach (['today', 'week', 'month', 'year', 'all'] as $period) {
-    stage1_page_assert($base, 'reports.php?period=' . $period, 'Total POS Orders');
+    stage1_page_assert($base, 'reports.php?period=' . $period, 'Sales Transactions');
 }
 stage1_page_assert($base, 'reports.php?from=2026-01-01&to=2026-12-31', 'Showing data from');
 stage1_page_assert($base, 'reports.php?from=2026-02-30&to=2026-01-31', 'valid calendar date');
@@ -82,8 +82,8 @@ stage1_http_assert($expenseInjection['status'] === 200 && stripos($expenseInject
 
 $shopReport = stage1_http_get($base . '/reports.php?period=all&__stage1_user=20');
 $shopClean = !preg_match('/Fatal error|Warning:|Notice:|mysqli_sql_exception|Undefined (function|variable|array key)/i', $shopReport['body']);
-stage1_http_assert($shopReport['status'] === 200 && $shopClean && stripos($shopReport['body'], 'Total POS Orders') !== false, 'reports page loads for Shop-scoped user');
-$zeroInvoice = preg_match('/<div class="widget-value"[^>]*>\s*TZS\s+0\.00\s*<\/div><div class="widget-label">Invoiced Amount<\/div>/', $shopReport['body']);
+stage1_http_assert($shopReport['status'] === 200 && $shopClean && stripos($shopReport['body'], 'Sales Transactions') !== false, 'reports page loads for Shop-scoped user');
+$zeroInvoice = preg_match('/<div class="widget-value"[^>]*>\s*TZS\s+0\.00\s*<\/div><div class="widget-label">Gross Invoice Sales<\/div>/', $shopReport['body']);
 stage1_http_assert((bool)$zeroInvoice, 'Shop user does not receive unattributed historical invoice totals');
 
 $shopStock = stage1_http_get($base . '/report-print.php?type=stock&__stage1_user=20');

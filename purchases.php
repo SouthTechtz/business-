@@ -39,6 +39,11 @@ $sql = "SELECT pu.*, pr.name product_name, pr.code product_code,
          WHERE pu.tenant_id = ?";
 $params = [$tenant_id];
 $types = 'i';
+if (is_godown_manager()) {
+    $sql .= " AND pu.created_by = ?";
+    $params[] = (int)$current_user->user_id;
+    $types .= 'i';
+}
 
 if ($supplier_filter > 0) {
     $sql .= " AND pu.supplier_id = ?";

@@ -78,6 +78,7 @@ require_once 'sidebar.php';
                     <div class="form-group">
                         <label>Company Name <span class="text-danger">*</span></label>
                         <input type="text" name="name" class="form-control" required value="<?php echo e($settings['company_name'] ?? $tenant['name'] ?? ''); ?>">
+                        <small class="form-text text-muted">Used as the system title in the browser tab, sidebar, login screen and storefront.</small>
                     </div>
                     <div class="form-group">
                         <label>Email</label>

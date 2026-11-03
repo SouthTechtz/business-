@@ -1,10 +1,130 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
-require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers']);
+require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers', 'manage_inventory', 'manage_shops']);
 $page_title = 'Stock Transfers';
 
 $tenant_id = (int)$current_user->tenant_id;
+$can_request_stock = can('request_godown_transfers');
+$request_destination = null;
+$request_transfer_context = [];
+$request_transfer_action = '';
+$request_destination_label = '';
+$request_source_locations = [];
+
+if ($can_request_stock) {
+    $active_context = $_SESSION['active_request_destination'] ?? null;
+    $context_type = is_array($active_context) ? (string)($active_context['type'] ?? '') : '';
+    $context_id = is_array($active_context) ? (int)($active_context['id'] ?? 0) : 0;
+    $context_is_valid = false;
+    if ($context_type === 'shop' && $context_id > 0) {
+        $context_is_valid = shop_is_accessible($context_id, false);
+    } elseif ($context_type === 'store' && $context_id > 0) {
+        $candidate_store = find_accessible_store($context_id, false, false);
+        $context_is_valid = $candidate_store && (string)$candidate_store['location_type'] === 'store';
+    }
+
+    if (!$context_is_valid) {
+        $active_shop_id = (int)($_SESSION['active_shop_id'] ?? 0);
+        if ($active_shop_id > 0 && shop_is_accessible($active_shop_id, false)) {
+            $active_context = ['type' => 'shop', 'id' => $active_shop_id];
+        } elseif (is_shop_manager()) {
+            $assigned_shops = accessible_shops(null, false);
+            $active_context = $assigned_shops
+                ? ['type' => 'shop', 'id' => (int)$assigned_shops[0]['shop_id']]
+                : null;
+        } else {
+            $assigned_store = fetch_one(
+                "SELECT w.warehouse_id
+                   FROM user_inventory_locations uil
+                   JOIN warehouses w ON w.warehouse_id = uil.location_id AND w.tenant_id = uil.tenant_id
+                   LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                  WHERE uil.tenant_id = ? AND uil.user_id = ? AND w.location_type = 'store'
+                    AND w.is_active = 1 AND s.is_active = 1
+                  ORDER BY w.warehouse_id
+                  LIMIT 1",
+                $tenant_id,
+                (int)$current_user->user_id
+            );
+            if ($assigned_store) {
+                $active_context = ['type' => 'store', 'id' => (int)$assigned_store['warehouse_id']];
+            } else {
+                $assigned_shops = accessible_shops(null, false);
+                $active_context = $assigned_shops
+                    ? ['type' => 'shop', 'id' => (int)$assigned_shops[0]['shop_id']]
+                    : null;
+            }
+        }
+    }
+    if (is_array($active_context)) {
+        $_SESSION['active_request_destination'] = $active_context;
+    }
+
+    if (is_array($active_context) && ($active_context['type'] ?? '') === 'shop') {
+        $active_shop_id = (int)($active_context['id'] ?? 0);
+        if ($active_shop_id > 0 && shop_is_accessible($active_shop_id, false)) {
+            $active_shop = fetch_one(
+                "SELECT shop_id, name FROM shops WHERE tenant_id = ? AND shop_id = ? AND is_active = 1",
+                $tenant_id,
+                $active_shop_id
+            );
+            $active_shop_warehouse_id = $active_shop ? shop_inventory_warehouse_id($active_shop_id, $tenant_id) : null;
+            if ($active_shop && $active_shop_warehouse_id) {
+                $request_destination = fetch_one(
+                    "SELECT w.*, s.name shop_name, s.is_active shop_is_active
+                       FROM warehouses w
+                       JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                      WHERE w.tenant_id = ? AND w.warehouse_id = ? AND w.shop_id = ?
+                        AND w.location_type = 'shop' AND w.is_active = 1 AND s.is_active = 1",
+                    $tenant_id,
+                    $active_shop_warehouse_id,
+                    $active_shop_id
+                );
+                if ($request_destination) {
+                    $request_transfer_context = ['request_shop_id' => $active_shop_id];
+                    $request_transfer_action = 'godown-transfer-add.php?' . http_build_query($request_transfer_context);
+                    $request_destination_label = $active_shop['name'];
+                    $request_source_locations = fetch_all(
+                        "SELECT w.warehouse_id, w.name warehouse_name, w.location_type,
+                                s.name shop_name
+                           FROM warehouses w
+                           LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                          WHERE w.tenant_id = ? AND w.location_type IN ('godown', 'store')
+                            AND w.is_active = 1 AND (w.location_type = 'godown' OR s.is_active = 1)
+                          ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, s.name, w.name",
+                        $tenant_id
+                    );
+                }
+            }
+        }
+    } elseif (is_array($active_context) && ($active_context['type'] ?? '') === 'store') {
+        $active_store_id = (int)($active_context['id'] ?? 0);
+        $active_store = find_accessible_store($active_store_id, false, false);
+        if ($active_store && (string)$active_store['location_type'] === 'store') {
+            $request_destination = $active_store;
+            $request_transfer_context = ['request_store_id' => $active_store_id];
+            $request_transfer_action = 'godown-transfer-add.php?' . http_build_query($request_transfer_context);
+            $request_destination_label = store_label($active_store);
+            $request_source_locations = fetch_all(
+                "SELECT w.warehouse_id, w.name warehouse_name, w.location_type,
+                        s.name shop_name
+                   FROM warehouses w
+                   LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                  WHERE w.tenant_id = ? AND w.warehouse_id <> ? AND w.is_active = 1
+                    AND w.location_type IN ('godown', 'store')
+                    AND (w.location_type = 'godown' OR s.is_active = 1)
+                  ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, s.name, w.name",
+                $tenant_id,
+                $active_store_id
+            );
+        }
+    }
+
+    if (!$request_destination) {
+        unset($_SESSION['active_request_destination']);
+    }
+}
+
 $statuses = godown_transfer_statuses();
 $status = (string)($_GET['status'] ?? '');
 if ($status !== '' && !isset($statuses[$status])) {
@@ -55,8 +175,8 @@ $params = [$tenant_id];
 if (!tenant_admin_scope()) {
     $destination_shop_ids = accessible_shop_ids(null, true);
     // Pin source-side scope to non-Godown stores. Godown oversight staff get
-    // the Godown source added below; pure requesters must only see transfers
-    // for shops they can access, never every request from the same Godown.
+    // the Godown source added below. Assigned Shop users may also see requests
+    // supplied by their own Shop inventory warehouse.
     $source_warehouse_ids = accessible_warehouse_ids(null, true, false) ?? [];
     $godown_oversight = can('manage_godown')
         || can('view_godown')
@@ -64,14 +184,34 @@ if (!tenant_admin_scope()) {
         || can('dispatch_godown_transfers')
         || can('receive_godown_transfers');
     if ($godown_oversight) {
-        $source_warehouse_ids = accessible_warehouse_ids(null, true, true) ?? [];
+        $source_warehouse_ids = array_merge(
+            $source_warehouse_ids,
+            accessible_warehouse_ids(null, true, true) ?? []
+        );
     }
+    if ($destination_shop_ids) {
+        $shop_placeholders = implode(',', array_fill(0, count($destination_shop_ids), '?'));
+        $shop_inventory_locations = fetch_all(
+            "SELECT warehouse_id
+               FROM warehouses
+              WHERE tenant_id = ? AND location_type = 'shop'
+                AND shop_id IN ($shop_placeholders)",
+            ...array_merge([$tenant_id], $destination_shop_ids)
+        );
+        foreach ($shop_inventory_locations as $location) {
+            $source_warehouse_ids[] = (int)$location['warehouse_id'];
+        }
+    }
+    $source_warehouse_ids = array_values(array_unique($source_warehouse_ids));
     $scope_parts = [];
     if ($destination_shop_ids) {
         $scope_parts[] = 't.destination_shop_id IN (' . implode(',', array_map('intval', $destination_shop_ids)) . ')';
     }
     if ($source_warehouse_ids) {
         $scope_parts[] = 't.source_warehouse_id IN (' . implode(',', array_map('intval', $source_warehouse_ids)) . ')';
+    }
+    if (can('request_godown_transfers')) {
+        $scope_parts[] = 't.requested_by = ' . (int)$current_user->user_id;
     }
     $sql .= $scope_parts ? ' AND (' . implode(' OR ', $scope_parts) . ')' : ' AND 1 = 0';
 }
@@ -107,7 +247,7 @@ if ($q !== '') {
 }
 $sql .= ' ORDER BY t.requested_at DESC, t.transfer_id DESC';
 $transfers = fetch_all($sql, ...$params);
-if (can('manage_godown')) {
+if (can('manage_godown') && !is_godown_manager()) {
     ensure_central_godown($tenant_id);
 }
 $godown = find_active_godown();
@@ -123,8 +263,13 @@ require_once 'sidebar.php';
         <h1 class="page-title">Stock Transfers</h1>
         <div class="page-sub"><?php echo count($transfers); ?> transfer(s) match the current filters. Approval does not move stock; dispatch deducts the source once; receipt adds only accepted quantities.</div>
     </div>
-    <?php if ($godown && (can('manage_godown') || can('request_godown_transfers'))): ?>
-        <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> <?php echo can('manage_godown') ? 'New Transfer' : 'Request Stock'; ?></a>
+    <?php if ($can_request_stock && $request_destination): ?>
+        <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#requestStockModal">
+            <i class="fa fa-plus mr-1"></i> Request Stock
+        </button>
+    <?php endif; ?>
+    <?php if ($godown && can('manage_godown')): ?>
+        <a href="godown-transfer-add.php" class="btn btn-outline-primary"><i class="fa fa-exchange mr-1"></i> New Transfer</a>
     <?php endif; ?>
 </div>
 
@@ -133,8 +278,11 @@ require_once 'sidebar.php';
     <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
     <?php endif; ?>
     <li class="nav-item"><a class="nav-link active" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
-    <?php if ($godown && (can('manage_godown') || can('request_godown_transfers'))): ?>
-    <li class="nav-item"><a class="nav-link" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> <?php echo can('manage_godown') ? 'New Transfer' : 'Request Stock'; ?></a></li>
+    <?php if ($can_request_stock && $request_destination): ?>
+    <li class="nav-item"><button type="button" class="nav-link btn btn-link" data-toggle="modal" data-target="#requestStockModal"><i class="fa fa-plus mr-1"></i> Request Stock</button></li>
+    <?php endif; ?>
+    <?php if ($godown && can('manage_godown')): ?>
+    <li class="nav-item"><a class="nav-link" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> New Transfer</a></li>
     <?php endif; ?>
 </ul>
 
@@ -235,5 +383,9 @@ require_once 'sidebar.php';
         </div>
     </div>
 </div>
+
+<?php if ($can_request_stock && $request_destination): ?>
+    <?php require __DIR__ . '/partials/request-stock-modal.php'; ?>
+<?php endif; ?>
 
 <?php require_once 'footer.php'; ?>

@@ -7,9 +7,9 @@ if (empty($_SESSION['user_id'])) {
     redirect('login.php');
 }
 
-$current_user = User::getUserById($_SESSION['user_id']);
+$current_user = User::getUserById((int)$_SESSION['user_id']);
 if (!$current_user || !$current_user->is_active) {
-    session_destroy();
+    end_session();
     redirect('login.php');
 }
 
@@ -17,10 +17,17 @@ if (!$current_user || !$current_user->is_active) {
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 
+if (is_godown_manager()) {
+    if (!godown_manager_page_allowed($_SERVER['SCRIPT_NAME'] ?? '')) {
+        http_response_code(403);
+        die('Your Godown Manager role does not allow access to this page.');
+    }
+}
+
 /** Guard helper: die with 403 unless the current user has the permission. */
 function require_permission($permission) {
     global $current_user;
-    if (!$current_user->hasPermission($permission)) {
+    if (!can($permission)) {
         http_response_code(403);
         die('You do not have permission to access this page.');
     }
@@ -28,9 +35,8 @@ function require_permission($permission) {
 
 /** Guard helper: die with 403 unless the current user has ANY of the given permissions. */
 function require_permission_any($permissions) {
-    global $current_user;
     foreach ($permissions as $p) {
-        if ($current_user->hasPermission($p)) return;
+        if (can($p)) return;
     }
     http_response_code(403);
     die('You do not have permission to access this page.');

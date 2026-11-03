@@ -7,6 +7,14 @@ if (!$sf_tenant) {
     exit('The storefront is not configured.');
 }
 $sf_settings = storefront_settings($sf_tenant);
+$sf_contact_phone = trim((string)($sf_settings['company_phone'] ?? ''));
+if ($sf_contact_phone === '') {
+    $sf_contact_phone = trim((string)($sf_tenant['phone'] ?? ''));
+}
+$sf_contact_email = trim((string)($sf_settings['company_email'] ?? ''));
+if ($sf_contact_email === '') {
+    $sf_contact_email = trim((string)($sf_tenant['email'] ?? ''));
+}
 $sf_currency = storefront_currency($sf_tenant, $sf_settings);
 $sf_tenant_id = (int)$sf_tenant['tenant_id'];
 
@@ -118,6 +126,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($stmt->affected_rows !== 1) throw new RuntimeException('Could not assign a customer number.');
                     $stmt->close();
                 }
+                $sf_name_parts = preg_split('/\s+/', trim($sf_form['customer_name']), 2);
+                $sf_first_name = $sf_name_parts[0] ?? $sf_form['customer_name'];
+                $sf_last_name = $sf_name_parts[1] ?? null;
+                $stmt = $conn->prepare(
+                    "UPDATE contacts
+                        SET first_name = ?, last_name = ?, address = ?
+                      WHERE contact_id = ? AND tenant_id = ?"
+                );
+                if (!$stmt) throw new RuntimeException($conn->error);
+                $stmt->bind_param(
+                    'sssii',
+                    $sf_first_name,
+                    $sf_last_name,
+                    $sf_form['customer_location'],
+                    $sf_contact_id,
+                    $sf_tenant_id
+                );
+                if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+                $stmt->close();
             } else {
                 $sf_customer_number = next_document_number($sf_tenant_id, 'customer', 'CUS');
                 $sf_name_parts = preg_split('/\s+/', trim($sf_form['customer_name']), 2);
@@ -147,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $conn->prepare(
                 "INSERT INTO leads
                     (tenant_id, lead_number, contact_id, contact_name, phone, location, source, status)
-                 VALUES (?, ?, ?, ?, ?, ?, 'storefront', 'new')"
+                 VALUES (?, ?, ?, ?, ?, ?, 'storefront', 'pending')"
             );
             if (!$stmt) throw new RuntimeException($conn->error);
             $stmt->bind_param(
@@ -333,6 +360,23 @@ require __DIR__ . '/storefront-header.php';
                     <strong><?php echo e(money($sf_totals['total'], $sf_currency)); ?></strong>
                 </div>
                 <p class="sf-summary-note">Final pricing, tax, availability and delivery are confirmed by the store. This request does not reserve stock and no payment is taken online.</p>
+                <?php if ($sf_contact_phone !== '' || $sf_contact_email !== ''): ?>
+                    <div class="sf-checkout-contact">
+                        <strong>Need clarification?</strong>
+                        <span>Contact us about products, availability or delivery.</span>
+                        <?php if ($sf_contact_phone !== ''): ?>
+                            <a class="sf-checkout-contact-link" href="tel:<?php echo e(preg_replace('/[^0-9+]/', '', $sf_contact_phone)); ?>">
+                                <i class="fa fa-phone" aria-hidden="true"></i>
+                                Call <?php echo e($sf_contact_phone); ?>
+                            </a>
+                        <?php elseif ($sf_contact_email !== ''): ?>
+                            <a class="sf-checkout-contact-link" href="mailto:<?php echo e($sf_contact_email); ?>">
+                                <i class="fa fa-envelope" aria-hidden="true"></i>
+                                Email <?php echo e($sf_contact_email); ?>
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
                 <?php if ($sf_payment_methods): ?>
                     <div class="sf-payment-methods" aria-label="Payment methods accepted after order confirmation">
                         <span>Pay after confirmation:</span>

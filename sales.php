@@ -2,58 +2,114 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_pos');
+require_once 'reporting.php';
 $page_title = 'Sales';
 
 $status = $_GET['status'] ?? '';
 $customer_id = (int)($_GET['customer'] ?? 0);
-$date_from = $_GET['date_from'] ?? date('Y-m-01');
-$date_to = $_GET['date_to'] ?? date('Y-m-d');
+$date_from = (string)($_GET['date_from'] ?? '');
+$date_to = (string)($_GET['date_to'] ?? '');
 $warehouse_filter = (int)($_GET['warehouse'] ?? 0);
-$stores = accessible_stores(null, true);
-$store_ids = array_map(fn($s) => (int)$s['warehouse_id'], $stores);
-if ($warehouse_filter > 0 && !in_array($warehouse_filter, $store_ids, true)) {
+$accessible_sales_warehouse_ids = report_accessible_sales_warehouse_ids();
+$location_sql = "SELECT w.warehouse_id, w.name, s.name shop_name
+                   FROM warehouses w
+                   JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                  WHERE w.tenant_id = ? AND w.location_type = 'shop'
+                    AND w.is_active = 1 AND s.is_active = 1";
+$location_params = [(int)$current_user->tenant_id];
+if (is_array($accessible_sales_warehouse_ids)) {
+    if (!$accessible_sales_warehouse_ids) {
+        $location_sql .= " AND 1 = 0";
+    } else {
+        $location_sql .= " AND w.warehouse_id IN (" . implode(',', array_fill(0, count($accessible_sales_warehouse_ids), '?')) . ")";
+        $location_params = array_merge($location_params, $accessible_sales_warehouse_ids);
+    }
+}
+$location_sql .= " ORDER BY s.name, w.name";
+$sales_locations = fetch_all($location_sql, ...$location_params);
+$sales_location_ids = array_map(fn($location) => (int)$location['warehouse_id'], $sales_locations);
+if ($warehouse_filter > 0 && !in_array($warehouse_filter, $sales_location_ids, true)) {
     $warehouse_filter = 0;
 }
 
 $sql = "SELECT o.*, c.first_name, c.last_name, c.company_name,
                w.name store_name, s.name shop_name,
-               COALESCE(SUM(oi.total), 0) items_total,
-               COALESCE(SUM(oi.quantity), 0) items_count
+               COALESCE(oi.items_total, 0) items_total,
+               COALESCE(oi.items_count, 0) items_count
         FROM pos_orders o
+        LEFT JOIN pos_sessions ps ON ps.session_id = o.session_id AND ps.tenant_id = o.tenant_id
+        LEFT JOIN (
+            SELECT order_id, SUM(total) items_total, SUM(quantity) items_count,
+                   MAX(warehouse_id) item_warehouse_id
+              FROM pos_order_items
+             GROUP BY order_id
+        ) oi ON oi.order_id = o.order_id
         LEFT JOIN contacts c ON c.contact_id = o.contact_id
-        LEFT JOIN pos_order_items oi ON oi.order_id = o.order_id
-        LEFT JOIN warehouses w ON w.warehouse_id = o.warehouse_id
+        LEFT JOIN warehouses w ON w.warehouse_id = COALESCE(o.warehouse_id, ps.warehouse_id, oi.item_warehouse_id)
+            AND w.tenant_id = o.tenant_id
         LEFT JOIN shops s ON s.shop_id = w.shop_id
-        WHERE o.tenant_id = ? AND DATE(o.order_date) BETWEEN ? AND ?";
-$params = [$current_user->tenant_id, $date_from, $date_to];
-$types = 'iss';
+        WHERE o.tenant_id = ?";
+$params = [(int)$current_user->tenant_id];
 
-$scope_ids = accessible_warehouse_ids();
-if ($scope_ids !== null) {
-    if (!$scope_ids) {
+if (is_array($accessible_sales_warehouse_ids)) {
+    if (!$accessible_sales_warehouse_ids) {
         $sql .= " AND 1 = 0";
     } else {
-        $sql .= " AND o.warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . ")";
+        $sql .= " AND COALESCE(o.warehouse_id, ps.warehouse_id, oi.item_warehouse_id) IN ("
+            . implode(',', array_fill(0, count($accessible_sales_warehouse_ids), '?')) . ")";
+        $params = array_merge($params, $accessible_sales_warehouse_ids);
     }
 }
+
+if ($date_from !== '') {
+    $sql .= " AND DATE(o.order_date) >= ?";
+    $params[] = $date_from;
+}
+if ($date_to !== '') {
+    $sql .= " AND DATE(o.order_date) <= ?";
+    $params[] = $date_to;
+}
+
 if ($warehouse_filter > 0) {
-    $sql .= " AND o.warehouse_id = ?";
+    $sql .= " AND COALESCE(o.warehouse_id, ps.warehouse_id, oi.item_warehouse_id) = ?";
     $params[] = $warehouse_filter;
-    $types .= 'i';
 }
 if ($status !== '') {
     $sql .= " AND o.status = ?";
     $params[] = $status;
-    $types .= 's';
 }
 if ($customer_id > 0) {
     $sql .= " AND o.contact_id = ?";
     $params[] = $customer_id;
-    $types .= 'i';
 }
-$sql .= " GROUP BY o.order_id ORDER BY o.order_date DESC";
+$sql .= " ORDER BY o.order_date DESC, o.order_id DESC";
 
 $orders = fetch_all($sql, ...$params);
+$total_sales_count = count($orders);
+$total_sales_amount = array_sum(array_map(
+    fn($order) => (float)$order['total'],
+    $orders
+));
+
+$order_items_by_order = [];
+if ($orders) {
+    $order_ids = array_map(fn($order) => (int)$order['order_id'], $orders);
+    $order_placeholders = implode(',', array_fill(0, count($order_ids), '?'));
+    $item_rows = fetch_all(
+        "SELECT oi.order_id, COALESCE(NULLIF(TRIM(oi.description), ''), p.name, 'Item') item_name,
+                oi.quantity
+           FROM pos_order_items oi
+           JOIN pos_orders o ON o.order_id = oi.order_id
+           LEFT JOIN products p ON p.product_id = oi.product_id AND p.tenant_id = o.tenant_id
+          WHERE o.tenant_id = ? AND oi.order_id IN ({$order_placeholders})
+          ORDER BY oi.order_id, oi.order_item_id",
+        $current_user->tenant_id,
+        ...$order_ids
+    );
+    foreach ($item_rows as $item_row) {
+        $order_items_by_order[(int)$item_row['order_id']][] = $item_row;
+    }
+}
 
 $customers = fetch_all(
     "SELECT contact_id, first_name, last_name, company_name FROM contacts
@@ -69,7 +125,7 @@ $cur = tenant_currency();
 <div class="page-head">
     <div>
         <h1 class="page-title">Sales</h1>
-        <div class="page-sub"><?php echo count($orders); ?> sale(s) in the selected period.</div>
+        <div class="page-sub"><?php echo count($orders); ?> sale(s) found.</div>
     </div>
     <a href="sale-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> New Sale</a>
     <a href="export-sales.php?<?php echo e(http_build_query(array_filter(['status' => $status, 'customer' => $customer_id > 0 ? $customer_id : '', 'warehouse' => $warehouse_filter > 0 ? $warehouse_filter : '', 'date_from' => $date_from, 'date_to' => $date_to], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
@@ -78,6 +134,25 @@ $cur = tenant_currency();
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
+
+<div class="row mb-3">
+    <div class="col-md-6 mb-3 mb-md-0">
+        <div class="card border-left-primary shadow-sm h-100 py-2">
+            <div class="card-body">
+                <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Total Sales</div>
+                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo number_format($total_sales_count); ?></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card border-left-success shadow-sm h-100 py-2">
+            <div class="card-body">
+                <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Total Amount Sold</div>
+                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($total_sales_amount, tenant_currency())); ?></div>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="card">
     <div class="card-header">
@@ -97,9 +172,9 @@ $cur = tenant_currency();
                 <?php endforeach; ?>
             </select>
             <select name="warehouse" class="form-control form-control-sm mr-2 mb-1">
-                <option value="0">All Stores</option>
-                <?php foreach ($stores as $store): ?>
-                    <option value="<?php echo (int)$store['warehouse_id']; ?>" <?php echo $warehouse_filter === (int)$store['warehouse_id'] ? 'selected' : ''; ?>><?php echo e(store_label($store)); ?><?php echo (int)$store['is_active'] ? '' : ' (inactive)'; ?></option>
+                <option value="0">All Shops</option>
+                <?php foreach ($sales_locations as $location): ?>
+                    <option value="<?php echo (int)$location['warehouse_id']; ?>" <?php echo $warehouse_filter === (int)$location['warehouse_id'] ? 'selected' : ''; ?>><?php echo e(store_label($location)); ?></option>
                 <?php endforeach; ?>
             </select>
             <input type="date" name="date_from" class="form-control form-control-sm mr-2 mb-1" value="<?php echo e($date_from); ?>">
@@ -114,7 +189,7 @@ $cur = tenant_currency();
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
-            <table class="table table-hover data-table">
+            <table class="table table-hover data-table" data-page-length="20">
                 <thead>
                     <tr>
                         <th>Order #</th><th>Customer</th><th>Store</th><th>Date</th><th>Items</th><th>Status</th><th class="text-right">Total</th><th class="text-right">Actions</th>
@@ -127,7 +202,19 @@ $cur = tenant_currency();
                         <td><?php echo e(trim(($o['first_name'] ?? '') . ' ' . ($o['last_name'] ?? '')) ?: $o['company_name'] ?: 'Walk-in Customer'); ?></td>
                         <td><?php echo e($o['store_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . $o['store_name'], ' /') : '—'); ?></td>
                         <td><?php echo e(date('M d, Y H:i', strtotime($o['order_date']))); ?></td>
-                        <td><?php echo e((float)$o['items_count']); ?></td>
+                        <td>
+                            <?php $sold_items = $order_items_by_order[(int)$o['order_id']] ?? []; ?>
+                            <?php if ($sold_items): ?>
+                                <ul class="list-unstyled mb-0 small">
+                                    <?php foreach ($sold_items as $sold_item): ?>
+                                        <li><?php echo e($sold_item['item_name']); ?> <span class="text-muted">× <?php echo e((float)$sold_item['quantity']); ?></span></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                                <span class="text-muted small"><?php echo e((float)$o['items_count']); ?> total</span>
+                            <?php else: ?>
+                                <span class="text-muted">No items recorded</span>
+                            <?php endif; ?>
+                        </td>
                         <td>
                             <span class="badge badge-<?php echo $o['status'] === 'completed' ? 'success' : ($o['status'] === 'cancelled' ? 'danger' : 'warning'); ?>">
                                 <?php echo e(ucfirst($o['status'])); ?>

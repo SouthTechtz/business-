@@ -12,8 +12,11 @@ if (!is_array($sf_last_order) || empty($sf_last_order['lead_number'])) {
     flash_set('info', 'Submit an order request to see its confirmation here.');
     redirect('index.php');
 }
-$sf_phone = trim((string)($sf_settings['company_phone'] ?? ''));
+$sf_phone = '+255 742 801 121';
 $sf_email = trim((string)($sf_settings['company_email'] ?? ''));
+if ($sf_email === '') {
+    $sf_email = trim((string)($sf_tenant['email'] ?? ''));
+}
 
 $page_title = 'Order received';
 $sf_meta_description = 'Your storefront order request was received.';
@@ -58,15 +61,21 @@ require __DIR__ . '/storefront-header.php';
             <p class="sf-received-note">Keep your request reference and customer number handy. Your request is now in the store's order queue. No payment has been taken and no stock has been reserved.</p>
             <?php if ($sf_phone !== '' || $sf_email !== ''): ?>
                 <p class="sf-received-note">
-                    Questions about this request?
-                    <?php if ($sf_phone !== ''): ?>Call <a href="tel:<?php echo e(preg_replace('/[^0-9+]/', '', $sf_phone)); ?>"><?php echo e($sf_phone); ?></a>.<?php endif; ?>
+                    Need help with your order? Contact customer service:
+                    <?php if ($sf_phone !== ''): ?>
+                        <a class="sf-received-contact" href="tel:<?php echo e(preg_replace('/[^0-9+]/', '', $sf_phone)); ?>">
+                            <i class="fa fa-phone" aria-hidden="true"></i> <?php echo e($sf_phone); ?>
+                        </a>.
+                    <?php endif; ?>
                     <?php if ($sf_email !== ''): ?>Email <a href="mailto:<?php echo e($sf_email); ?>"><?php echo e($sf_email); ?></a>.<?php endif; ?>
                 </p>
             <?php endif; ?>
             <div class="sf-received-actions">
                 <a class="sf-btn sf-btn-primary" href="index.php#catalogue">Continue shopping</a>
                 <?php if ($sf_phone !== ''): ?>
-                    <a class="sf-btn sf-btn-outline" href="tel:<?php echo e(preg_replace('/[^0-9+]/', '', $sf_phone)); ?>">Call the store</a>
+                    <a class="sf-btn sf-btn-outline" href="tel:<?php echo e(preg_replace('/[^0-9+]/', '', $sf_phone)); ?>">
+                        <i class="fa fa-phone" aria-hidden="true"></i> Call customer service
+                    </a>
                 <?php endif; ?>
             </div>
         </div>

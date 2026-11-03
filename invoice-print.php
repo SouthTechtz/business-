@@ -15,7 +15,7 @@ $invoice = fetch_one(
 if (!$invoice) {
     die('Invoice not found.');
 }
-if ((int)($invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$invoice['warehouse_id'], true)) {
+if ((int)($invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$invoice['warehouse_id'], true, is_godown_manager())) {
     http_response_code(403);
     die('You do not have access to the store for this invoice.');
 }
@@ -28,7 +28,7 @@ $items = fetch_all(
 );
 
 $settings = fetch_one("SELECT * FROM system_settings WHERE tenant_id = ?", $current_user->tenant_id);
-$company = $settings ?: ['company_name' => APP_NAME, 'company_email' => '', 'company_phone' => '', 'company_address' => ''];
+$company = $settings ?: ['company_name' => system_title($current_user->tenant_id), 'company_email' => '', 'company_phone' => '', 'company_address' => ''];
 $logo_path = (!empty($settings['logo_path']) && file_exists($settings['logo_path'])) ? $settings['logo_path'] : '';
 $cur = tenant_currency();
 
@@ -60,7 +60,7 @@ $status_color = match ($invoice['status_name'] ?? '') {
                 <img src="<?php echo e($logo_path); ?>" alt="Company logo" style="max-height:64px;max-width:150px;object-fit:contain;">
             <?php endif; ?>
             <div>
-                <h3 class="mb-1" style="color:var(--primary)"><?php echo e($company['company_name'] ?? APP_NAME); ?></h3>
+                <h3 class="mb-1" style="color:var(--primary)"><?php echo e($company['company_name'] ?? system_title($current_user->tenant_id)); ?></h3>
                 <?php if (!empty($company['company_address'])): ?><div class="small"><?php echo e($company['company_address']); ?></div><?php endif; ?>
                 <?php if (!empty($company['company_email'])): ?><div class="small"><?php echo e($company['company_email']); ?></div><?php endif; ?>
                 <?php if (!empty($company['company_phone'])): ?><div class="small"><?php echo e($company['company_phone']); ?></div><?php endif; ?>

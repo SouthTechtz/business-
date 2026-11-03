@@ -63,9 +63,14 @@ if ($order_id > 0) {
 }
 
 $shops = accessible_shops(null, true);
-$stores = accessible_stores(null, false);
+$stores = accessible_stores(null, false, null, is_godown_manager());
 if (!$stores) {
-    flash_set('danger', 'No active store is assigned to your account. Ask an administrator to grant shop/store access.');
+    flash_set(
+        'danger',
+        is_godown_manager()
+            ? 'No active Godown is assigned to your account. Ask an administrator to assign one.'
+            : 'No active store is assigned to your account. Ask an administrator to grant shop/store access.'
+    );
     redirect('invoices.php');
 }
 $requested_store_id = $linked_order
@@ -74,7 +79,7 @@ $requested_store_id = $linked_order
 if ($requested_store_id <= 0) {
     $requested_store_id = (int)$stores[0]['warehouse_id'];
 }
-$selected_store = find_accessible_store($requested_store_id, false);
+$selected_store = find_accessible_store($requested_store_id, false, is_godown_manager());
 if (!$selected_store) {
     if ($linked_order) {
         flash_set('danger', 'The order store is no longer active or accessible.');
@@ -111,7 +116,7 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                     $error = 'The selected shop does not have an active inventory location.';
                     $shop_id = null;
                 } else {
-                    $loc = find_accessible_store($resolved, false);
+                    $loc = find_accessible_store($resolved, false, is_godown_manager());
                     if (!$loc) {
                         $error = 'The selected shop inventory location is not active or accessible.';
                         $shop_id = null;
@@ -124,10 +129,10 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
         }
         if ($warehouse_id <= 0) {
             $warehouse_id = (int)($_POST['warehouse_id'] ?? $selected_store_id);
-            $invoice_store = find_accessible_store($warehouse_id, false);
+            $invoice_store = find_accessible_store($warehouse_id, false, is_godown_manager());
         }
     } else {
-        $invoice_store = find_accessible_store($warehouse_id, false);
+        $invoice_store = find_accessible_store($warehouse_id, false, is_godown_manager());
     }
     $issue_date = $_POST['issue_date'] ?? date('Y-m-d');
     $due_date = $_POST['due_date'] ?? '';
@@ -217,6 +222,7 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                 $error = 'Add at least one item with a quantity.';
             } else {
                 $grand_total = $subtotal + $tax_total;
+                $order_stock_dispatched = false;
 
                 // Invoice number
                 $settings = fetch_one("SELECT * FROM system_settings WHERE tenant_id = ?", $current_user->tenant_id);
@@ -240,6 +246,10 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                         if ((int)$locked_order['warehouse_id'] !== $warehouse_id) {
                             throw new Exception('The selected store does not match the confirmed order store.');
                         }
+                        $order_stock_dispatched = order_stock_was_dispatched(
+                            $order_id,
+                            (int)$current_user->tenant_id
+                        );
                     }
 
                     // Aggregate duplicate product lines before checking stock so
@@ -263,6 +273,9 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                             ['active'],
                             true
                         );
+                        if ($order_stock_dispatched && $active_reservations) {
+                            throw new Exception('The dispatched order still has active stock reservations. Contact an administrator before invoicing.');
+                        }
                         if ($active_reservations) {
                             $reservation_totals = [];
                             foreach ($active_reservations as $reservation) {
@@ -291,29 +304,31 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                     // Reservations from other orders reduce what this document
                     // may take. The order being fulfilled may use its own hold.
                     ksort($line_totals);
-                    foreach ($line_totals as $pid => $requested_qty) {
-                        $stock = fetch_one(
-                            "SELECT quantity FROM inventory_stock
-                             WHERE product_id = ? AND warehouse_id = ? AND tenant_id = ? FOR UPDATE",
-                            $pid, $warehouse_id, $current_user->tenant_id
-                        );
-                        $reserved = reserved_stock_quantity(
-                            (int)$current_user->tenant_id,
-                            $pid,
-                            (int)$warehouse_id,
-                            $linked_order ? $order_id : 0
-                        );
-                        $on_hand = $stock ? (float)$stock['quantity'] : 0.0;
-                        $available = $on_hand - $reserved;
-                        if ($available + 0.0001 < $requested_qty) {
-                            throw new Exception(
-                                'Insufficient available stock for ' . $line_names[$pid]
-                                . ' at ' . store_label($invoice_store)
-                                . ' (requested: ' . $requested_qty
-                                . ', available: ' . max(0, $available)
-                                . ', on hand: ' . $on_hand
-                                . ', reserved by other orders: ' . $reserved . ').'
+                    if (!$order_stock_dispatched) {
+                        foreach ($line_totals as $pid => $requested_qty) {
+                            $stock = fetch_one(
+                                "SELECT quantity FROM inventory_stock
+                                 WHERE product_id = ? AND warehouse_id = ? AND tenant_id = ? FOR UPDATE",
+                                $pid, $warehouse_id, $current_user->tenant_id
                             );
+                            $reserved = reserved_stock_quantity(
+                                (int)$current_user->tenant_id,
+                                $pid,
+                                (int)$warehouse_id,
+                                $linked_order ? $order_id : 0
+                            );
+                            $on_hand = $stock ? (float)$stock['quantity'] : 0.0;
+                            $available = $on_hand - $reserved;
+                            if ($available + 0.0001 < $requested_qty) {
+                                throw new Exception(
+                                    'Insufficient available stock for ' . $line_names[$pid]
+                                    . ' at ' . store_label($invoice_store)
+                                    . ' (requested: ' . $requested_qty
+                                    . ', available: ' . max(0, $available)
+                                    . ', on hand: ' . $on_hand
+                                    . ', reserved by other orders: ' . $reserved . ').'
+                                );
+                            }
                         }
                     }
 
@@ -346,7 +361,7 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                         $stmt->execute();
                         $stmt->close();
 
-                        if (empty($product['is_service'])) {
+                        if (empty($product['is_service']) && !$order_stock_dispatched) {
                             $stmt = $conn->prepare(
                                 "UPDATE inventory_stock SET quantity = quantity - ? WHERE product_id = ? AND warehouse_id = ? AND tenant_id = ?"
                             );
@@ -404,8 +419,11 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                     audit_log('create', 'invoice', $invoice_id, 'Invoice ' . $invoice_number . ' created'
                         . ($linked_order ? ' for order ' . $linked_order['order_number'] : ''));
                     if ($linked_order) {
-                        audit_log('fulfil', 'order', $order_id, 'Order fulfilled by invoice ' . $invoice_number . '; stock deducted once through invoice');
-                        flash_set('success', 'Invoice ' . $invoice_number . ' created and order ' . $linked_order['order_number'] . ' fulfilled. Stock was deducted once and the reservation was consumed.');
+                        $stock_message = $order_stock_dispatched
+                            ? 'Stock was already deducted when the order entered transport.'
+                            : 'Stock was deducted once through the invoice.';
+                        audit_log('fulfil', 'order', $order_id, 'Order fulfilled by invoice ' . $invoice_number . '. ' . $stock_message);
+                        flash_set('success', 'Invoice ' . $invoice_number . ' created and order ' . $linked_order['order_number'] . ' fulfilled. ' . $stock_message);
                     } else {
                         flash_set('success', 'Invoice ' . $invoice_number . ' created successfully.');
                     }
@@ -505,7 +523,7 @@ $cur = tenant_currency();
                     </div>
                     <div class="row">
                         <div class="col-md-4 form-group">
-                            <label>Store <span class="text-danger">*</span></label>
+                            <label><?php echo is_godown_manager() ? 'Godown' : 'Store'; ?> <span class="text-danger">*</span></label>
                             <?php if ($linked_order): ?>
                                 <input type="hidden" name="warehouse_id" value="<?php echo (int)$selected_store_id; ?>">
                                 <div class="form-control-plaintext"><?php echo e(store_label($selected_store)); ?></div>
@@ -516,7 +534,7 @@ $cur = tenant_currency();
                                         <option value="<?php echo (int)$store['warehouse_id']; ?>" <?php echo (int)$store['warehouse_id'] === $selected_store_id ? 'selected' : ''; ?>><?php echo e(store_label($store)); ?></option>
                                     <?php endforeach; ?>
                                 </select>
-                                <small class="text-muted">Stock is deducted from this store.</small>
+                                <small class="text-muted">Stock is deducted from this <?php echo is_godown_manager() ? 'Godown' : 'store'; ?>.</small>
                             <?php endif; ?>
                         </div>
                     </div>

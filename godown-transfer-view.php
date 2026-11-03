@@ -1,7 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
-require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers']);
+require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers', 'manage_inventory', 'manage_shops']);
 $page_title = 'Stock Transfer';
 
 $tenant_id = (int)$current_user->tenant_id;
@@ -17,6 +17,7 @@ function transfer_load(int $transfer_id, int $tenant_id): ?array
         "SELECT t.*,
                 s.name destination_shop_name, s.code destination_shop_code,
                 w.name destination_store_name, w.code destination_store_code,
+                w.location_type destination_location_type,
                 sw.name source_warehouse_name, sw.code source_warehouse_code,
                 sw.location_type source_location_type, sw.is_active source_is_active,
                 ssw.name source_shop_name,
@@ -60,6 +61,43 @@ function transfer_items(int $transfer_id, int $tenant_id, bool $lock = false, bo
     $sql .= $product_order ? ' ORDER BY ti.product_id' : ' ORDER BY ti.line_no, ti.item_id';
     if ($lock) $sql .= ' FOR UPDATE';
     return fetch_all($sql, $transfer_id, $tenant_id);
+}
+
+function transfer_locked_locations(array $transfer, int $tenant_id): array
+{
+    $source = fetch_one(
+        "SELECT w.*, s.is_active shop_is_active
+           FROM warehouses w
+           LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1
+            AND w.location_type IN ('godown', 'store', 'shop')
+            AND (w.location_type = 'godown' OR s.is_active = 1)
+          FOR UPDATE",
+        (int)$transfer['source_warehouse_id'],
+        $tenant_id
+    );
+    $destination = fetch_one(
+        "SELECT w.*, s.is_active shop_is_active
+           FROM warehouses w
+           JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
+            AND w.is_active = 1 AND s.is_active = 1
+            AND w.location_type IN ('store', 'shop')
+          FOR UPDATE",
+        (int)$transfer['destination_warehouse_id'],
+        $tenant_id,
+        (int)$transfer['destination_shop_id']
+    );
+    if (!$source || !$destination) {
+        throw new RuntimeException('The source or destination location is no longer active.');
+    }
+    if (
+        (int)$source['warehouse_id'] === (int)$destination['warehouse_id']
+        || !stock_transfer_destination_allowed((string)$source['location_type'], (string)$destination['location_type'])
+    ) {
+        throw new RuntimeException('The transfer locations are invalid or not allowed.');
+    }
+    return [$source, $destination];
 }
 
 function transfer_source_access(array $transfer): ?array
@@ -106,41 +144,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($action === 'approve') {
-            if (!can('approve_godown_transfers')) {
-                throw new RuntimeException('You do not have permission to approve transfers.');
-            }
             $source = transfer_source_access($locked);
             if (!$source) {
                 throw new RuntimeException('You do not have access to the source location.');
+            }
+            if (!stock_transfer_can_approve_from_location($source)) {
+                throw new RuntimeException('You do not have permission to approve transfers from this location.');
             }
             if ($locked['status'] !== 'draft') {
                 throw new RuntimeException('Only a requested transfer can be approved.');
             }
 
-            $source_lock = fetch_one(
-                "SELECT w.* FROM warehouses w
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store')
-                    AND w.is_active = 1
-                  FOR UPDATE",
-                (int)$locked['source_warehouse_id'],
-                $tenant_id
-            );
-            if (!$source_lock) {
-                throw new RuntimeException('The source is no longer an active Godown or store.');
-            }
-            $destination_lock = fetch_one(
-                "SELECT w.* FROM warehouses w
-                   JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
-                    AND w.is_active = 1 AND s.is_active = 1 AND w.location_type = 'store'
-                  FOR UPDATE",
-                (int)$locked['destination_warehouse_id'],
-                $tenant_id,
-                (int)$locked['destination_shop_id']
-            );
-            if (!$destination_lock) {
-                throw new RuntimeException('The destination store is no longer active.');
-            }
+            [$source_lock, $destination_lock] = transfer_locked_locations($locked, $tenant_id);
             $item_count = fetch_one(
                 "SELECT COUNT(*) c FROM stock_transfer_items WHERE transfer_id = ? AND tenant_id = ?",
                 $transfer_id,
@@ -172,41 +187,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($action === 'dispatch') {
-            if (!can('dispatch_godown_transfers')) {
-                throw new RuntimeException('You do not have permission to dispatch transfers.');
-            }
             $source = transfer_source_access($locked);
             if (!$source) {
                 throw new RuntimeException('You do not have access to the source location.');
+            }
+            if (!stock_transfer_can_dispatch_from_location($source)) {
+                throw new RuntimeException('You do not have permission to dispatch transfers from this location.');
             }
             if ($locked['status'] !== 'approved') {
                 throw new RuntimeException('Only an approved transfer can be dispatched.');
             }
 
-            $source_lock = fetch_one(
-                "SELECT w.* FROM warehouses w
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store')
-                    AND w.is_active = 1
-                  FOR UPDATE",
-                (int)$locked['source_warehouse_id'],
-                $tenant_id
-            );
-            if (!$source_lock) {
-                throw new RuntimeException('The source is no longer an active Godown or store.');
-            }
-            $destination_lock = fetch_one(
-                "SELECT w.* FROM warehouses w
-                   JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
-                    AND w.is_active = 1 AND s.is_active = 1 AND w.location_type = 'store'
-                  FOR UPDATE",
-                (int)$locked['destination_warehouse_id'],
-                $tenant_id,
-                (int)$locked['destination_shop_id']
-            );
-            if (!$destination_lock) {
-                throw new RuntimeException('The destination store is no longer active.');
-            }
+            [$source_lock, $destination_lock] = transfer_locked_locations($locked, $tenant_id);
 
             $items = transfer_items($transfer_id, $tenant_id, true, true);
             if (!$items) {
@@ -248,10 +240,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $stmt = $conn->prepare(
                     "UPDATE stock_transfer_items SET dispatched_quantity = requested_quantity
-                      WHERE item_id = ? AND tenant_id = ? AND transfer_id = ?"
+                      WHERE item_id = ? AND tenant_id = ? AND transfer_id = ? AND dispatched_quantity = 0"
                 );
                 $stmt->bind_param('iii', $item['item_id'], $tenant_id, $transfer_id);
                 $stmt->execute();
+                if ($stmt->affected_rows !== 1) {
+                    $stmt->close();
+                    throw new RuntimeException('A transfer line was already dispatched. No duplicate stock movement was recorded.');
+                }
                 $stmt->close();
 
                 $movement_notes = 'Transfer ' . $locked['transfer_number'] . ' dispatched to '
@@ -297,29 +293,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($action === 'receive') {
-            if (!can('receive_godown_transfers')) {
-                throw new RuntimeException('You do not have permission to receive transfers.');
-            }
             $destination = transfer_destination_access($locked);
             if (!$destination) {
-                throw new RuntimeException('You do not have access to the destination store.');
+                throw new RuntimeException('You do not have access to the destination location.');
+            }
+            if (!stock_transfer_can_receive_at_location($destination)) {
+                throw new RuntimeException('You do not have permission to receive transfers at this location.');
             }
             if ($locked['status'] !== 'dispatched') {
                 throw new RuntimeException('Only a dispatched transfer can be received.');
             }
 
-            $destination_lock = fetch_one(
-                "SELECT w.* FROM warehouses w
-                   JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ? AND w.location_type = 'store'
-                  FOR UPDATE",
-                (int)$locked['destination_warehouse_id'],
-                $tenant_id,
-                (int)$locked['destination_shop_id']
-            );
-            if (!$destination_lock) {
-                throw new RuntimeException('The destination store is invalid.');
-            }
+            [, $destination_lock] = transfer_locked_locations($locked, $tenant_id);
 
             $items = transfer_items($transfer_id, $tenant_id, true, true);
             if (!$items) {
@@ -416,6 +401,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $transfer_id
                 );
                 $stmt->execute();
+                if ($stmt->affected_rows !== 1) {
+                    $stmt->close();
+                    throw new RuntimeException('A transfer line was already received. No duplicate stock was added.');
+                }
                 $stmt->close();
 
                 if ($received > 0) {
@@ -454,6 +443,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     );
                     $stmt->bind_param('dii', $received, $stock['stock_id'], $tenant_id);
                     $stmt->execute();
+                    if ($stmt->affected_rows !== 1) {
+                        $stmt->close();
+                        throw new RuntimeException('Destination stock could not be updated. Receipt was rolled back.');
+                    }
                     $stmt->close();
 
                     $movement_notes = 'Transfer ' . $locked['transfer_number'] . ' received from '
@@ -518,12 +511,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($action === 'cancel') {
-            if (!can('approve_godown_transfers') && !can('manage_godown')) {
-                throw new RuntimeException('You do not have permission to cancel transfers.');
-            }
             $source = transfer_source_access($locked);
             if (!$source) {
                 throw new RuntimeException('You do not have access to the source location.');
+            }
+            if (!stock_transfer_can_cancel_from_location($source)) {
+                throw new RuntimeException('You do not have permission to cancel transfers from this location.');
             }
             if (!in_array($locked['status'], ['draft', 'approved'], true)) {
                 throw new RuntimeException('Only requested or approved transfers can be cancelled. Dispatched stock cannot be erased.');
@@ -558,12 +551,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($action === 'resolve_discrepancy') {
-            if (!can('approve_godown_transfers') && !can('manage_godown')) {
-                throw new RuntimeException('You do not have permission to resolve discrepancies.');
-            }
             $source = transfer_source_access($locked);
-            if (!$source) {
-                throw new RuntimeException('You do not have access to the source location.');
+            $destination = transfer_destination_access($locked);
+            if (!$source && !$destination) {
+                throw new RuntimeException('You do not have access to either transfer location.');
+            }
+            if (!stock_transfer_can_resolve_discrepancy($source, $destination)) {
+                throw new RuntimeException('You do not have permission to resolve discrepancies.');
             }
             if ($locked['status'] !== 'discrepancy') {
                 throw new RuntimeException('Only an open discrepancy can be resolved.');
@@ -615,11 +609,12 @@ $items = transfer_items($transfer_id, $tenant_id);
 $source_store = transfer_source_access($transfer);
 $destination_store = transfer_destination_access($transfer);
 
-$can_approve = $source_store && can('approve_godown_transfers');
-$can_dispatch = $source_store && can('dispatch_godown_transfers');
-$can_receive = $destination_store && can('receive_godown_transfers');
-$can_cancel = $source_store && (can('approve_godown_transfers') || can('manage_godown'));
-$can_resolve = $source_store && (can('approve_godown_transfers') || can('manage_godown'));
+$can_approve = stock_transfer_can_approve_from_location($source_store);
+$can_dispatch = stock_transfer_can_dispatch_from_location($source_store);
+$can_receive = stock_transfer_can_receive_at_location($destination_store);
+$can_cancel = stock_transfer_can_cancel_from_location($source_store);
+$can_resolve = ($source_store || $destination_store)
+    && stock_transfer_can_resolve_discrepancy($source_store, $destination_store);
 $can_manage_godown = can('manage_godown');
 $can_request_godown = can('request_godown_transfers');
 
@@ -654,7 +649,7 @@ require_once 'sidebar.php';
     <div>
         <h1 class="page-title"><?php echo e($transfer['transfer_number']); ?></h1>
         <div class="page-sub">
-            <?php echo e(trim(($transfer['source_shop_name'] ?? '') . ' / ' . $transfer['source_warehouse_name'], ' /')); ?> → <?php echo e($transfer['destination_shop_name'] . ' / ' . $transfer['destination_store_name']); ?>
+            <?php echo e(trim(($transfer['source_shop_name'] ?? '') . ' / ' . $transfer['source_warehouse_name'], ' /')); ?> → <?php echo e($transfer['destination_shop_name'] . ' / ' . $transfer['destination_store_name'] . ' (' . $transfer['destination_location_type'] . ')'); ?>
             <span class="badge badge-<?php echo e(godown_transfer_status_class($transfer['status'])); ?> ml-2"><?php echo e(godown_transfer_status_label($transfer['status'])); ?></span>
             <?php if ((int)$transfer['has_discrepancy'] === 1): ?>
                 <span class="badge badge-danger ml-1">Discrepancy recorded</span>

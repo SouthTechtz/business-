@@ -16,7 +16,9 @@ if (!$lead) {
 }
 
 $error = '';
-$sources = ['staff' => 'Staff entry', 'phone' => 'Phone', 'whatsapp' => 'WhatsApp', 'email' => 'Email', 'referral' => 'Referral', 'walk_in' => 'Walk-in'];
+$sources = ['staff' => 'Staff entry', 'phone' => 'Phone', 'whatsapp' => 'WhatsApp', 'email' => 'Email', 'referral' => 'Referral', 'walk_in' => 'Walk-in', 'storefront' => 'Storefront'];
+$statuses = lead_statuses();
+$allowed_statuses = array_merge([(string)$lead['status']], lead_allowed_transitions((string)$lead['status']));
 $contacts = fetch_all(
     "SELECT contact_id, first_name, last_name, company_name, phone, mobile, email, address, city
      FROM contacts WHERE tenant_id = ? AND is_active = 1 ORDER BY first_name, company_name",
@@ -33,10 +35,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = trim($_POST['email'] ?? '');
     $location = trim($_POST['location'] ?? '');
     $source = (string)($_POST['source'] ?? 'staff');
+    $target_status = (string)($_POST['status'] ?? $lead['status']);
     $next_follow_up_at = trim($_POST['next_follow_up_at'] ?? '');
     $notes = trim($_POST['notes'] ?? '');
 
     if (!isset($sources[$source])) $source = 'staff';
+    if (!isset($statuses[$target_status]) || !in_array($target_status, $allowed_statuses, true)) {
+        $error = 'That lead status change is not allowed.';
+    }
+    if ($error === '' && lead_follow_up_date_required($target_status, $next_follow_up_at)) {
+        $error = 'Enter a next follow-up date before setting the lead status to Follow Up.';
+    }
     if ($contact_id > 0 && !fetch_one(
         "SELECT 1 FROM contacts WHERE contact_id = ? AND tenant_id = ? AND is_active = 1",
         $contact_id,
@@ -54,11 +63,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($error === '') {
-        $stmt = $conn->prepare(
-            "UPDATE leads SET contact_id = ?, contact_name = ?, company_name = ?, phone = ?, email = ?,
-                location = ?, source = ?, next_follow_up_at = ?, notes = ?
-              WHERE lead_id = ? AND tenant_id = ?"
-        );
         $contact_db = $contact_id ?: null;
         $company_db = $company_name !== '' ? $company_name : null;
         $phone_db = $phone !== '' ? $phone : null;
@@ -66,27 +70,94 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $location_db = $location !== '' ? $location : null;
         $follow_db = $next_follow_up_at !== '' ? $next_follow_up_at : null;
         $notes_db = $notes !== '' ? $notes : null;
-        $stmt->bind_param(
-            'issssssssii',
-            $contact_db,
-            $contact_name,
-            $company_db,
-            $phone_db,
-            $email_db,
-            $location_db,
-            $source,
-            $follow_db,
-            $notes_db,
-            $id,
-            $current_user->tenant_id
-        );
-        if (!$stmt->execute()) {
-            $error = 'Could not update the lead: ' . $stmt->error;
+        $storefront_request = $target_status === 'confirmed' && $lead['source'] === 'storefront'
+            ? fetch_one(
+                "SELECT converted_order_id FROM storefront_lead_requests WHERE lead_id = ? AND tenant_id = ?",
+                $id,
+                (int)$current_user->tenant_id
+            )
+            : null;
+        $requires_storefront_verification = $storefront_request
+            && empty($storefront_request['converted_order_id']);
+        $status_to_save = $requires_storefront_verification
+            ? (string)$lead['status']
+            : $target_status;
+        $status_changed = $status_to_save !== (string)$lead['status'];
+
+        $conn->begin_transaction();
+        try {
+            $stmt = $conn->prepare(
+                "UPDATE leads SET contact_id = ?, contact_name = ?, company_name = ?, phone = ?, email = ?,
+                    location = ?, source = ?, next_follow_up_at = ?, notes = ?, status = ?,
+                    lost_reason = CASE WHEN ? = 'cancelled' THEN lost_reason ELSE NULL END,
+                    converted_at = CASE WHEN ? = 'confirmed' THEN COALESCE(converted_at, NOW()) ELSE NULL END
+                  WHERE lead_id = ? AND tenant_id = ? AND status = ?"
+            );
+            $stmt->bind_param(
+                'i' . str_repeat('s', 11) . 'iis',
+                $contact_db,
+                $contact_name,
+                $company_db,
+                $phone_db,
+                $email_db,
+                $location_db,
+                $source,
+                $follow_db,
+                $notes_db,
+                $status_to_save,
+                $status_to_save,
+                $status_to_save,
+                $id,
+                $current_user->tenant_id,
+                $lead['status']
+            );
+            if (!$stmt->execute()) {
+                throw new RuntimeException($stmt->error);
+            }
+            if ($status_changed && $stmt->affected_rows !== 1) {
+                throw new RuntimeException('This lead was changed by someone else. Reload and try again.');
+            }
             $stmt->close();
-        } else {
-            $stmt->close();
+
+            if ($status_changed) {
+                record_lead_activity(
+                    $id,
+                    (int)$current_user->tenant_id,
+                    'status_change',
+                    'Status: ' . ($statuses[$lead['status']] ?? $lead['status'])
+                        . ' → ' . $statuses[$status_to_save],
+                    $status_to_save === 'confirmed' ? 'Lead confirmed.' : null
+                );
+            }
+            $conn->commit();
+        } catch (Throwable $ex) {
+            $conn->rollback();
+            $error = 'Could not update the lead: ' . $ex->getMessage();
+        }
+
+        if ($error === '') {
             audit_log('update', 'lead', $id, 'Lead ' . $lead['lead_number'] . ' updated');
-            flash_set('success', 'Lead updated.');
+            if ($requires_storefront_verification) {
+                flash_set('info', 'Choose the responsible shop to confirm this request and create its order.');
+                redirect('lead-verify.php?id=' . $id);
+            }
+            if ($status_changed && $status_to_save === 'confirmed') {
+                audit_log('set_status', 'lead', $id, 'Status changed to confirmed');
+                if (can('manage_orders') && $lead['source'] !== 'storefront') {
+                    $linked = fetch_one(
+                        "SELECT order_id FROM orders WHERE lead_id = ? AND tenant_id = ? LIMIT 1",
+                        $id,
+                        (int)$current_user->tenant_id
+                    );
+                    if (!$linked) {
+                        flash_set('success', 'Lead confirmed. Add the order lines to complete the conversion.');
+                        redirect('order-add.php?lead_id=' . $id . ($contact_id ? '&contact_id=' . $contact_id : ''));
+                    }
+                }
+            }
+            flash_set('success', $status_changed
+                ? 'Lead updated and status changed to ' . $statuses[$status_to_save] . '.'
+                : 'Lead updated.');
             redirect('lead-view.php?id=' . $id);
         }
     }
@@ -99,6 +170,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'email' => $email,
         'location' => $location,
         'source' => $source,
+        'status' => $target_status,
         'next_follow_up_at' => $next_follow_up_at,
         'notes' => $notes,
     ]);
@@ -111,7 +183,7 @@ require_once 'sidebar.php';
 <div class="page-head">
     <div>
         <h1 class="page-title">Edit <?php echo e($lead['lead_number']); ?></h1>
-        <div class="page-sub">Update contact details and follow-up scheduling. Status and assignment are changed from the lead page.</div>
+        <div class="page-sub">Update contact details, follow-up scheduling, and lead status.</div>
     </div>
     <a href="lead-view.php?id=<?php echo $id; ?>" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back to Lead</a>
 </div>
@@ -172,8 +244,21 @@ require_once 'sidebar.php';
                             </select>
                         </div>
                         <div class="col-md-3 form-group">
-                            <label>Next Follow-up</label>
-                            <input type="date" name="next_follow_up_at" class="form-control" value="<?php echo e($lead['next_follow_up_at']); ?>">
+                            <label for="leadNextFollowUp">Next Follow-up <span class="text-danger follow-up-required-mark" <?php echo $lead['status'] === 'follow_up' ? '' : 'hidden'; ?>>*</span></label>
+                            <input type="date" name="next_follow_up_at" id="leadNextFollowUp" class="form-control" value="<?php echo e($lead['next_follow_up_at']); ?>" <?php echo $lead['status'] === 'follow_up' ? 'required' : ''; ?>>
+                        </div>
+                        <div class="col-md-3 form-group">
+                            <label for="leadStatus">Status</label>
+                            <select name="status" id="leadStatus" class="form-control" required>
+                                <?php foreach ($allowed_statuses as $status_option): ?>
+                                    <option value="<?php echo e($status_option); ?>" <?php echo (string)$lead['status'] === $status_option ? 'selected' : ''; ?>>
+                                        <?php echo e($statuses[$status_option] ?? $status_option); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <?php if ($lead['source'] === 'storefront' && $lead['status'] !== 'confirmed'): ?>
+                                <small class="form-text text-muted">Confirming a storefront request opens shop verification before its order is created.</small>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <div class="form-group">
@@ -189,6 +274,17 @@ require_once 'sidebar.php';
 
 <script>
     $(function () {
+        var $status = $('#leadStatus');
+        var $followUp = $('#leadNextFollowUp');
+        var $requiredMark = $('.follow-up-required-mark');
+        function updateFollowUpRequirement() {
+            var required = $status.val() === 'follow_up';
+            $followUp.prop('required', required);
+            $requiredMark.prop('hidden', !required);
+        }
+        $status.on('change', updateFollowUpRequirement);
+        updateFollowUpRequirement();
+
         $('#editLeadContact').on('change', function () {
             var opt = $(this).find('option:selected');
             if (!$(this).val()) return;

@@ -1,5 +1,5 @@
 <?php
-$sf_footer_company = trim((string)($sf_settings['company_name'] ?? '')) ?: APP_NAME;
+$sf_footer_company = storefront_company_name($sf_tenant, $sf_settings);
 $sf_footer_phone = trim((string)($sf_settings['company_phone'] ?? ''));
 $sf_footer_email = trim((string)($sf_settings['company_email'] ?? ''));
 $sf_footer_address = trim((string)($sf_settings['company_address'] ?? ''));
@@ -9,7 +9,7 @@ $sf_payment_methods = storefront_payment_methods($sf_tenant_id);
 <footer class="sf-footer" id="footer">
     <div class="sf-container">
         <div class="sf-footer-grid">
-            <div class="sf-footer-about">
+            <div class="sf-footer-about" id="contact">
                 <div class="sf-footer-brand"><?php echo e($sf_footer_company); ?></div>
                 <p>Browse the catalogue and send an order request. The store confirms availability, final pricing, delivery and payment with you before an order is fulfilled.</p>
                 <?php if ($sf_footer_phone !== ''): ?>
@@ -94,22 +94,36 @@ $sf_payment_methods = storefront_payment_methods($sf_tenant_id);
         </div>
     </div>
 </footer>
-<div id="sf-product-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="sf-modal-name">
-    <div class="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl">
-        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-            <h2 id="sf-modal-name" class="text-lg font-bold text-gray-900"></h2>
-            <button type="button" id="sf-modal-close" class="text-gray-400 hover:text-gray-700 text-2xl leading-none" aria-label="Close">&times;</button>
+<div id="sf-product-modal" class="sf-product-modal hidden" role="dialog" aria-modal="true" aria-labelledby="sf-modal-name">
+    <div class="sf-modal-card">
+        <div class="sf-modal-header">
+            <h2 id="sf-modal-name"></h2>
+            <button type="button" id="sf-modal-close" aria-label="Close">&times;</button>
         </div>
-        <div class="grid md:grid-cols-2 gap-0">
-            <div class="bg-gray-50 p-4 flex items-center justify-center">
-                <img id="sf-modal-image" src="" alt="" class="max-h-80 w-full object-contain rounded-xl">
+        <div class="sf-modal-content">
+            <div class="sf-modal-image-wrap">
+                <img id="sf-modal-image" src="" alt="">
+                <span id="sf-modal-image-placeholder"><i class="fa fa-cube" aria-hidden="true"></i> No product image</span>
             </div>
-            <div class="p-6 flex flex-col gap-3">
-                <p id="sf-modal-price" class="text-2xl font-extrabold text-brand-600"></p>
-                <p id="sf-modal-unit" class="text-sm text-gray-500"></p>
-                <p id="sf-modal-desc" class="text-sm text-gray-600 leading-relaxed"></p>
-                <p id="sf-modal-stock" class="text-sm font-semibold"></p>
-                <form method="post" action="storefront-cart-action.php" class="sf-add-form mt-2">
+            <div class="sf-modal-product-info">
+                <div class="sf-modal-category" id="sf-modal-category"></div>
+                <div class="sf-modal-price-row">
+                    <p id="sf-modal-price"></p>
+                    <span id="sf-modal-compare"></span>
+                    <span id="sf-modal-unit"></span>
+                </div>
+                <p id="sf-modal-desc"></p>
+                <div class="sf-modal-attributes" aria-label="Product details">
+                    <div class="sf-modal-attribute" id="sf-detail-code-row"><span>Product code</span><strong id="sf-modal-code"></strong></div>
+                    <div class="sf-modal-attribute" id="sf-detail-sku-row"><span>SKU</span><strong id="sf-modal-sku"></strong></div>
+                    <div class="sf-modal-attribute" id="sf-detail-barcode-row"><span>Barcode</span><strong id="sf-modal-barcode"></strong></div>
+                    <div class="sf-modal-attribute" id="sf-detail-brand-row"><span>Brand</span><strong id="sf-modal-brand"></strong></div>
+                    <div class="sf-modal-attribute" id="sf-detail-size-row"><span>Size / pack</span><strong id="sf-modal-size"></strong></div>
+                    <div class="sf-modal-attribute" id="sf-detail-color-row"><span>Colour</span><strong id="sf-modal-color"></strong></div>
+                    <div class="sf-modal-attribute" id="sf-detail-type-row"><span>Type</span><strong id="sf-modal-type"></strong></div>
+                </div>
+                <p id="sf-modal-stock"></p>
+                <form method="post" action="storefront-cart-action.php" class="sf-add-form">
                     <?php echo csrf_field(); ?>
                     <input type="hidden" name="action" value="add">
                     <input type="hidden" name="product_id" id="sf-modal-product-id" value="">
@@ -121,7 +135,7 @@ $sf_payment_methods = storefront_payment_methods($sf_tenant_id);
                         </button>
                     </div>
                 </form>
-                <a id="sf-modal-link" href="#" class="text-sm text-brand-600 hover:underline mt-1">View full details &rarr;</a>
+                <a id="sf-modal-link" href="#">View full details &rarr;</a>
             </div>
         </div>
     </div>
@@ -136,39 +150,72 @@ $sf_payment_methods = storefront_payment_methods($sf_tenant_id);
     var price = document.getElementById('sf-modal-price');
     var unit = document.getElementById('sf-modal-unit');
     var desc = document.getElementById('sf-modal-desc');
+    var compare = document.getElementById('sf-modal-compare');
+    var category = document.getElementById('sf-modal-category');
     var stock = document.getElementById('sf-modal-stock');
     var pid = document.getElementById('sf-modal-product-id');
     var qty = document.getElementById('sf-modal-qty');
     var addBtn = document.getElementById('sf-modal-add');
     var link = document.getElementById('sf-modal-link');
+    var imagePlaceholder = document.getElementById('sf-modal-image-placeholder');
+    var detailFields = {
+        code: 'code',
+        sku: 'sku',
+        barcode: 'barcode',
+        brand: 'brand',
+        size: 'size',
+        color: 'color',
+        type: 'type'
+    };
+
+    function setDetail(field, value) {
+        var row = document.getElementById('sf-detail-' + field + '-row');
+        var detail = document.getElementById('sf-modal-' + field);
+        var text = value ? String(value).trim() : '';
+        detail.textContent = text;
+        row.hidden = text === '';
+    }
 
     function open(data) {
         name.textContent = data.name || '';
         price.textContent = data.price || '';
         unit.textContent = data.unit ? ('per ' + data.unit) : '';
-        desc.textContent = data.description || '';
-        if (data.image) { img.src = data.image; img.alt = data.name || ''; img.style.display = ''; }
-        else { img.style.display = 'none'; }
+        desc.textContent = data.description || 'No description available.';
+        category.textContent = data.category || 'Catalogue';
+        compare.textContent = data.compare || '';
+        compare.hidden = !data.compare;
+        Object.keys(detailFields).forEach(function (field) {
+            setDetail(field, data[detailFields[field]]);
+        });
+        if (data.image) {
+            img.src = data.image;
+            img.alt = data.name || '';
+            img.style.display = '';
+            imagePlaceholder.style.display = 'none';
+        } else {
+            img.removeAttribute('src');
+            img.alt = '';
+            img.style.display = 'none';
+            imagePlaceholder.style.display = 'flex';
+        }
         pid.value = data.product_id || '';
         qty.value = 1;
         qty.max = data.max_qty && data.max_qty > 0 ? data.max_qty : 999;
         if (data.available === '1') {
             stock.textContent = (data.max_qty > 0 && data.max_qty <= 5) ? ('Low stock: ' + data.max_qty + ' left') : 'In stock';
-            stock.className = 'text-sm font-semibold text-green-600';
+            stock.className = 'sf-modal-stock is-in-stock';
             addBtn.disabled = false;
         } else {
             stock.textContent = 'Out of stock';
-            stock.className = 'text-sm font-semibold text-red-600';
+            stock.className = 'sf-modal-stock is-out-stock';
             addBtn.disabled = true;
         }
         link.href = data.url || '#';
         modal.classList.remove('hidden');
-        modal.classList.add('flex');
         document.body.style.overflow = 'hidden';
     }
     function close() {
         modal.classList.add('hidden');
-        modal.classList.remove('flex');
         document.body.style.overflow = '';
     }
     closeBtn && closeBtn.addEventListener('click', close);

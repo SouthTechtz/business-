@@ -47,6 +47,15 @@ function storefront_settings($tenant) {
     return $settings;
 }
 
+/** Official business name shown throughout the storefront. */
+function storefront_company_name($tenant, $settings = null) {
+    if ($settings === null) $settings = storefront_settings($tenant);
+    $name = trim((string)($settings['company_name'] ?? ''));
+    if ($name === '') $name = trim((string)($tenant['name'] ?? ''));
+    if ($name === '') $name = system_title((int)($tenant['tenant_id'] ?? 0));
+    return $name;
+}
+
 /** Currency used by the public catalogue. */
 function storefront_currency($tenant, $settings = null) {
     if (is_array($settings) && !empty($settings['default_currency'])) {
@@ -472,7 +481,6 @@ function storefront_render_product_card($product, $currency) {
     $compare = isset($product['compare_at_price']) ? (float)$product['compare_at_price'] : 0.0;
     $is_sale = $compare > (float)$product['sale_price'];
     $desc = trim((string)($product['description'] ?? ''));
-    if ($desc === '') $desc = 'See the product page for details.';
 
     $data = [
         'product_id'  => (int)$product['product_id'],
@@ -485,6 +493,14 @@ function storefront_render_product_card($product, $currency) {
         'max_qty'     => (int)$max_qty,
         'description' => $desc,
         'url'         => $url,
+        'code'        => (string)($product['code'] ?? ''),
+        'sku'         => (string)($product['sku'] ?? ''),
+        'barcode'     => (string)($product['barcode'] ?? ''),
+        'brand'       => (string)($product['brand'] ?? ''),
+        'category'    => (string)($product['category_name'] ?? ''),
+        'size'        => (string)($product['variant_size'] ?? ''),
+        'color'       => (string)($product['variant_color'] ?? ''),
+        'type'        => (int)($product['is_service'] ?? 0) === 1 ? 'Service' : 'Product',
     ];
 
     echo '<article class="sf-product-card sf-product-card--square" data-sf-product=\'' . e(json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) . '\' role="button" tabindex="0">';

@@ -1,16 +1,66 @@
+<?php
+$is_shop_manager = is_shop_manager();
+    $sidebar_shop_access = ($is_shop_manager || can("manage_shops"))
+        ? accessible_shops(null, !$is_shop_manager)
+        : [];
+    $sidebar_store_access = ($is_shop_manager || can("manage_shops") || !tenant_admin_scope())
+        ? accessible_stores(null, !$is_shop_manager)
+        : [];
+    $sidebar_shop = $sidebar_shop_access ? $sidebar_shop_access[0] : null;
+    $sidebar_store = $sidebar_store_access ? $sidebar_store_access[0] : null;
+    ?>
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-            <div class="brand-text"><?php echo e(APP_NAME); ?><small>Business Suite</small></div>
+            <div class="brand-text"><?php echo e(system_title()); ?><small>Business Suite</small></div>
         </div>
 
-        <div class="sidebar-menu-title">Overview</div>
+        <?php if (is_godown_manager()): ?>
+        <div class="sidebar-menu-title">Godown</div>
         <ul class="sidebar-menu">
-            <?php if (can("view_dashboard")): ?>
-            <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "dashboard.php" ? "active" : ""; ?>">
-                <a href="dashboard.php"><i class="fa fa-tachometer"></i><span>Dashboard</span></a>
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "godown.php" ? "active" : ""; ?>">
+                <a href="godown.php"><i class="fa fa-archive"></i><span>My Godown</span></a>
+            </li>
+            <?php if (can("manage_inventory")): ?>
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "inventory.php" ? "active" : ""; ?>">
+                <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span></a>
+            </li>
+            <?php endif; ?>
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["godown-transfers.php", "godown-transfer-add.php", "godown-transfer-view.php"]) ? "active" : ""; ?>">
+                <a href="godown-transfers.php"><i class="fa fa-exchange"></i><span>Stock Transfers</span></a>
+            </li>
+            <?php if (can("manage_expenses")): ?>
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "expenses.php" ? "active" : ""; ?>">
+                <a href="expenses.php"><i class="fa fa-money"></i><span>Expenses</span></a>
+            </li>
+            <?php endif; ?>
+            <?php if (can("manage_purchases")): ?>
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["purchases.php", "purchase-add.php", "purchase-edit.php", "purchase-view.php", "purchase-delete.php"]) ? "active" : ""; ?>">
+                <a href="purchases.php"><i class="fa fa-shopping-cart"></i><span>Purchases</span></a>
+            </li>
+            <?php endif; ?>
+            <?php if (can("manage_suppliers")): ?>
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "suppliers.php" ? "active" : ""; ?>">
+                <a href="suppliers.php"><i class="fa fa-truck"></i><span>Suppliers</span></a>
+            </li>
+            <?php endif; ?>
+            <?php if (can("manage_invoices")): ?>
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["invoices.php", "invoice-add.php", "invoice-details.php", "invoice-edit.php", "invoice-cancel.php", "invoice-print.php"]) ? "active" : ""; ?>">
+                <a href="invoices.php"><i class="fa fa-file-text"></i><span>Invoices</span></a>
+            </li>
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["quotations.php", "quotation-add.php", "quotation-details.php", "quotation-print.php", "quotation-download.php"]) ? "active" : ""; ?>">
+                <a href="quotations.php"><i class="fa fa-file-signature"></i><span>Quotations</span></a>
             </li>
             <?php endif; ?>
         </ul>
+        <?php else: ?>
+        <?php if (tenant_admin_scope() && can("view_dashboard")): ?>
+        <div class="sidebar-menu-title">Overview</div>
+        <ul class="sidebar-menu">
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "dashboard.php" ? "active" : ""; ?>">
+                <a href="dashboard.php"><i class="fa fa-tachometer"></i><span>Dashboard</span></a>
+            </li>
+        </ul>
+        <?php endif; ?>
 
         <div class="sidebar-menu-title">Sales &amp; Commerce</div>
         <ul class="sidebar-menu">
@@ -46,18 +96,13 @@
                 <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span></a>
             </li>
             <?php endif; ?>
-            <?php if (can("manage_godown") || can("view_godown") || can("approve_godown_transfers") || can("dispatch_godown_transfers") || can("receive_godown_transfers") || can("request_godown_transfers")): ?>
+            <?php if (can("manage_godown") || can("view_godown") || can("approve_godown_transfers") || can("dispatch_godown_transfers") || can("receive_godown_transfers") || can("request_godown_transfers") || can("manage_inventory") || can("manage_shops")): ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["godown.php", "godown-transfers.php", "godown-transfer-add.php", "godown-transfer-view.php", "inventory-adjust.php"]) ? "active" : ""; ?>">
-                <a href="<?php echo can("manage_godown") ? "godown.php" : "godown-transfers.php"; ?>"><i class="fa fa-archive"></i><span>Central Godown</span></a>
+                <a href="<?php echo can("manage_godown") ? "godown.php" : "godown-transfers.php"; ?>"><i class="fa fa-archive"></i><span><?php echo can("manage_godown") ? "Central Godown" : "Stock Transfers"; ?></span></a>
             </li>
             <?php endif; ?>
-            <?php if (can("manage_shops")): ?>
-            <?php
-            $sidebar_shop = accessible_shops();
-            $sidebar_shop = $sidebar_shop ? $sidebar_shop[0] : null;
-            $sidebar_store = accessible_stores(null, false);
-            $sidebar_store = $sidebar_store ? $sidebar_store[0] : null;
-            ?>
+            <?php if (can("manage_shops") || $is_shop_manager || $sidebar_store): ?>
+            <?php if (can("manage_shops") || $is_shop_manager): ?>
             <?php if ($sidebar_shop): ?>
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "shop-view.php" ? "active" : ""; ?>">
                 <a href="shop-view.php?id=<?php echo (int)$sidebar_shop["shop_id"]; ?>"><i class="fa fa-building-o"></i><span>Shop</span></a>
@@ -65,7 +110,8 @@
             <?php else: ?>
             <li class="disabled"><a href="shops.php"><i class="fa fa-building-o"></i><span>Shop (none assigned)</span></a></li>
             <?php endif; ?>
-            <?php if ($sidebar_store): ?>
+            <?php endif; ?>
+            <?php if ($sidebar_store && !$is_shop_manager): ?>
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "store-view.php" ? "active" : ""; ?>">
                 <a href="store-view.php?id=<?php echo (int)$sidebar_store["warehouse_id"]; ?>"><i class="fa fa-cube"></i><span>Store</span></a>
             </li>
@@ -140,6 +186,11 @@
 
         <div class="sidebar-menu-title">Administration &amp; System</div>
         <ul class="sidebar-menu">
+            <?php if (tenant_admin_scope() && can("manage_shops")): ?>
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["shops.php", "stores.php"]) ? "active" : ""; ?>">
+                <a href="shops.php"><i class="fa fa-building"></i><span>Inventory Locations</span></a>
+            </li>
+            <?php endif; ?>
             <?php if (can("manage_users")): ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["users.php", "user-add.php", "user-edit.php", "user-view.php", "permissions.php"]) ? "active" : ""; ?>">
                 <a href="users.php"><i class="fa fa-users"></i><span>Users</span></a>
@@ -159,6 +210,7 @@
             </li>
             <?php endif; ?>
         </ul>
+        <?php endif; ?>
 
-        <div class="sidebar-footer no-print"><?php echo e(APP_NAME); ?> v3.0 &middot; &copy; <?php echo date("Y"); ?></div>
+        <div class="sidebar-footer no-print"><?php echo e(system_title()); ?> v3.0 &middot; &copy; <?php echo date("Y"); ?></div>
     </aside>

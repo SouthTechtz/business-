@@ -22,8 +22,7 @@ $sales_by_shop = report_sales_by_shop($from, $to);
 $sales_by_product = report_sales_by_product($from, $to);
 $invoice_status_summary = report_invoice_status_summary($from, $to);
 
-// Shared safe location scope for sales reports.
-$pos_scope = report_sales_warehouse_condition('o', 'warehouse_id');
+// Shared safe location scope for invoice summaries.
 $inv_scope = report_sales_warehouse_condition('i', 'warehouse_id');
 $payment_scope = report_sales_warehouse_condition('i', 'warehouse_id');
 
@@ -32,17 +31,6 @@ $monthly_sales = fetch_all(
     "SELECT DATE_FORMAT(issue_date, '%Y-%m') month, SUM(total) total, COUNT(*) invoices
      FROM invoices i WHERE i.tenant_id = ?" . $inv_scope['sql'] . "
      GROUP BY DATE_FORMAT(issue_date, '%Y-%m') ORDER BY month DESC LIMIT 6",
-    $current_user->tenant_id, ...$inv_scope['params']
-);
-
-// Top products by invoice items
-$top_products = fetch_all(
-    "SELECT p.name, p.code, SUM(ii.quantity) qty, SUM(ii.total) total
-     FROM invoice_items ii
-     JOIN invoices i ON i.invoice_id = ii.invoice_id
-     JOIN products p ON p.product_id = ii.product_id
-     WHERE i.tenant_id = ?" . $inv_scope['sql'] . "
-     GROUP BY p.product_id ORDER BY total DESC LIMIT 5",
     $current_user->tenant_id, ...$inv_scope['params']
 );
 
@@ -119,6 +107,92 @@ $reports = [
     <div class="col-md-6 col-xl-3 mb-3"><div class="widget"><div class="widget-icon wi-red"><i class="fa fa-money"></i></div><div class="widget-info"><div class="widget-value" style="font-size:17px;"><?php echo e(money($sales_summary['invoice']['refund_due'], $cur)); ?></div><div class="widget-label">Refund Due (Not Cash Refunded)</div></div></div></div>
 </div>
 
+<div class="card mb-3">
+    <div class="card-body d-flex flex-wrap justify-content-between">
+        <span>Net POS Sales: <strong><?php echo e(money($sales_summary['pos']['net_sales'], $cur)); ?></strong></span>
+        <span>Net Invoice Sales: <strong><?php echo e(money($sales_summary['invoice']['net_sales'], $cur)); ?></strong></span>
+        <span>Returned Quantity: <strong><?php echo e((float)($sales_summary['pos']['returned_qty'] + $sales_summary['invoice']['returned_qty'])); ?></strong></span>
+        <span>Accepted for Resale: <strong><?php echo e((float)($sales_summary['pos']['resale_qty'] + $sales_summary['invoice']['resale_qty'])); ?></strong></span>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header"><h5 class="card-title">Sales by Shop</h5></div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead><tr><th>Shop</th><th class="text-right">Transactions</th><th class="text-right">POS Gross</th><th class="text-right">POS Returns</th><th class="text-right">POS Net</th><th class="text-right">Invoice Gross</th><th class="text-right">Invoice Returns</th><th class="text-right">Invoice Net</th><th class="text-right">Combined Net</th></tr></thead>
+                <tbody>
+                <?php foreach ($sales_by_shop as $shop): ?>
+                    <tr>
+                        <td><?php echo e($shop['shop_name']); ?></td>
+                        <td class="text-right"><?php echo (int)$shop['sale_count']; ?></td>
+                        <td class="text-right"><?php echo e(money($shop['pos_gross_sales'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($shop['pos_accepted_returns'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($shop['pos_net_sales'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($shop['invoice_gross_sales'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($shop['invoice_accepted_returns'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($shop['invoice_net_sales'], $cur)); ?></td>
+                        <td class="text-right font-weight-semibold"><?php echo e(money($shop['net_sales'], $cur)); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$sales_by_shop): ?><tr><td colspan="9" class="text-center text-muted py-3">No eligible sales in this period.</td></tr><?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header"><h5 class="card-title">Product Sales and Accepted Returns</h5></div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead><tr><th>Product</th><th class="text-right">Sold Qty</th><th class="text-right">Returned Qty</th><th class="text-right">Resale Qty</th><th class="text-right">Net Qty</th><th class="text-right">Gross Value</th><th class="text-right">Accepted Returns</th><th class="text-right">Net Value</th></tr></thead>
+                <tbody>
+                <?php foreach ($sales_by_product as $product): ?>
+                    <tr>
+                        <td><?php echo e($product['product_name']); ?></td>
+                        <td class="text-right"><?php echo e((float)$product['sold_qty']); ?></td>
+                        <td class="text-right"><?php echo e((float)$product['returned_qty']); ?></td>
+                        <td class="text-right"><?php echo e((float)$product['resale_qty']); ?></td>
+                        <td class="text-right"><?php echo e((float)$product['net_qty']); ?></td>
+                        <td class="text-right"><?php echo e(money($product['gross_sales'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($product['accepted_returns'], $cur)); ?></td>
+                        <td class="text-right font-weight-semibold"><?php echo e(money($product['net_sales'], $cur)); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$sales_by_product): ?><tr><td colspan="8" class="text-center text-muted py-3">No product sales in this period.</td></tr><?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header"><h5 class="card-title">Invoice Status, Balances and Returns</h5></div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead><tr><th>Status</th><th class="text-right">Invoices</th><th class="text-right">Invoice Total</th><th class="text-right">Outstanding</th><th class="text-right">Refund Due</th></tr></thead>
+                <tbody>
+                <?php foreach ($invoice_status_summary as $status): ?>
+                    <tr>
+                        <td><?php echo e($status['status_name']); ?></td>
+                        <td class="text-right"><?php echo (int)$status['invoice_count']; ?></td>
+                        <td class="text-right"><?php echo e(money($status['invoice_total'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($status['outstanding_balance'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($status['refund_due'], $cur)); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$invoice_status_summary): ?><tr><td colspan="5" class="text-center text-muted py-3">No invoices in this period.</td></tr><?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+        <div class="small text-muted p-2">Partial returns: <?php echo (int)$sales_summary['invoice']['partial_return_count']; ?> · Full returns: <?php echo (int)$sales_summary['invoice']['full_return_count']; ?> · Returned quantity is not the same as quantity accepted for resale.</div>
+    </div>
+</div>
+
 <!-- Printable reports -->
 <div class="card">
     <div class="card-header">
@@ -182,32 +256,6 @@ $reports = [
                             </tr>
                         <?php endforeach; ?>
                         <?php if (!$payments_by_month): ?><tr><td colspan="3" class="text-center text-muted py-4">No payments yet.</td></tr><?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="row">
-    <div class="col-lg-7 mb-3">
-        <div class="card">
-            <div class="card-header"><h5 class="card-title">Top Products by Revenue</h5></div>
-            <div class="card-body p-0">
-                <div class="table-responsive">
-                    <table class="table mb-0">
-                        <thead><tr><th>Product</th><th>Code</th><th class="text-right">Units Sold</th><th class="text-right">Revenue</th></tr></thead>
-                        <tbody>
-                        <?php foreach ($top_products as $row): ?>
-                            <tr>
-                                <td class="font-weight-semibold"><?php echo e($row['name']); ?></td>
-                                <td><span class="badge badge-secondary"><?php echo e($row['code']); ?></span></td>
-                                <td class="text-right"><?php echo e((float)$row['qty']); ?></td>
-                                <td class="text-right"><?php echo e(money($row['total'], $cur)); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                        <?php if (!$top_products): ?><tr><td colspan="4" class="text-center text-muted py-4">No invoice items yet.</td></tr><?php endif; ?>
                         </tbody>
                     </table>
                 </div>

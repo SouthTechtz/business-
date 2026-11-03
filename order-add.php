@@ -5,6 +5,7 @@ require_permission('manage_orders');
 $page_title = 'New Order';
 
 $error = '';
+$order_total_input = trim((string)($_POST['order_total'] ?? ''));
 
 // A confirmed lead can hand over its customer details via lead_id. The lead is
 // optional: a normal order is still created from the same form.
@@ -38,10 +39,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $customer_name = trim($_POST['customer_name'] ?? '');
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $customer_location = trim($_POST['customer_location'] ?? '');
-    $status = trim($_POST['status'] ?? 'unpaid');
+    $status = 'new';
     $stage = trim($_POST['stage'] ?? 'shop');
     $amount_paid = (float)($_POST['Amount_paid'] ?? 0);
     $notes = trim($_POST['notes'] ?? '');
+    $order_total = 0.0;
+
+    if ($lead_id > 0) {
+        if (!is_numeric($order_total_input)) {
+            $error = 'Enter the total price for this order.';
+        } else {
+            $order_total = round((float)$order_total_input, 2);
+            if ($order_total < 0 || $order_total > 9999999999.99) {
+                $error = 'Order total must be between 0 and 9,999,999,999.99.';
+            } elseif ($amount_paid < 0 || $amount_paid > $order_total) {
+                $error = 'Amount paid cannot be greater than the order total.';
+            }
+        }
+    }
 
     // Ignore stale or foreign contact/lead references instead of failing on a
     // foreign-key error after the customer has filled in the form.
@@ -64,11 +79,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $order_lead_id = $lead_id > 0 ? $lead_id : null;
 
             $stmt = $conn->prepare(
-                "INSERT INTO orders (tenant_id, order_number, lead_id, shop_id, warehouse_id, contact_id, customer_name, customer_phone, customer_location, status, stage, Amount_paid, notes, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())"
+                "INSERT INTO orders (tenant_id, order_number, lead_id, shop_id, warehouse_id, contact_id, customer_name, customer_phone, customer_location, status, stage, subtotal, total, Amount_paid, notes, created_by, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())"
             );
             $stmt->bind_param(
-                'isiiiisssssdsi',
+                'isiiiisssssdddsi',
                 $current_user->tenant_id,
                 $order_number,
                 $order_lead_id,
@@ -80,6 +95,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $customer_location,
                 $status,
                 $stage,
+                $order_total,
+                $order_total,
                 $amount_paid,
                 $notes,
                 $current_user->user_id
@@ -152,6 +169,15 @@ require_once 'sidebar.php';
                     <input type="text" name="customer_location" class="form-control" value="<?php echo e($prefill_location); ?>">
                 </div>
 
+                <?php if ($lead_id > 0): ?>
+                    <div class="col-md-4 form-group">
+                        <label>Order Total <span class="text-danger">*</span></label>
+                        <input type="number" name="order_total" class="form-control" step="0.01" min="0"
+                               max="9999999999.99" required value="<?php echo e($order_total_input); ?>">
+                        <small class="form-text text-muted">Enter the total price of the order placed by this customer.</small>
+                    </div>
+                <?php endif; ?>
+
                 <div class="col-md-4 form-group">
                     <label>Shop</label>
                     <select name="shop_id" class="form-control">
@@ -180,14 +206,6 @@ require_once 'sidebar.php';
                     </select>
                 </div>
 
-                <div class="col-md-4 form-group">
-                    <label>Payment Status <span class="text-danger">*</span></label>
-                    <select name="status" class="form-control" required>
-                        <option value="unpaid">Unpaid</option>
-                        <option value="partially_paid">Partially Paid</option>
-                        <option value="paid">Paid</option>
-                    </select>
-                </div>
                 <div class="col-md-4 form-group">
                     <label>Amount Paid</label>
                     <input type="number" name="Amount_paid" class="form-control" step="0.01" min="0" value="0.00">

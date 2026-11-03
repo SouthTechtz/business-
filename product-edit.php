@@ -15,6 +15,7 @@ $product_id = (int)$product['product_id'];
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verify_csrf();
     $data = [
         'category_id'      => !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null,
         'code'             => trim($_POST['code'] ?? ''),
@@ -39,25 +40,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($data['brand'] !== null && !in_array($data['brand'], product_brand_options(), true)) {
         $error = 'Select a valid product brand.';
     } else {
-        $set = [];
-        $vals = [];
-        foreach ($data as $k => $v) {
-            $set[] = "`$k` = ?";
-            $vals[] = $v;
+        $image_path = store_product_image_upload($_FILES['image'] ?? null, $error);
+        if ($image_path !== false) {
+            if ($image_path !== '') {
+                $data['image'] = $image_path;
+            } elseif (!empty($_POST['remove_image'])) {
+                $data['image'] = null;
+            }
+            $set = [];
+            $vals = [];
+            foreach ($data as $k => $v) {
+                $set[] = "`$k` = ?";
+                $vals[] = $v;
+            }
+            $vals[] = $id;
+            $vals[] = $current_user->tenant_id;
+            $stmt = $conn->prepare("UPDATE products SET " . implode(', ', $set) . " WHERE product_id = ? AND tenant_id = ?");
+            $types = '';
+            foreach ($data as $v) $types .= is_int($v) ? 'i' : (is_float($v) ? 'd' : 's');
+            $types .= 'ii';
+            $stmt->bind_param($types, ...$vals);
+            if ($stmt->execute()) {
+                $stmt->close();
+                if ($image_path !== '' || !empty($_POST['remove_image'])) {
+                    remove_product_image_file($product['image'] ?? '');
+                }
+                audit_log('update', 'product', $id, 'Product updated');
+                flash_set('success', 'Product updated successfully.');
+                redirect('product-view.php?id=' . $id);
+            }
+            $error = 'Could not update the product: ' . $stmt->error;
+            $stmt->close();
+            if ($image_path !== '') remove_product_image_file($image_path);
         }
-        $vals[] = $id;
-        $vals[] = $current_user->tenant_id;
-        $stmt = $conn->prepare("UPDATE products SET " . implode(', ', $set) . " WHERE product_id = ? AND tenant_id = ?");
-        $types = '';
-        foreach ($data as $v) $types .= is_int($v) ? 'i' : (is_float($v) ? 'd' : 's');
-        $types .= 'ii';
-        $stmt->bind_param($types, ...$vals);
-        if ($stmt->execute()) {
-            audit_log('update', 'product', $id, 'Product updated');
-            flash_set('success', 'Product updated successfully.');
-            redirect('product-view.php?id=' . $id);
-        }
-        $error = 'Could not update the product.';
     }
 }
 
@@ -134,7 +149,8 @@ require_once 'sidebar.php';
         <div class="card">
             <div class="card-body">
                 <?php if ($error): ?><div class="alert alert-danger"><?php echo e($error); ?></div><?php endif; ?>
-                <form method="POST" action="product-edit.php?id=<?php echo $product_id; ?>">
+                <form method="POST" action="product-edit.php?id=<?php echo $product_id; ?>" enctype="multipart/form-data">
+                    <?php echo csrf_field(); ?>
                     <div class="row">
                         <div class="col-md-4 form-group"><label>Code <span class="text-danger">*</span></label><input type="text" name="code" class="form-control" required value="<?php echo e($product['code']); ?>"></div>
                         <div class="col-md-8 form-group"><label>Product Name <span class="text-danger">*</span></label><input type="text" name="name" class="form-control" required value="<?php echo e($product['name']); ?>"></div>
@@ -188,6 +204,19 @@ require_once 'sidebar.php';
                         <div class="col-md-4 form-group"><label>Variant Size</label><input type="text" name="variant_size" class="form-control" value="<?php echo e($product['variant_size']); ?>"></div>
                         <div class="col-md-4 form-group"><label>Color</label><input type="text" name="variant_color" class="form-control" value="<?php echo e($product['variant_color']); ?>" placeholder="e.g. White, Sky Blue"></div>
                         <div class="col-md-12 form-group"><label>Description</label><textarea name="description" class="form-control" rows="2"><?php echo e($product['description']); ?></textarea></div>
+                        <div class="col-md-12 form-group">
+                            <label for="product-image">Product Image</label>
+                            <?php $product_image = trim((string)($product['image'] ?? '')); ?>
+                            <?php if ($product_image !== ''): ?>
+                                <div class="mb-2"><img src="<?php echo e($product_image); ?>" alt="<?php echo e($product['name']); ?>" style="max-width:180px;max-height:180px;object-fit:contain;"></div>
+                                <div class="custom-control custom-checkbox mb-2">
+                                    <input type="checkbox" class="custom-control-input" name="remove_image" id="remove_image">
+                                    <label class="custom-control-label" for="remove_image">Remove current image</label>
+                                </div>
+                            <?php endif; ?>
+                            <input type="file" id="product-image" name="image" class="form-control-file" accept="image/jpeg,image/png,image/webp,image/gif">
+                            <small class="form-text text-muted">Optional. JPG, PNG, WEBP or GIF, up to 5 MB. Uploading a new image replaces the current one.</small>
+                        </div>
                         <div class="col-md-6 form-group">
                             <div class="custom-control custom-checkbox">
                                 <input type="checkbox" class="custom-control-input" name="is_service" id="is_service" <?php echo $product['is_service'] ? 'checked' : ''; ?>>

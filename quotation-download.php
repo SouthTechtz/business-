@@ -34,7 +34,7 @@ $items = fetch_all(
     $tenant_id
 );
 $settings = fetch_one("SELECT * FROM system_settings WHERE tenant_id = ?", $tenant_id);
-$company_name = $settings['company_name'] ?? APP_NAME;
+$company_name = $settings['company_name'] ?? system_title($tenant_id);
 $company_address = $settings['company_address'] ?? '';
 $company_email = $settings['company_email'] ?? '';
 $company_phone = $settings['company_phone'] ?? '';
@@ -183,7 +183,7 @@ foreach ($chunks as $page_index => $chunk) {
         if (!empty($quotation['email'])) $c .= pdf_text(50, 182, $quotation['email'], 9);
         if (!empty($quotation['phone'])) $c .= pdf_text(50, 195, $quotation['phone'], 9);
         if (!empty($quotation['address'])) $c .= pdf_text(50, 208, $quotation['address'], 9);
-        $c .= pdf_text(545, 152, 'STORE', 9, true, 'right');
+        $c .= pdf_text(545, 152, is_godown_manager() ? 'GODOWN' : 'STORE', 9, true, 'right');
         $c .= pdf_text(545, 168, $store_name, 9, false, 'right');
 
         $table_top = 235;
@@ -258,7 +258,7 @@ foreach ($chunks as $page_index => $chunk) {
     $pages[] = $c;
 }
 
-$pdf = pdf_document($pages, 'Quotation ' . $quotation['quotation_number'], APP_NAME);
+$pdf = pdf_document($pages, 'Quotation ' . $quotation['quotation_number'], $company_name);
 
 while (ob_get_level() > 0) {
     ob_end_clean();

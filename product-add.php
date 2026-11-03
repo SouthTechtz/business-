@@ -62,38 +62,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (!$data['is_service'] && $initial_stock > 0 && !find_active_godown($current_user->tenant_id, false)) {
         $error = 'Create an active Central Godown before adding initial stock. Shops and stores receive stock by transfer.';
     } else {
-        $conn->begin_transaction();
-        try {
-            $id = db_insert('products', $data);
-            if (!$id) throw new Exception('Could not create the product.');
+        $image_path = store_product_image_upload($_FILES['image'] ?? null, $error);
+        if ($image_path !== false) {
+            if ($image_path !== '') $data['image'] = $image_path;
+            $conn->begin_transaction();
+            try {
+                $id = db_insert('products', $data);
+                if (!$id) throw new Exception('Could not create the product.');
 
-            if (!$data['is_service'] && $initial_stock > 0) {
-                // Opening stock always lands in the Central Godown.
-                $wh = find_active_godown($current_user->tenant_id, false);
-                if (!$wh) throw new Exception('The Central Godown is no longer available. No product was created.');
-                
-                $stmt = $conn->prepare("INSERT INTO inventory_stock (tenant_id, product_id, warehouse_id, quantity, reorder_level) VALUES (?, ?, ?, ?, ?)");
-                $reorder = $data['min_stock_level'];
-                $stmt->bind_param('iiidd', $current_user->tenant_id, $id, $wh['warehouse_id'], $initial_stock, $reorder);
-                $stmt->execute();
-                $stmt->close();
+                if (!$data['is_service'] && $initial_stock > 0) {
+                    // Opening stock always lands in the Central Godown.
+                    $wh = find_active_godown($current_user->tenant_id, false);
+                    if (!$wh) throw new Exception('The Central Godown is no longer available. No product was created.');
 
-                $stmt = $conn->prepare(
-                    "INSERT INTO inventory_movements (tenant_id, product_id, warehouse_id, movement_type, quantity, created_by, notes)
-                     VALUES (?, ?, ?, 'adjustment', ?, ?, 'Initial stock received at Central Godown')"
-                );
-                $stmt->bind_param('iiidi', $current_user->tenant_id, $id, $wh['warehouse_id'], $initial_stock, $current_user->user_id);
-                $stmt->execute();
-                $stmt->close();
+                    $stmt = $conn->prepare("INSERT INTO inventory_stock (tenant_id, product_id, warehouse_id, quantity, reorder_level) VALUES (?, ?, ?, ?, ?)");
+                    $reorder = $data['min_stock_level'];
+                    $stmt->bind_param('iiidd', $current_user->tenant_id, $id, $wh['warehouse_id'], $initial_stock, $reorder);
+                    $stmt->execute();
+                    $stmt->close();
+
+                    $stmt = $conn->prepare(
+                        "INSERT INTO inventory_movements (tenant_id, product_id, warehouse_id, movement_type, quantity, created_by, notes)
+                         VALUES (?, ?, ?, 'adjustment', ?, ?, 'Initial stock received at Central Godown')"
+                    );
+                    $stmt->bind_param('iiidi', $current_user->tenant_id, $id, $wh['warehouse_id'], $initial_stock, $current_user->user_id);
+                    $stmt->execute();
+                    $stmt->close();
+                }
+                $conn->commit();
+                consume_form_token();
+                audit_log('create', 'product', $id, 'Product ' . $data['name'] . ' created');
+                flash_set('success', 'Product created successfully.');
+                redirect('products.php');
+            } catch (Exception $ex) {
+                $conn->rollback();
+                if ($image_path !== '') remove_product_image_file($image_path);
+                $error = $ex->getMessage();
             }
-            $conn->commit();
-            consume_form_token();
-            audit_log('create', 'product', $id, 'Product ' . $data['name'] . ' created');
-            flash_set('success', 'Product created successfully.');
-            redirect('products.php');
-        } catch (Exception $ex) {
-            $conn->rollback();
-            $error = $ex->getMessage();
         }
     }
 }
@@ -134,7 +139,7 @@ require_once 'sidebar.php';
         <div class="card">
             <div class="card-body">
                 <?php if ($error): ?><div class="alert alert-danger"><?php echo e($error); ?></div><?php endif; ?>
-                <form method="POST" action="product-add.php">
+                <form method="POST" action="product-add.php" enctype="multipart/form-data">
                     <?php echo csrf_field(); ?>
                     <?php echo form_token_field(); ?>
                     <div class="row">
@@ -241,6 +246,11 @@ require_once 'sidebar.php';
                         <div class="col-md-12 form-group">
                             <label>Description</label>
                             <textarea name="description" class="form-control" rows="2"><?php echo e($_POST['description'] ?? ''); ?></textarea>
+                        </div>
+                        <div class="col-md-12 form-group">
+                            <label for="product-image">Product Image</label>
+                            <input type="file" id="product-image" name="image" class="form-control-file" accept="image/jpeg,image/png,image/webp,image/gif">
+                            <small class="form-text text-muted">Optional. JPG, PNG, WEBP or GIF, up to 5 MB. Displayed in the online catalogue.</small>
                         </div>
                         <div class="col-md-6 form-group">
                             <div class="custom-control custom-checkbox">

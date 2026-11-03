@@ -2,7 +2,8 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission_any(['manage_expenses', 'manage_settings']);
-$page_title = 'Expenses';
+$godown_manager_expenses = is_godown_manager();
+$page_title = $godown_manager_expenses ? 'My Godown Expenses' : 'Expenses';
 
 $cur = tenant_currency();
 $msg = '';
@@ -39,6 +40,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (!$items) {
             $msg = ['danger', 'Add at least one item with a name and a unit price.'];
+        } elseif (
+            $action === 'edit_expense'
+            && $godown_manager_expenses
+            && !fetch_one(
+                "SELECT expense_id FROM expenses WHERE expense_id = ? AND tenant_id = ? AND created_by = ?",
+                $id,
+                (int)$current_user->tenant_id,
+                (int)$current_user->user_id
+            )
+        ) {
+            $msg = ['danger', 'You can only edit expenses created by your account.'];
         } else {
             $amount = array_sum(array_column($items, 'total'));
             $desc_parts = array_map(fn($it) => $it['name'] . ' x' . rtrim(rtrim(number_format($it['quantity'], 2, '.', ''), '0'), '.') . ' @' . number_format($it['unit_price'], 0), $items);
@@ -57,11 +69,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     audit_log('create', 'expense', $eid, 'Expense recorded: ' . $description . ' (' . money($amount, $cur) . ')');
                     $msg = ['success', 'Expense recorded successfully.'];
                 } else {
+                    $owner_filter = $godown_manager_expenses ? ' AND created_by = ?' : '';
                     $stmt = $conn->prepare(
                         "UPDATE expenses SET category_id = ?, description = ?, amount = ?, expense_date = ?, payment_method_id = ?, notes = ?
-                         WHERE expense_id = ? AND tenant_id = ?"
+                         WHERE expense_id = ? AND tenant_id = ?{$owner_filter}"
                     );
-                    $stmt->bind_param('isdsisii', $category_id, $description, $amount, $expense_date, $payment_method_id, $notes, $id, $current_user->tenant_id);
+                    if ($godown_manager_expenses) {
+                        $stmt->bind_param(
+                            'isdsisiii',
+                            $category_id,
+                            $description,
+                            $amount,
+                            $expense_date,
+                            $payment_method_id,
+                            $notes,
+                            $id,
+                            $current_user->tenant_id,
+                            $current_user->user_id
+                        );
+                    } else {
+                        $stmt->bind_param('isdsisii', $category_id, $description, $amount, $expense_date, $payment_method_id, $notes, $id, $current_user->tenant_id);
+                    }
                     $stmt->execute();
                     $stmt->close();
                     $stmt = $conn->prepare("DELETE FROM expense_items WHERE expense_id = ? AND tenant_id = ?");
@@ -88,22 +116,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif ($action === 'delete_expense') {
         $id = (int)($_POST['expense_id'] ?? 0);
-        $stmt = $conn->prepare("DELETE FROM expenses WHERE expense_id = ? AND tenant_id = ?");
-        $stmt->bind_param('ii', $id, $current_user->tenant_id);
+        $owner_filter = $godown_manager_expenses ? ' AND created_by = ?' : '';
+        $stmt = $conn->prepare("DELETE FROM expenses WHERE expense_id = ? AND tenant_id = ?{$owner_filter}");
+        if ($godown_manager_expenses) {
+            $stmt->bind_param('iii', $id, $current_user->tenant_id, $current_user->user_id);
+        } else {
+            $stmt->bind_param('ii', $id, $current_user->tenant_id);
+        }
         $stmt->execute();
+        $deleted = $stmt->affected_rows;
         $stmt->close();
-        audit_log('delete', 'expense', $id, 'Expense deleted');
-        $msg = ['success', 'Expense deleted.'];
+        if ($deleted > 0) {
+            audit_log('delete', 'expense', $id, 'Expense deleted');
+            $msg = ['success', 'Expense deleted.'];
+        } else {
+            $msg = ['danger', $godown_manager_expenses
+                ? 'You can only delete expenses created by your account.'
+                : 'Expense not found.'];
+        }
     } elseif ($action === 'add_category') {
         $name = trim($_POST['name'] ?? '');
-        if ($name !== '') {
+        if ($godown_manager_expenses) {
+            $msg = ['danger', 'Godown Managers cannot change shared expense categories.'];
+        } elseif ($name !== '') {
             db_insert('expense_categories', ['tenant_id' => $current_user->tenant_id, 'name' => $name]);
             $msg = ['success', 'Category added.'];
         }
     } elseif ($action === 'delete_category') {
         $cid = (int)($_POST['category_id'] ?? 0);
         $used = fetch_one("SELECT COUNT(*) c FROM expenses WHERE category_id = ? AND tenant_id = ?", $cid, $current_user->tenant_id);
-        if (($used['c'] ?? 0) > 0) {
+        if ($godown_manager_expenses) {
+            $msg = ['danger', 'Godown Managers cannot change shared expense categories.'];
+        } elseif (($used['c'] ?? 0) > 0) {
             $msg = ['danger', 'This category is used by existing expenses.'];
         } else {
             $stmt = $conn->prepare("DELETE FROM expense_categories WHERE expense_category_id = ? AND tenant_id = ?");
@@ -120,6 +164,10 @@ $month = trim($_GET['month'] ?? '');
 $cat_filter = (int)($_GET['category'] ?? 0);
 $where = "WHERE e.tenant_id = ?";
 $params = [$current_user->tenant_id];
+if ($godown_manager_expenses) {
+    $where .= " AND e.created_by = ?";
+    $params[] = (int)$current_user->user_id;
+}
 if ($month !== '' && preg_match('/^\d{4}-\d{2}$/', $month)) {
     $where .= " AND DATE_FORMAT(e.expense_date, '%Y-%m') = ?";
     $params[] = $month;
@@ -168,8 +216,8 @@ require_once 'sidebar.php';
 ?>
 <div class="page-head">
     <div>
-        <h1 class="page-title">Expenses</h1>
-        <div class="page-sub">Record and track all company expenses.</div>
+        <h1 class="page-title"><?php echo $godown_manager_expenses ? 'My Godown Expenses' : 'Expenses'; ?></h1>
+        <div class="page-sub"><?php echo $godown_manager_expenses ? 'Record and track expenses created by your Godown account.' : 'Record and track all company expenses.'; ?></div>
     </div>
     <button class="btn btn-primary" data-toggle="modal" data-target="#expenseModal"><i class="fa fa-plus mr-1"></i> New Expense</button>
     <a href="export-expenses.php?<?php echo e(http_build_query(array_filter(['month' => $month, 'category' => $cat_filter > 0 ? $cat_filter : ''], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
@@ -200,7 +248,9 @@ require_once 'sidebar.php';
                 </select>
                 <button class="btn btn-sm btn-light"><i class="fa fa-filter mr-1"></i>Filter</button>
             </form>
+            <?php if (!$godown_manager_expenses): ?>
             <button class="btn btn-sm btn-outline-primary ml-2" data-toggle="modal" data-target="#catModal"><i class="fa fa-tags mr-1"></i>Categories</button>
+            <?php endif; ?>
             <div class="input-group dt-search ml-2">
                 <div class="input-group-prepend"><span class="input-group-text"><i class="fa fa-search"></i></span></div>
                 <input type="text" class="form-control dt-search-input" data-scope="expenses" placeholder="Search expenses...">
@@ -333,6 +383,7 @@ require_once 'sidebar.php';
     </div>
 </div>
 
+<?php if (!$godown_manager_expenses): ?>
 <!-- Categories modal -->
 <div class="modal fade" id="catModal" tabindex="-1">
     <div class="modal-dialog">
@@ -363,6 +414,7 @@ require_once 'sidebar.php';
         </div>
     </div>
 </div>
+<?php endif; ?>
 
 <script>
     $(function () {

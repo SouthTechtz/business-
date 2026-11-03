@@ -9,9 +9,21 @@ $current_user = $GLOBALS['current_user'];
 $conn->begin_transaction();
 try {
     // Transfer lifecycle
-    $locs = fetch_all("SELECT warehouse_id FROM warehouses WHERE tenant_id=? AND is_active=1 ORDER BY warehouse_id LIMIT 2", $tenant_id);
-    T(count($locs)>=2, 'two locations');
-    $src=(int)$locs[0]['warehouse_id']; $dst=(int)$locs[1]['warehouse_id'];
+    $src_location = fetch_one(
+        "SELECT warehouse_id FROM warehouses
+          WHERE tenant_id = ? AND location_type = 'store' AND is_active = 1
+          ORDER BY warehouse_id LIMIT 1",
+        $tenant_id
+    );
+    $dst_location = fetch_one(
+        "SELECT warehouse_id, location_type FROM warehouses
+          WHERE tenant_id = ? AND location_type = 'shop' AND is_active = 1
+          ORDER BY warehouse_id LIMIT 1",
+        $tenant_id
+    );
+    T($src_location && $dst_location, 'active Store source and Shop destination');
+    T($dst_location['location_type'] === 'shop', 'received stock targets the Shop inventory location');
+    $src=(int)$src_location['warehouse_id']; $dst=(int)$dst_location['warehouse_id'];
     $prod = fetch_one("SELECT product_id FROM products WHERE tenant_id=? AND is_active=1 AND is_service=0 LIMIT 1", $tenant_id);
     T($prod, 'product');
     $pid=(int)$prod['product_id'];
@@ -31,6 +43,7 @@ try {
     $u=$conn->prepare("UPDATE stock_transfers SET status='dispatched', dispatched_by=?, dispatched_at=NOW() WHERE transfer_id=? AND tenant_id=?"); $u->bind_param('iii',$admin['user_id'],$tid,$tenant_id); $u->execute(); $u->close();
     $dstst = fetch_one("SELECT 1 FROM inventory_stock WHERE tenant_id=? AND warehouse_id=? AND product_id=?", $tenant_id, $dst, $pid);
     if (!$dstst) db_insert('inventory_stock', ['tenant_id'=>$tenant_id, 'warehouse_id'=>$dst, 'product_id'=>$pid, 'quantity'=>0]);
+    $dst_before = fetch_one("SELECT quantity FROM inventory_stock WHERE tenant_id=? AND warehouse_id=? AND product_id=?", $tenant_id, $dst, $pid);
     // receive
     $u=$conn->prepare("UPDATE stock_transfer_items SET received_quantity=10 WHERE transfer_id=? AND tenant_id=?"); $u->bind_param('ii',$tid,$tenant_id); $u->execute(); $u->close();
     $u=$conn->prepare("UPDATE inventory_stock SET quantity=quantity+10 WHERE tenant_id=? AND warehouse_id=? AND product_id=?"); $u->bind_param('iii',$tenant_id,$dst,$pid); $u->execute(); $u->close();
@@ -38,7 +51,7 @@ try {
     $srcr = fetch_one("SELECT quantity FROM inventory_stock WHERE tenant_id=? AND warehouse_id=? AND product_id=?", $tenant_id, $src, $pid);
     $dstr = fetch_one("SELECT quantity FROM inventory_stock WHERE tenant_id=? AND warehouse_id=? AND product_id=?", $tenant_id, $dst, $pid);
     T((float)$srcr['quantity'] === 90.0, 'source decremented after transfer');
-    T($dstr && (float)$dstr['quantity'] >= 10.0, 'destination incremented after transfer');
+    T($dstr && (float)$dstr['quantity'] === (float)$dst_before['quantity'] + 10.0, 'accepted quantity added to Shop stock on receipt');
     $conn->rollback();
     echo "Transfer lifecycle smoke test passed (rolled back).\n";
 } catch (Throwable $e) {

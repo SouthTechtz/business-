@@ -2,9 +2,9 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_leads');
-if (!tenant_admin_scope() || !can('manage_orders')) {
+if (!can_verify_storefront_order_requests()) {
     http_response_code(403);
-    die('Only an authorized system administrator can verify order requests.');
+    die('Only an authorized system administrator or assigned Shop Manager can verify order requests.');
 }
 
 $id = (int)($_GET['id'] ?? 0);
@@ -34,8 +34,7 @@ if ($shop_id <= 0 && $shops) {
     // several shops can switch using the selector below.
     $shop_id = (int)$shops[0]['shop_id'];
 }
-// The store is never chosen by the user. Pick the first active store for the
-// shop internally, and allow a shop-level order when the shop has no store.
+// Prefer the Shop's inventory location; fall back to one of its active Stores.
 if ($shop_id > 0) {
     if ($warehouse_id <= 0 && shop_inventory_ready($shop_id)) {
         $wh = shop_inventory_warehouse_id($shop_id);
@@ -109,7 +108,7 @@ require_once 'sidebar.php';
 <?php endif; ?>
 <div class="row"><div class="col-lg-8 mb-3">
     <div class="card"><div class="card-header"><h5 class="card-title">Requested Products</h5></div><div class="card-body p-0"><div class="table-responsive"><table class="table mb-0">
-        <thead><tr><th>Product</th><th class="text-right">Qty</th><th class="text-right">Request Price</th><th class="text-right">Current Price</th><th class="text-right">Available in Selected Store</th></tr></thead>
+        <thead><tr><th>Product</th><th class="text-right">Qty</th><th class="text-right">Request Price</th><th class="text-right">Current Price</th><th class="text-right">Available in Selected Inventory</th></tr></thead>
         <tbody><?php foreach ($items as $item): ?>
             <?php $low = $warehouse_id > 0 && !(int)$item['is_service'] && isset($short_products[(int)$item['product_id']]); ?>
             <tr><td><?php echo e($item['product_name_snapshot']); ?><small class="text-muted d-block"><?php echo e($item['product_code_snapshot']); ?></small></td>
@@ -141,7 +140,7 @@ require_once 'sidebar.php';
         <form method="POST" action="lead-action.php" onsubmit="return confirm('Verify this request, create the linked order, and reserve stock where available?');">
             <?php echo csrf_field(); ?><input type="hidden" name="action" value="verify_request"><input type="hidden" name="lead_id" value="<?php echo $id; ?>"><input type="hidden" name="shop_id" value="<?php echo $shop_id; ?>"><input type="hidden" name="warehouse_id" value="<?php echo $warehouse_id; ?>">
             <button type="submit" class="btn btn-success btn-block" <?php echo (!$shop_id || $insufficient) ? 'disabled' : ''; ?>><i class="fa fa-check mr-1"></i> Verify &amp; Create Order</button>
-        </form><small class="text-muted d-block mt-2">The order is created under review at the selected shop using the request’s saved prices.<?php echo $warehouse_id ? ' Stock is reserved at the shop’s first active store immediately; physical stock is deducted only when the order is fulfilled by an invoice.' : ' No store is active for this shop, so stock reservation is skipped.'; ?></small>
+        </form><small class="text-muted d-block mt-2">The order is created under review at the selected shop using the request’s saved prices.<?php echo $warehouse_id ? ' Stock is reserved at the selected Shop inventory location immediately; physical stock is deducted only when the order is fulfilled by an invoice.' : ' No active inventory location is available for this shop, so stock reservation is skipped.'; ?></small>
     </div></div>
 </div></div>
 <?php if ($show_shop_selector): ?><script>$(function(){ $('#verifyShop').on('change', function(){ $('#locationForm').trigger('submit'); }); });</script><?php endif; ?>

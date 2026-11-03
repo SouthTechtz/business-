@@ -8,6 +8,5 @@ if (!empty($_SESSION['user_id'])) {
         audit_log('logout', 'user', $current_user->user_id, 'User signed out');
     }
 }
-$_SESSION = [];
-session_destroy();
+end_session();
 redirect('login.php');

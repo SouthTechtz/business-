@@ -5,17 +5,52 @@ require_permission('manage_inventory');
 $page_title = 'Inventory';
 
 $tenant_id = (int)$current_user->tenant_id;
-$can_godown = can_access_godown();
+$shop_manager_inventory = is_shop_manager() && !tenant_admin_scope();
+$godown_manager_inventory = is_godown_manager();
+$can_godown = !$shop_manager_inventory && (
+    can('manage_godown')
+    || can('view_godown')
+    || can('approve_godown_transfers')
+    || can('dispatch_godown_transfers')
+    || can('receive_godown_transfers')
+);
 $can_godown_page = can('manage_godown') || can('view_godown');
 $can_request_stock = can('manage_godown') || can('request_godown_transfers');
 
-if (can('manage_godown')) {
+if (can('manage_godown') && !$godown_manager_inventory) {
     ensure_central_godown($tenant_id);
 }
 
-$tabs = ['godown' => 'Godown', 'stores' => 'Stores', 'shops' => 'Shops'];
-if (!$can_godown) {
-    unset($tabs['godown']);
+$tabs = [];
+if ($godown_manager_inventory) {
+    $tabs = ['godown' => 'My Godown Inventory'];
+} elseif ($can_godown) {
+    $tabs['godown'] = 'Godown';
+}
+$tabs['stores'] = 'Stores';
+$tabs['shops'] = 'Shops';
+$shops = accessible_shops(null, !$shop_manager_inventory);
+$stores = $shop_manager_inventory ? [] : accessible_stores(null, true);
+$godowns = [];
+if ($can_godown) {
+    if (tenant_admin_scope()) {
+        $godowns = fetch_all(
+            "SELECT * FROM warehouses
+              WHERE tenant_id = ? AND location_type = 'godown'
+              ORDER BY is_active DESC, name",
+            $tenant_id
+        );
+    } else {
+        $godowns = array_values(array_filter(
+            accessible_locations(true, $tenant_id),
+            fn($location) => (string)$location['location_type'] === 'godown'
+        ));
+    }
+}
+if ($godown_manager_inventory) {
+    $tabs = ['godown' => 'My Godown Inventory'];
+} elseif ($shop_manager_inventory) {
+    $tabs = ['shops' => 'Shop Inventory'];
 }
 $tab = (string)($_GET['tab'] ?? '');
 $tab_requested = isset($_GET['tab']);
@@ -24,19 +59,8 @@ if (!isset($tabs[$tab])) {
 }
 
 /* ---------------- Locations available to the current user ---------------- */
-$godowns = $can_godown
-    ? fetch_all(
-        "SELECT * FROM warehouses
-          WHERE tenant_id = ? AND location_type = 'godown'
-          ORDER BY is_active DESC, name",
-        $tenant_id
-    )
-    : [];
-$stores = accessible_stores(null, true);
-$shops = accessible_shops(null, true);
-
 // Without an existing Godown, open on a tab that has something to show.
-if (!$tab_requested && $tab === 'godown' && !$godowns) {
+if (!$godown_manager_inventory && !$tab_requested && $tab === 'godown' && !$godowns) {
     $tab = (isset($tabs['stores']) && $stores) ? 'stores' : (isset($tabs['shops']) ? 'shops' : $tab);
 }
 
@@ -101,9 +125,16 @@ if ($tab === 'godown' && $godown_id > 0 && isset($godown_by_id[$godown_id])) {
     $location_name = store_label($store_by_id[$store_id]);
 } elseif ($tab === 'shops' && $shop_id > 0 && isset($shop_by_id[$shop_id])) {
     $location_name = $shop_by_id[$shop_id]['name'];
-    foreach ($stores as $store) {
-        if ((int)$store['shop_id'] === $shop_id) {
-            $scope_ids[] = (int)$store['warehouse_id'];
+    if ($shop_manager_inventory) {
+        $inventory_warehouse_id = shop_inventory_warehouse_id($shop_id, $tenant_id);
+        if ($inventory_warehouse_id) {
+            $scope_ids[] = $inventory_warehouse_id;
+        }
+    } else {
+        foreach ($stores as $store) {
+            if ((int)$store['shop_id'] === $shop_id) {
+                $scope_ids[] = (int)$store['warehouse_id'];
+            }
         }
     }
 }
@@ -115,10 +146,18 @@ $stock_filter = (string)($_GET['stock'] ?? '');
 if (!in_array($stock_filter, ['in', 'low', 'out'], true)) {
     $stock_filter = '';
 }
-$categories = fetch_all(
-    "SELECT category_id, name FROM product_categories WHERE tenant_id = ? ORDER BY name",
-    $tenant_id
-);
+$categories = $scope_ids
+    ? fetch_all(
+        "SELECT DISTINCT c.category_id, c.name
+           FROM product_categories c
+           JOIN products p ON p.category_id = c.category_id AND p.tenant_id = c.tenant_id
+           JOIN inventory_stock stock ON stock.product_id = p.product_id
+                AND stock.tenant_id = p.tenant_id
+          WHERE c.tenant_id = ? AND stock.warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . ")
+          ORDER BY c.name",
+        $tenant_id
+    )
+    : [];
 if ($category_id > 0 && !in_array($category_id, array_map('intval', array_column($categories, 'category_id')), true)) {
     $category_id = 0;
 }
@@ -127,7 +166,7 @@ if ($category_id > 0 && !in_array($category_id, array_map('intval', array_column
 $rows = [];
 if ($scope_ids) {
     $in_list = implode(',', array_map('intval', $scope_ids));
-    $sql = "SELECT p.product_id, p.code, p.name, p.min_stock_level, p.is_active,
+    $sql = "SELECT p.product_id, p.code, p.name, p.min_stock_level, p.sale_price, p.is_active,
                    c.name category_name, COALESCE(u.short_name, '') unit_short,
                    COALESCE(st.qty, 0) qty, st.stock_id, st.last_counted_at
               FROM products p
@@ -141,6 +180,14 @@ if ($scope_ids) {
               ) st ON st.product_id = p.product_id
              WHERE p.tenant_id = ? AND p.is_service = 0";
     $params = [$tenant_id, $tenant_id];
+    if ($shop_manager_inventory || $godown_manager_inventory) {
+        $sql .= " AND EXISTS (
+                    SELECT 1 FROM inventory_stock own_stock
+                     WHERE own_stock.tenant_id = p.tenant_id
+                       AND own_stock.product_id = p.product_id
+                       AND own_stock.warehouse_id IN ({$in_list})
+                  )";
+    }
 
     if ($q !== '') {
         $like = '%' . $q . '%';
@@ -163,10 +210,11 @@ if ($scope_ids) {
 }
 
 /* Summary cards for the current listing (follows the filters). */
-$summary = ['products' => count($rows), 'qty' => 0.0, 'low' => 0, 'out' => 0];
+$summary = ['products' => count($rows), 'qty' => 0.0, 'expected_sales_value' => 0.0, 'low' => 0, 'out' => 0];
 foreach ($rows as $row) {
     $qty = (float)$row['qty'];
     $summary['qty'] += $qty;
+    $summary['expected_sales_value'] += max(0, $qty) * (float)$row['sale_price'];
     if ($qty <= 0) {
         $summary['out']++;
     } elseif ($qty <= (float)$row['min_stock_level']) {
@@ -181,17 +229,17 @@ require_once 'sidebar.php';
 <div class="page-head">
     <div>
         <h1 class="page-title">Inventory</h1>
-        <div class="page-sub">Stock by Godown, store and shop. Godown stock is shown separately and is never treated as shop POS availability.</div>
+        <div class="page-sub"><?php echo $godown_manager_inventory ? 'Products and stock for your assigned Godown only.' : ($shop_manager_inventory ? 'Products and stock for your assigned Shop only.' : 'Stock by Godown, store and shop. Godown stock is shown separately and is never treated as shop POS availability.'); ?></div>
     </div>
     <div class="d-flex flex-wrap" style="gap:8px;">
-        <?php if (can('manage_shops')): ?>
+        <?php if (!$shop_manager_inventory && !$godown_manager_inventory && tenant_admin_scope() && can('manage_shops')): ?>
             <a href="shops.php" class="btn btn-outline-secondary"><i class="fa fa-plus mr-1"></i> Add Shop</a>
             <a href="stores.php" class="btn btn-outline-secondary"><i class="fa fa-plus mr-1"></i> Add Store</a>
         <?php endif; ?>
-        <?php if ($can_godown_page): ?>
-            <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> Central Godown</a>
+        <?php if (!$shop_manager_inventory && $can_godown_page): ?>
+            <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> <?php echo $godown_manager_inventory ? 'My Godown' : 'Central Godown'; ?></a>
         <?php endif; ?>
-        <?php if ($can_request_stock): ?>
+        <?php if (!$shop_manager_inventory && $can_request_stock): ?>
             <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-exchange mr-1"></i> Request Stock</a>
         <?php endif; ?>
     </div>
@@ -231,6 +279,15 @@ $qty_card_icon = $tab === 'godown' ? 'fa-archive' : ($tab === 'stores' ? 'fa-hom
     </div>
     <div class="col-md-6 col-xl-3 mb-3">
         <div class="widget">
+            <div class="widget-icon wi-green"><i class="fa fa-money"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo e(money($summary['expected_sales_value'], tenant_currency())); ?></div>
+                <div class="widget-label">Expected Sales Value</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <div class="widget">
             <div class="widget-icon wi-amber"><i class="fa fa-exclamation-triangle"></i></div>
             <div class="widget-info">
                 <div class="widget-value"><?php echo $summary['low']; ?></div>
@@ -262,7 +319,7 @@ $qty_card_icon = $tab === 'godown' ? 'fa-archive' : ($tab === 'stores' ? 'fa-hom
 
 <?php
 $tab_title = [
-    'godown' => 'Godown Products',
+    'godown' => $godown_manager_inventory ? 'My Godown Products' : 'Godown Products',
     'stores' => 'Store Products',
     'shops'  => 'Shop Products',
 ][$tab];
@@ -271,7 +328,7 @@ $tab_has_location = ($tab === 'godown' && $godown_id > 0)
     || ($tab === 'shops' && $shop_id > 0);
 $location_options = $tab === 'godown' ? $godowns : ($tab === 'stores' ? $stores : $shops);
 $location_empty_message = $tab === 'godown'
-    ? 'No Godown has been created yet. Create one from the Central Godown page.'
+    ? ($godown_manager_inventory ? 'No active Godown is assigned to your account. Contact an administrator.' : 'No Godown has been created yet. Create one from the Central Godown page.')
     : ($tab === 'stores' ? 'No store is assigned to your account.' : 'No shop is assigned to your account.');
 ?>
 
@@ -357,7 +414,7 @@ $location_empty_message = $tab === 'godown'
                 <table class="table table-hover data-table">
                     <thead>
                         <tr>
-                            <th>Product</th><th>Code</th><th>Category</th><th>Quantity</th><th>Unit</th><th>Min Level</th><th>Status</th><th class="text-right">Actions</th>
+                            <th>Product</th><th>Code</th><th>Category</th><th>Quantity</th><th>Unit</th><th>Min Level</th><th>Status</th><?php if ($can_request_stock || ($tab === 'godown' && $can_godown_page)): ?><th class="text-right">Actions</th><?php endif; ?>
                         </tr>
                     </thead>
                     <tbody>
@@ -384,6 +441,7 @@ $location_empty_message = $tab === 'godown'
                             <td><?php echo e($row['unit_short'] ?: ''); ?></td>
                             <td data-order="<?php echo (float)$min; ?>"><?php echo e(format_quantity($min)); ?></td>
                             <td><?php echo $status; ?></td>
+                            <?php if ($can_request_stock || ($tab === 'godown' && $can_godown_page)): ?>
                             <td class="text-right">
                                 <?php if ($tab === 'godown'): ?>
                                     <?php if ($can_godown_page): ?>
@@ -394,8 +452,8 @@ $location_empty_message = $tab === 'godown'
                                 <?php elseif ($can_request_stock): ?>
                                     <?php
                                     $request_params = $tab === 'stores'
-                                        ? ['shop' => (int)($store_by_id[$store_id]['shop_id'] ?? 0), 'store' => (int)$store_id]
-                                        : ['shop' => (int)$shop_id];
+                                        ? ['request_store_id' => (int)$store_id]
+                                        : ['request_shop_id' => (int)$shop_id];
                                     $request_params = array_filter($request_params, fn($value) => (int)$value > 0);
                                     ?>
                                     <a href="godown-transfer-add.php?<?php echo e(http_build_query($request_params)); ?>" class="btn btn-action btn-light" title="Request stock"><i class="fa fa-exchange"></i></a>
@@ -403,13 +461,14 @@ $location_empty_message = $tab === 'godown'
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>
                             </td>
+                            <?php endif; ?>
                         </tr>
                     <?php endforeach; ?>
                     <?php if (!$rows): ?>
                         <tr>
-                            <td colspan="8" class="text-center text-muted py-4">
+                            <td colspan="<?php echo ($can_request_stock || ($tab === 'godown' && $can_godown_page)) ? 8 : 7; ?>" class="text-center text-muted py-4">
                                 <?php if (!$scope_ids): ?>
-                                    This shop has no stores yet, so no stock can be listed.
+                                    <?php echo $shop_manager_inventory ? 'No inventory warehouse is available for this Shop.' : 'This location has no inventory warehouse, so no stock can be listed.'; ?>
                                 <?php else: ?>
                                     No products match the current filters.
                                 <?php endif; ?>

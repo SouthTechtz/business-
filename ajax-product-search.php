@@ -16,20 +16,22 @@ $exact = (int)($_GET['exact'] ?? 0) === 1;
 $is_pos = (int)($_GET['pos'] ?? 0) === 1;
 
 if ($is_pos) {
-    // POS stock must come from the active session's fixed store.
+    // POS stock must come from the selected, accessible Shop.
     if (!can('manage_pos')) {
         http_response_code(403);
         echo json_encode(['products' => [], 'error' => 'POS access denied.']);
         exit;
     }
-    $stores = accessible_stores(null, false);
-    $store = $stores ? find_accessible_store((int)$stores[0]['warehouse_id'], false) : null;
-    if (!$store) {
+    $shop_id = (int)($_SESSION['active_shop_id'] ?? 0);
+    $warehouse_id = $shop_id > 0 && shop_is_accessible($shop_id, false)
+        ? shop_inventory_warehouse_id($shop_id)
+        : null;
+    if (!$warehouse_id) {
         http_response_code(403);
-        echo json_encode(['products' => [], 'error' => 'No active store is available for your account.']);
+        echo json_encode(['products' => [], 'error' => 'Select an accessible Shop with an active inventory warehouse.']);
         exit;
     }
-    $warehouse_id = (int)$store['warehouse_id'];
+    $store = ['warehouse_id' => $warehouse_id];
 } else {
     $warehouse_id = (int)($_GET['warehouse_id'] ?? 0);
     $store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;

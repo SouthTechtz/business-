@@ -10,50 +10,117 @@ if (!$order) {
     flash_set('danger', 'Order not found.');
     redirect('orders.php');
 }
+$original_stage = (string)($order['stage'] ?? 'shop');
 
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verify_csrf();
     $shop_id = !empty($_POST['shop_id']) ? (int)$_POST['shop_id'] : null;
     $warehouse_id = !empty($_POST['warehouse_id']) ? (int)$_POST['warehouse_id'] : null;
     $contact_id = !empty($_POST['contact_id']) ? (int)$_POST['contact_id'] : null;
     $customer_name = trim($_POST['customer_name'] ?? '');
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $customer_location = trim($_POST['customer_location'] ?? '');
-    $status = trim($_POST['status'] ?? 'unpaid');
     $stage = trim($_POST['stage'] ?? 'shop');
-    $amount_paid = (float)($_POST['Amount_paid'] ?? 0);
+    $order_total_input = $_POST['order_total'] ?? '';
+    $amount_paid_input = $_POST['Amount_paid'] ?? '';
     $notes = trim($_POST['notes'] ?? '');
+    $valid_stages = ['shop', 'transport', 'completed', 'returned'];
 
     if ($customer_name === '') {
         $error = 'Customer name is required.';
+    } elseif (!is_numeric($order_total_input) || !is_numeric($amount_paid_input)) {
+        $error = 'Enter a valid order total and amount paid.';
+    } elseif (
+        (float)$order_total_input < 0
+        || (float)$order_total_input > 9999999999.99
+        || (float)$amount_paid_input < 0
+        || (float)$amount_paid_input > (float)$order_total_input
+    ) {
+        $error = 'Amounts must be valid, and amount paid cannot exceed the order total.';
+    } elseif (!in_array($stage, $valid_stages, true)) {
+        $error = 'Choose a valid order stage.';
     } else {
-        $stmt = $conn->prepare(
-            "UPDATE orders SET shop_id = ?, warehouse_id = ?, contact_id = ?, customer_name = ?, customer_phone = ?, customer_location = ?, status = ?, stage = ?, Amount_paid = ?, notes = ?
-             WHERE order_id = ? AND tenant_id = ?"
-        );
-        $stmt->bind_param(
-            'iiisssssdsii',
-            $shop_id,
-            $warehouse_id,
-            $contact_id,
-            $customer_name,
-            $customer_phone,
-            $customer_location,
-            $status,
-            $stage,
-            $amount_paid,
-            $notes,
-            $id,
-            $current_user->tenant_id
-        );
-        if ($stmt->execute()) {
+        $order_total = round((float)$order_total_input, 2);
+        $amount_paid = round((float)$amount_paid_input, 2);
+        $conn->begin_transaction();
+        try {
+            $locked_order = fetch_one(
+                "SELECT * FROM orders WHERE order_id = ? AND tenant_id = ? FOR UPDATE",
+                $id,
+                (int)$current_user->tenant_id
+            );
+            if (!$locked_order || !order_is_visible($locked_order)) {
+                throw new RuntimeException('Order not found.');
+            }
+
+            $current_stage = (string)($locked_order['stage'] ?? 'shop');
+            if ($stage === 'transport' && $current_stage !== 'transport') {
+                if (($_POST['confirm_transport'] ?? '') !== '1') {
+                    throw new RuntimeException('Confirm that the stock has started moving before setting the order to In transport.');
+                }
+                if ((int)$warehouse_id !== (int)$locked_order['warehouse_id']) {
+                    throw new RuntimeException('Save the order with its selected store before moving it into transport.');
+                }
+                dispatch_order_stock_for_transport(
+                    $id,
+                    (int)$current_user->tenant_id,
+                    (int)$current_user->user_id
+                );
+            } elseif ($current_stage === 'transport' && $stage === 'shop') {
+                throw new RuntimeException('An order already in transport cannot be moved back to At the shop.');
+            }
+
+            $stmt = $conn->prepare(
+                "UPDATE orders SET shop_id = ?, warehouse_id = ?, contact_id = ?, customer_name = ?, customer_phone = ?,
+                    customer_location = ?, subtotal = ?, total = ?, stage = ?, Amount_paid = ?, notes = ?
+                 WHERE order_id = ? AND tenant_id = ?"
+            );
+            if (!$stmt) throw new RuntimeException('Could not prepare the order update: ' . $conn->error);
+            $stmt->bind_param(
+                'iiisssddsdsii',
+                $shop_id,
+                $warehouse_id,
+                $contact_id,
+                $customer_name,
+                $customer_phone,
+                $customer_location,
+                $order_total,
+                $order_total,
+                $stage,
+                $amount_paid,
+                $notes,
+                $id,
+                $current_user->tenant_id
+            );
+            if (!$stmt->execute()) {
+                $stmt_error = $stmt->error;
+                $stmt->close();
+                throw new RuntimeException('Could not update the order: ' . $stmt_error);
+            }
+            $stmt->close();
+            $conn->commit();
             audit_log('update', 'order', $id, 'Order updated');
             flash_set('success', 'Order updated successfully.');
             redirect('order-view.php?id=' . $id);
+        } catch (Throwable $ex) {
+            $conn->rollback();
+            $error = $ex->getMessage();
         }
-        $error = 'Could not update the order.';
     }
+    $order = array_merge($order, [
+        'shop_id' => $shop_id,
+        'warehouse_id' => $warehouse_id,
+        'contact_id' => $contact_id,
+        'customer_name' => $customer_name,
+        'customer_phone' => $customer_phone,
+        'customer_location' => $customer_location,
+        'total' => $order_total_input,
+        'Amount_paid' => $amount_paid_input,
+        'stage' => $stage,
+        'notes' => $notes,
+    ]);
 }
 
 $shops = accessible_shops(null, true);
@@ -77,6 +144,7 @@ require_once 'sidebar.php';
 <div class="card">
     <div class="card-body">
         <form method="POST" action="order-edit.php?id=<?php echo $id; ?>">
+            <?php echo csrf_field(); ?>
             <div class="row">
                 <div class="col-md-4 form-group">
                     <label>Customer Name <span class="text-danger">*</span></label>
@@ -120,25 +188,33 @@ require_once 'sidebar.php';
                 </div>
 
                 <div class="col-md-4 form-group">
-                    <label>Payment Status <span class="text-danger">*</span></label>
-                    <select name="status" class="form-control" required>
-                        <option value="unpaid" <?php echo $order['status'] === 'unpaid' ? 'selected' : ''; ?>>Unpaid</option>
-                        <option value="partially_paid" <?php echo $order['status'] === 'partially_paid' ? 'selected' : ''; ?>>Partially Paid</option>
-                        <option value="paid" <?php echo $order['status'] === 'paid' ? 'selected' : ''; ?>>Paid</option>
-                    </select>
+                    <label>Order Total <span class="text-danger">*</span></label>
+                    <input type="number" name="order_total" class="form-control" step="0.01" min="0"
+                           max="9999999999.99" id="editOrderTotal" required value="<?php echo e($order['total']); ?>">
                 </div>
                 <div class="col-md-4 form-group">
-                    <label>Amount Paid</label>
-                    <input type="number" name="Amount_paid" class="form-control" step="0.01" min="0" value="<?php echo e($order['Amount_paid'] ?? 0); ?>">
+                    <label>Amount Paid <span class="text-danger">*</span></label>
+                    <input type="number" name="Amount_paid" class="form-control" step="0.01" min="0" required value="<?php echo e($order['Amount_paid'] ?? 0); ?>">
                 </div>
                 <div class="col-md-4 form-group">
                     <label>Order Stage <span class="text-danger">*</span></label>
-                    <select name="stage" class="form-control" required>
+                    <select name="stage" id="editOrderStage" class="form-control"
+                            data-original-stage="<?php echo e($original_stage); ?>" required>
                         <option value="shop" <?php echo ($order['stage'] ?? '') === 'shop' ? 'selected' : ''; ?>>At the shop</option>
                         <option value="transport" <?php echo ($order['stage'] ?? '') === 'transport' ? 'selected' : ''; ?>>In transport</option>
                         <option value="completed" <?php echo ($order['stage'] ?? '') === 'completed' ? 'selected' : ''; ?>>Completed</option>
                         <option value="returned" <?php echo ($order['stage'] ?? '') === 'returned' ? 'selected' : ''; ?>>Returned</option>
                     </select>
+                </div>
+                <div class="col-md-12 form-group d-none" id="editTransportConfirmation">
+                    <div class="alert alert-warning mb-0">
+                        <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="editConfirmTransport" name="confirm_transport" value="1">
+                            <label class="custom-control-label" for="editConfirmTransport">
+                                I confirm this stock has started moving. The order quantities will be deducted from the selected store.
+                            </label>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="col-md-12 form-group">
@@ -150,5 +226,24 @@ require_once 'sidebar.php';
         </form>
     </div>
 </div>
+
+<script>
+    $(function () {
+        var $stage = $('#editOrderStage');
+        var $confirmation = $('#editTransportConfirmation');
+        var $checkbox = $('#editConfirmTransport');
+
+        function toggleTransportConfirmation() {
+            var needsConfirmation = $stage.val() === 'transport'
+                && $stage.data('original-stage') !== 'transport';
+            $confirmation.toggleClass('d-none', !needsConfirmation);
+            $checkbox.prop('required', needsConfirmation);
+            if (!needsConfirmation) $checkbox.prop('checked', false);
+        }
+
+        $stage.on('change', toggleTransportConfirmation);
+        toggleTransportConfirmation();
+    });
+</script>
 
 <?php require_once 'footer.php'; ?>

@@ -34,7 +34,7 @@ $items = fetch_all(
 );
 
 $settings = fetch_one("SELECT * FROM system_settings WHERE tenant_id = ?", $tenant_id);
-$company = $settings ?: ['company_name' => APP_NAME, 'company_email' => '', 'company_phone' => '', 'company_address' => ''];
+$company = $settings ?: ['company_name' => system_title($current_user->tenant_id), 'company_email' => '', 'company_phone' => '', 'company_address' => ''];
 $logo_path = (!empty($settings['logo_path']) && file_exists($settings['logo_path'])) ? $settings['logo_path'] : '';
 $cur = tenant_currency();
 
@@ -65,7 +65,7 @@ if ($display_status !== 'converted' && !empty($quotation['valid_until']) && $quo
                 <img src="<?php echo e($logo_path); ?>" alt="Company logo" style="max-height:64px;max-width:150px;object-fit:contain;">
             <?php endif; ?>
             <div>
-                <h3 class="mb-1" style="color:var(--primary)"><?php echo e($company['company_name'] ?? APP_NAME); ?></h3>
+                <h3 class="mb-1" style="color:var(--primary)"><?php echo e($company['company_name'] ?? system_title($current_user->tenant_id)); ?></h3>
                 <?php if (!empty($company['company_address'])): ?><div class="small"><?php echo e($company['company_address']); ?></div><?php endif; ?>
                 <?php if (!empty($company['company_email'])): ?><div class="small"><?php echo e($company['company_email']); ?></div><?php endif; ?>
                 <?php if (!empty($company['company_phone'])): ?><div class="small"><?php echo e($company['company_phone']); ?></div><?php endif; ?>
@@ -87,7 +87,7 @@ if ($display_status !== 'converted' && !empty($quotation['valid_until']) && $quo
         <div class="small text-muted"><?php echo e($quotation['phone'] ?? ''); ?></div>
         <div class="small text-muted"><?php echo e($quotation['address'] ?? ''); ?></div>
         <?php if (!empty($quotation['store_name'])): ?>
-            <div class="small text-muted">Store: <?php echo e(trim(($quotation['shop_name'] ?? '') . ' / ' . $quotation['store_name'], ' /')); ?></div>
+            <div class="small text-muted"><?php echo is_godown_manager() ? 'Godown' : 'Store'; ?>: <?php echo e(trim(($quotation['shop_name'] ?? '') . ' / ' . $quotation['store_name'], ' /')); ?></div>
         <?php endif; ?>
     </div>
 

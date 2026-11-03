@@ -8,6 +8,11 @@ $cat_filter = (int)($_GET['category'] ?? 0);
 $where = "WHERE e.tenant_id = ?";
 $params = [$current_user->tenant_id];
 $types = 'i';
+if (is_godown_manager()) {
+    $where .= " AND e.created_by = ?";
+    $params[] = (int)$current_user->user_id;
+    $types .= 'i';
+}
 if ($month !== '' && preg_match('/^\d{4}-\d{2}$/', $month)) {
     $where .= " AND DATE_FORMAT(e.expense_date, '%Y-%m') = ?";
     $params[] = $month;

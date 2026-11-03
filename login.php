@@ -4,7 +4,12 @@ header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 
 if (!empty($_SESSION['user_id'])) {
-    redirect('dashboard.php');
+    $session_user = User::getUserById((int)$_SESSION['user_id']);
+    if ($session_user && $session_user->is_active) {
+        redirect('dashboard.php');
+    }
+    end_session();
+    session_start();
 }
 
 $error = '';
@@ -13,6 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $password = $_POST['password'] ?? '';
     $user = User::authenticate($identifier, $password);
     if ($user) {
+        session_regenerate_id(true);
         $_SESSION['user_id'] = $user->user_id;
         $_SESSION['tenant_id'] = $user->tenant_id;
         $current_user = $user;
@@ -21,13 +27,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $error = 'Invalid username/email or password.';
 }
+
+$app_title = system_title();
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Sign In — <?php echo e(APP_NAME); ?></title>
+    <title>Sign In — <?php echo e($app_title); ?></title>
     <link rel="icon" type="image/png" href="assets/img/favicon.png">
     <link rel="stylesheet" href="assets/css/fonts.css">
     <link rel="stylesheet" href="assets/css/bootstrap.min.css">
@@ -39,9 +47,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="login-card">
             <div class="login-brand">
                 <?php if (file_exists('assets/images/logo.png')): ?>
-                    <img src="assets/images/logo.png" alt="<?php echo e(APP_NAME); ?>" class="login-logo-img">
+                    <img src="assets/images/logo.png" alt="<?php echo e($app_title); ?>" class="login-logo-img">
                 <?php else: ?>
-                    <h1><?php echo e(APP_NAME); ?></h1>
+                    <h1><?php echo e($app_title); ?></h1>
                 <?php endif; ?>
             </div>
             <?php if ($error): ?>

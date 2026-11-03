@@ -2,6 +2,10 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_shops');
+if (!tenant_admin_scope()) {
+    http_response_code(403);
+    die('Only system administrators can manage shops and stores.');
+}
 $page_title = 'Shops & Stores';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -58,13 +62,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'is_active' => 1,
                 'location_type' => 'shop',
             ]);
-            if (!tenant_admin_scope()) {
-                db_insert('user_shops', [
-                    'tenant_id' => $current_user->tenant_id,
-                    'user_id' => $current_user->user_id,
-                    'shop_id' => $id,
-                ]);
-            }
             $conn->commit();
         } catch (Throwable $e) {
             $conn->rollback();
@@ -72,14 +69,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('shops.php');
         }
 
-        // A shop manager who creates a shop can immediately work in it.
-        if (!tenant_admin_scope()) {
-            db_insert('user_shops', [
-                'tenant_id' => $current_user->tenant_id,
-                'user_id' => $current_user->user_id,
-                'shop_id' => $id,
-            ]);
-        }
         audit_log('create', 'shop', $id, 'Shop ' . $name . ' (' . $code . ') created');
         flash_set('success', 'Shop created successfully.');
         redirect('shops.php');
@@ -125,6 +114,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         audit_log('update', 'shop', $shop_id, 'Shop ' . $name . ' updated');
         flash_set('success', 'Shop updated successfully.');
+        redirect('shops.php');
+    }
+
+    if ($action === 'delete_shop') {
+        $shop_id = (int)($_POST['shop_id'] ?? 0);
+        $tenant_id = (int)$current_user->tenant_id;
+        $conn->begin_transaction();
+        try {
+            $shop = fetch_one(
+                "SELECT shop_id, name FROM shops WHERE shop_id = ? AND tenant_id = ? FOR UPDATE",
+                $shop_id,
+                $tenant_id
+            );
+            if (!$shop) {
+                throw new RuntimeException('Shop not found.');
+            }
+
+            $child_locations = fetch_all(
+                "SELECT warehouse_id, location_type
+                   FROM warehouses
+                  WHERE tenant_id = ? AND shop_id = ?
+                  FOR UPDATE",
+                $tenant_id,
+                $shop_id
+            );
+            foreach ($child_locations as $location) {
+                if ($location['location_type'] === 'store') {
+                    throw new RuntimeException('Delete or move this shop’s stores before deleting the shop.');
+                }
+                if ($location['location_type'] !== 'shop') {
+                    throw new RuntimeException('This shop still has an assigned inventory location and cannot be deleted.');
+                }
+                if (location_reference_count('warehouses', 'warehouse_id', (int)$location['warehouse_id'], $tenant_id) > 0) {
+                    throw new RuntimeException('This shop has inventory or transaction history. Deactivate it instead to preserve its records.');
+                }
+            }
+
+            if (location_reference_count('shops', 'shop_id', $shop_id, $tenant_id, 'warehouses') > 0) {
+                throw new RuntimeException('This shop is assigned to users or has transaction history. Deactivate it instead to preserve its records.');
+            }
+
+            $stmt = $conn->prepare("DELETE FROM warehouses WHERE tenant_id = ? AND shop_id = ? AND location_type = 'shop'");
+            if (!$stmt) throw new RuntimeException($conn->error);
+            $stmt->bind_param('ii', $tenant_id, $shop_id);
+            if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+            $stmt->close();
+
+            $stmt = $conn->prepare("DELETE FROM shops WHERE shop_id = ? AND tenant_id = ?");
+            if (!$stmt) throw new RuntimeException($conn->error);
+            $stmt->bind_param('ii', $shop_id, $tenant_id);
+            if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+            if ($stmt->affected_rows !== 1) throw new RuntimeException('The shop could not be deleted.');
+            $stmt->close();
+            $conn->commit();
+            audit_log('delete', 'shop', $shop_id, 'Shop ' . $shop['name'] . ' deleted');
+            flash_set('success', 'Shop deleted successfully.');
+        } catch (Throwable $e) {
+            $conn->rollback();
+            flash_set('danger', 'Could not delete the shop: ' . $e->getMessage());
+        }
         redirect('shops.php');
     }
 }
@@ -224,9 +273,14 @@ require_once 'sidebar.php';
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h5 class="card-title">Shops</h5>
-        <div class="input-group dt-search">
-            <div class="input-group-prepend"><span class="input-group-text"><i class="fa fa-search"></i></span></div>
-            <input type="text" class="form-control dt-search-input" data-scope="shops" placeholder="Search shops...">
+        <div class="d-flex align-items-center" style="gap:8px;">
+            <div class="input-group dt-search">
+                <div class="input-group-prepend"><span class="input-group-text"><i class="fa fa-search"></i></span></div>
+                <input type="text" class="form-control dt-search-input" data-scope="shops" placeholder="Search shops...">
+            </div>
+            <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#addShopModal">
+                <i class="fa fa-plus mr-1"></i> Add Shop
+            </button>
         </div>
     </div>
     <div class="card-body p-0">
@@ -257,6 +311,10 @@ require_once 'sidebar.php';
                         <td class="text-right">
                             <a href="stores.php?shop=<?php echo (int)$shop['shop_id']; ?>" class="btn btn-action btn-light" title="Stores"><i class="fa fa-cubes"></i></a>
                             <button type="button" class="btn btn-action btn-light" title="Edit" data-toggle="modal" data-target="#editShopModal<?php echo (int)$shop['shop_id']; ?>"><i class="fa fa-pencil"></i></button>
+                            <button type="button" class="btn btn-action btn-outline-danger" title="Delete"
+                                    data-toggle="modal" data-target="#deleteShopModal<?php echo (int)$shop['shop_id']; ?>">
+                                <i class="fa fa-trash"></i>
+                            </button>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -323,6 +381,28 @@ require_once 'sidebar.php';
                     <button type="submit" class="btn btn-primary">Save Changes</button>
                 </div>
             </form>
+        </div>
+    </div>
+</div>
+<div class="modal fade" id="deleteShopModal<?php echo (int)$shop['shop_id']; ?>" tabindex="-1" aria-labelledby="deleteShopTitle<?php echo (int)$shop['shop_id']; ?>" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteShopTitle<?php echo (int)$shop['shop_id']; ?>">Delete Shop</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                Delete <strong><?php echo e($shop['name']); ?></strong>? This is allowed only when it has no stores, user assignments, inventory, or transaction history. Otherwise deactivate it to preserve records.
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                <form method="POST" action="shops.php">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="delete_shop">
+                    <input type="hidden" name="shop_id" value="<?php echo (int)$shop['shop_id']; ?>">
+                    <button type="submit" class="btn btn-danger">Delete Shop</button>
+                </form>
+            </div>
         </div>
     </div>
 </div>

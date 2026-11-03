@@ -214,9 +214,9 @@ try {
             break;
 
         case 'verify_request':
-            if (!tenant_admin_scope() || !can('manage_orders')) {
+            if (!can_verify_storefront_order_requests()) {
                 http_response_code(403);
-                die('Only an authorized system administrator can verify order requests.');
+                die('Only an authorized system administrator or assigned Shop Manager can verify order requests.');
             }
             if ($lead['source'] !== 'storefront' || $lead['status'] === 'cancelled') {
                 lead_action_redirect($back, 'danger', 'Only an active storefront order request can be verified.');
@@ -227,8 +227,8 @@ try {
             if ($shop_id <= 0 || !shop_is_accessible($shop_id, false)) {
                 lead_action_redirect($back, 'danger', 'Select an active shop you are authorized to manage.');
             }
-            // The store is never chosen by the user: keep the posted store only
-            // when it belongs to the shop, otherwise pick the first active one.
+            // Keep the posted inventory location only when it belongs to the
+            // selected shop; otherwise use that shop's own inventory location.
             if ($warehouse_id > 0) {
                 $store = find_accessible_store($warehouse_id, false);
                 if (!$store || (int)$store['shop_id'] !== $shop_id) {
@@ -273,17 +273,17 @@ try {
                     throw new RuntimeException('The selected shop is no longer active or does not belong to this tenant.');
                 }
                 if ($warehouse_id > 0) {
-                    $valid_store = fetch_one(
+                    $valid_location = fetch_one(
                         "SELECT warehouse_id FROM warehouses
                           WHERE tenant_id = ? AND warehouse_id = ? AND shop_id = ?
-                            AND is_active = 1 AND location_type = 'store'
+                                AND is_active = 1 AND location_type IN ('store', 'shop')
                           FOR UPDATE",
                         (int)$current_user->tenant_id,
                         $warehouse_id,
                         $shop_id
                     );
-                    if (!$valid_store) {
-                        throw new RuntimeException('The selected store is no longer active or does not belong to the selected shop.');
+                    if (!$valid_location) {
+                        throw new RuntimeException('The selected inventory location is no longer active or does not belong to the selected shop.');
                     }
                 }
 
@@ -609,4 +609,3 @@ try {
 } catch (Throwable $ex) {
     lead_action_redirect($back, 'danger', $ex->getMessage());
 }
-

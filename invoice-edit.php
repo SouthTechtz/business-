@@ -12,11 +12,11 @@ if (!$invoice) {
 }
 
 $invoice_warehouse_id = (int)($invoice['warehouse_id'] ?? 0);
-if (!$invoice_warehouse_id || !store_is_accessible($invoice_warehouse_id, true)) {
+if (!$invoice_warehouse_id || !store_is_accessible($invoice_warehouse_id, true, is_godown_manager())) {
     http_response_code(403);
     die('You do not have access to the store for this invoice.');
 }
-$invoice_store = find_accessible_store($invoice_warehouse_id, true);
+$invoice_store = find_accessible_store($invoice_warehouse_id, true, is_godown_manager());
 
 // Cancelled invoices cannot be edited.
 $invoice_status = fetch_one("SELECT name FROM document_statuses WHERE status_id = ? AND tenant_id = ?", (int)$invoice['status_id'], $current_user->tenant_id);
@@ -80,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $item['product_id'], $current_user->tenant_id
             );
             $item_warehouse_id = (int)($item['warehouse_id'] ?? 0);
-            if (!$item_warehouse_id || !find_accessible_store($item_warehouse_id, true)) {
+            if (!$item_warehouse_id || !find_accessible_store($item_warehouse_id, true, is_godown_manager())) {
                 throw new Exception('An item has an unknown or inaccessible store. No stock was changed.');
             }
 
@@ -249,7 +249,7 @@ $cur = tenant_currency();
 <div class="page-head">
     <div>
         <h1 class="page-title">Edit Invoice</h1>
-        <div class="page-sub"><?php echo e($invoice['invoice_number']); ?> · Store: <strong><?php echo e(store_label($invoice_store)); ?></strong></div>
+        <div class="page-sub"><?php echo e($invoice['invoice_number']); ?> · <?php echo is_godown_manager() ? 'Godown' : 'Store'; ?>: <strong><?php echo e(store_label($invoice_store)); ?></strong></div>
     </div>
     <a href="invoice-details.php?id=<?php echo $id; ?>" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back</a>
 </div>

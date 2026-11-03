@@ -40,6 +40,10 @@ $sql = "SELECT l.*,
                   FROM storefront_lead_request_items sli
                   JOIN storefront_lead_requests slr ON slr.request_id = sli.request_id AND slr.tenant_id = sli.tenant_id
                  WHERE slr.lead_id = l.lead_id AND slr.tenant_id = l.tenant_id) product_names,
+               (SELECT COALESCE(SUM(sli.quantity), 0)
+                  FROM storefront_lead_request_items sli
+                  JOIN storefront_lead_requests slr ON slr.request_id = sli.request_id AND slr.tenant_id = sli.tenant_id
+                 WHERE slr.lead_id = l.lead_id AND slr.tenant_id = l.tenant_id) requested_quantity,
                ua.first_name assignee_first, ua.last_name assignee_last,
                uc.first_name creator_first, uc.last_name creator_last,
                c.first_name contact_first, c.last_name contact_last, c.company_name contact_company,
@@ -144,7 +148,7 @@ require_once 'sidebar.php';
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Customer Name</th><th>Phone</th><th>Product Name</th><th>Location</th>
+                        <th>Customer Name</th><th>Phone</th><th>Requested Products</th><th>Quantity</th><th>Location</th>
                         <th>Status</th><th>Orders Placed</th><th>Next Follow-up</th><th>Date</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
@@ -154,10 +158,8 @@ require_once 'sidebar.php';
                     $overdue = $l['next_follow_up_at']
                         && $l['next_follow_up_at'] < date('Y-m-d')
                         && !in_array($l['status'], ['confirmed', 'cancelled'], true);
-                    $contact_person = trim((string)($l['contact_first'] ?? '') . ' ' . (string)($l['contact_last'] ?? ''));
-                    $customer_name = trim((string)($l['contact_company'] ?? ''));
-                    if ($customer_name === '') $customer_name = trim((string)($l['company_name'] ?? ''));
-                    if ($customer_name === '') $customer_name = $contact_person ?: (string)$l['contact_name'];
+                    $can_delete_lead = in_array((string)$l['status'], ['pending', 'follow_up', 'cancelled'], true);
+                    $customer_name = lead_customer_display_name($l);
                     $contact_phone = $l['phone'] ?: ($l['contact_phone'] ?: $l['contact_mobile']);
                     $product_name = trim((string)($l['product_names'] ?? ''));
                     if ($product_name === '') $product_name = '—';
@@ -172,6 +174,7 @@ require_once 'sidebar.php';
                         </td>
                         <td><?php echo e($contact_phone ?: 'Phone not recorded'); ?></td>
                         <td><?php echo e($product_name); ?></td>
+                        <td><?php echo (float)$l['requested_quantity'] > 0 ? e(format_quantity((float)$l['requested_quantity'])) : '—'; ?></td>
                         <td><?php echo e($l['location'] ?: '—'); ?></td>
                         <td><span class="badge badge-<?php echo e(lead_status_class($l['status'])); ?>"><?php echo e($statuses[$l['status']] ?? $l['status']); ?></span></td>
                         <td><?php echo $can_orders ? (int)$l['order_count'] : '—'; ?></td>
@@ -194,18 +197,61 @@ require_once 'sidebar.php';
                                 <div class="dropdown-menu dropdown-menu-right">
                                     <a class="dropdown-item" href="lead-view.php?id=<?php echo (int)$l['lead_id']; ?>"><i class="fa fa-eye mr-2"></i>View</a>
                                     <a class="dropdown-item" href="lead-edit.php?id=<?php echo (int)$l['lead_id']; ?>"><i class="fa fa-pencil mr-2"></i>Edit</a>
+                                    <?php if ($can_delete_lead): ?>
+                                        <button type="button" class="dropdown-item text-danger" data-toggle="modal" data-target="#deleteLeadModal"
+                                                data-lead-id="<?php echo (int)$l['lead_id']; ?>"
+                                                data-lead-number="<?php echo e($l['lead_number']); ?>">
+                                            <i class="fa fa-trash mr-2"></i>Delete
+                                        </button>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </td>
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$leads): ?>
-                    <tr><td colspan="9" class="text-center text-muted py-4">No leads match the current filters. <a href="lead-add.php">Record the first lead</a>.</td></tr>
+                    <tr><td colspan="10" class="text-center text-muted py-4">No leads match the current filters. <a href="lead-add.php">Record the first lead</a>.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="deleteLeadModal" tabindex="-1" role="dialog" aria-labelledby="deleteLeadModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <form method="POST" action="lead-action.php">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="lead_id" id="deleteLeadId" value="">
+                <div class="modal-header">
+                    <h5 class="modal-title text-danger" id="deleteLeadModalLabel">
+                        <i class="fa fa-trash mr-1"></i> Delete Lead
+                    </h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning mb-0" role="alert">
+                        Delete lead <strong id="deleteLeadNumber"></strong>? Its follow-up history and any unconverted storefront request will also be deleted. Leads linked to orders cannot be deleted.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger"><i class="fa fa-trash mr-1"></i> Delete Lead</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+    $('#deleteLeadModal').on('show.bs.modal', function (event) {
+        var $button = $(event.relatedTarget);
+        $('#deleteLeadId').val($button.data('lead-id'));
+        $('#deleteLeadNumber').text($button.data('lead-number'));
+    });
+</script>
 
 <?php require_once 'footer.php'; ?>

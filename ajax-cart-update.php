@@ -9,15 +9,16 @@ $pid = (int)($_POST['product_id'] ?? 0);
 $price = (float)($_POST['price'] ?? 0);
 $qty = (float)($_POST['quantity'] ?? 0);
 
-// Resolve the store from the signed-in user's accessible stores.
-$stores = accessible_stores(null, false);
-$store = $stores ? find_accessible_store((int)$stores[0]['warehouse_id'], false) : null;
-if (!$store) {
+// Resolve POS stock only from the user's selected, accessible Shop.
+$shop_id = (int)($_SESSION['active_shop_id'] ?? 0);
+$warehouse_id = $shop_id > 0 && shop_is_accessible($shop_id, false)
+    ? shop_inventory_warehouse_id($shop_id)
+    : null;
+if (!$warehouse_id) {
     http_response_code(403);
-    echo json_encode(['ok' => false, 'message' => 'No active store is available for your account.']);
+    echo json_encode(['ok' => false, 'message' => 'Select an accessible Shop with an active inventory warehouse.']);
     exit;
 }
-$warehouse_id = (int)$store['warehouse_id'];
 
 if (!isset($_SESSION['pos_cart'][$pid])) {
     echo json_encode(['ok' => false, 'message' => 'Item not in cart.']);
@@ -41,10 +42,10 @@ if (!$item['is_service']) {
                                 - COALESCE((SELECT SUM(r.quantity) FROM order_stock_reservations r
                                 WHERE r.tenant_id = p.tenant_id AND r.product_id = p.product_id AND r.warehouse_id = ? AND r.status = 'active'), 0)) total_stock
          FROM products p WHERE p.product_id = ? AND p.tenant_id = ?",
-        $store['warehouse_id'], $store['warehouse_id'], $pid, $current_user->tenant_id
+        $warehouse_id, $warehouse_id, $pid, $current_user->tenant_id
     );
     if ($product && $qty > (float)$product['total_stock']) {
-        echo json_encode(['ok' => false, 'message' => 'Not enough stock for ' . $product['name'] . ' at ' . store_label($store) . ' (available: ' . (float)$product['total_stock'] . ').']);
+        echo json_encode(['ok' => false, 'message' => 'Not enough stock for ' . $product['name'] . ' at the selected Shop (available: ' . (float)$product['total_stock'] . ').']);
         exit;
     }
 }

@@ -16,7 +16,7 @@ if (!$invoice) {
     redirect("invoices.php");
 }
 $invoice_warehouse_id = (int)($invoice["warehouse_id"] ?? 0);
-if ($invoice_warehouse_id > 0 && !store_is_accessible($invoice_warehouse_id, true)) {
+if ($invoice_warehouse_id > 0 && !store_is_accessible($invoice_warehouse_id, true, is_godown_manager())) {
     flash_set("danger", "You do not have access to this invoice.");
     redirect("invoices.php");
 }

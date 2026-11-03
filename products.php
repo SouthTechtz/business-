@@ -40,12 +40,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Delete product
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $pid = (int)$_GET['delete'];
-    $stmt = $conn->prepare("DELETE FROM product_variants WHERE product_id = ? AND tenant_id = ?");
-    $stmt->bind_param('ii', $pid, $current_user->tenant_id);
-    $stmt->execute();
+    if (fetch_one(
+        "SELECT 1 FROM information_schema.tables
+          WHERE table_schema = DATABASE() AND table_name = 'product_variants'"
+    )) {
+        $stmt = $conn->prepare("DELETE FROM product_variants WHERE product_id = ? AND tenant_id = ?");
+        $stmt->bind_param('ii', $pid, $current_user->tenant_id);
+        $stmt->execute();
+        $stmt->close();
+    }
     $stmt = $conn->prepare("DELETE FROM products WHERE product_id = ? AND tenant_id = ?");
     $stmt->bind_param('ii', $pid, $current_user->tenant_id);
     $stmt->execute();
+    $stmt->close();
     flash_set('success', 'Product deleted.');
     redirect('products.php');
 }

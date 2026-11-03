@@ -37,7 +37,7 @@ if ($status_filter !== '' && !isset(quotation_statuses()[$status_filter])) {
 }
 $search = trim($_GET['q'] ?? '');
 $warehouse_filter = (int)($_GET['warehouse'] ?? 0);
-$stores = accessible_stores(null, true);
+$stores = accessible_stores(null, true, null, is_godown_manager());
 $store_ids = array_map(fn($s) => (int)$s['warehouse_id'], $stores);
 if ($warehouse_filter > 0 && !in_array($warehouse_filter, $store_ids, true)) {
     $warehouse_filter = 0;
@@ -54,7 +54,7 @@ $sql = "SELECT q.*, c.first_name, c.last_name, c.company_name,
         WHERE q.tenant_id = ?";
 $params = [$tenant_id];
 $types = 'i';
-$scope_ids = accessible_warehouse_ids();
+$scope_ids = accessible_warehouse_ids(null, true, is_godown_manager());
 if ($scope_ids !== null) {
     if (!$scope_ids) {
         $sql .= " AND 1 = 0";
@@ -120,7 +120,7 @@ $cur = tenant_currency();
             </select>
             <input type="text" name="q" class="form-control form-control-sm mr-2 mb-1" placeholder="Search quotation # or customer" value="<?php echo e($search); ?>">
             <select name="warehouse" class="form-control form-control-sm mr-2 mb-1">
-                <option value="0">All Stores</option>
+                <option value="0">All <?php echo is_godown_manager() ? 'Godowns' : 'Stores'; ?></option>
                 <?php foreach ($stores as $store): ?>
                     <option value="<?php echo (int)$store['warehouse_id']; ?>" <?php echo $warehouse_filter === (int)$store['warehouse_id'] ? 'selected' : ''; ?>><?php echo e(store_label($store)); ?><?php echo (int)$store['is_active'] ? '' : ' (inactive)'; ?></option>
                 <?php endforeach; ?>
@@ -140,7 +140,7 @@ $cur = tenant_currency();
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Quotation #</th><th>Customer</th><th>Store</th><th>Issue Date</th><th>Valid Until</th><th>Status</th><th class="text-right">Total</th><th class="text-right">Actions</th>
+                        <th>Quotation #</th><th>Customer</th><th><?php echo is_godown_manager() ? 'Godown' : 'Store'; ?></th><th>Issue Date</th><th>Valid Until</th><th>Status</th><th class="text-right">Total</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>

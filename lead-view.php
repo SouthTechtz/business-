@@ -25,6 +25,7 @@ if (!$lead) {
 }
 
 $can_orders = can('manage_orders');
+$lead_customer_name = lead_customer_display_name($lead);
 $storefront_request = fetch_one(
     "SELECT r.*, o.order_id, o.order_number, o.status order_status
        FROM storefront_lead_requests r
@@ -80,9 +81,9 @@ $activities = fetch_all(
 
 $statuses = lead_statuses();
 $transitions = lead_allowed_transitions($lead['status']);
+$can_delete_lead = in_array((string)$lead['status'], ['pending', 'follow_up', 'cancelled'], true);
 $can_verify_request = $storefront_request
-    && tenant_admin_scope()
-    && $can_orders
+    && can_verify_storefront_order_requests()
     && empty($storefront_request['order_id'])
     && $lead['status'] !== 'cancelled';
 $staff = users_with_permission('manage_leads');
@@ -113,9 +114,45 @@ require_once 'sidebar.php';
         </a>
         <?php endif; ?>
         <a href="lead-edit.php?id=<?php echo $id; ?>" class="btn btn-outline-primary"><i class="fa fa-pencil mr-1"></i> Edit</a>
+        <?php if ($can_delete_lead): ?>
+            <button type="button" class="btn btn-outline-danger" data-toggle="modal" data-target="#deleteLeadModal">
+                <i class="fa fa-trash mr-1"></i> Delete Lead
+            </button>
+        <?php endif; ?>
         <a href="leads.php" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back</a>
     </div>
 </div>
+
+<?php if ($can_delete_lead): ?>
+    <div class="modal fade" id="deleteLeadModal" tabindex="-1" role="dialog" aria-labelledby="deleteLeadModalLabel" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <form method="POST" action="lead-action.php">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="lead_id" value="<?php echo $id; ?>">
+                    <div class="modal-header">
+                        <h5 class="modal-title text-danger" id="deleteLeadModalLabel">
+                            <i class="fa fa-trash mr-1"></i> Delete Lead
+                        </h5>
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="alert alert-warning mb-0" role="alert">
+                            Delete lead <?php echo e($lead['lead_number']); ?>? Its follow-up history and any unconverted storefront request will also be deleted. Leads linked to orders cannot be deleted.
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-danger"><i class="fa fa-trash mr-1"></i> Delete Lead</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
 
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
@@ -138,7 +175,7 @@ require_once 'sidebar.php';
                             <td>
                                 <?php if ($lead['contact_id']): ?>
                                     <a href="customer-view.php?id=<?php echo (int)$lead['contact_id']; ?>">
-                                        <?php echo e(trim(($lead['contact_first'] ?? '') . ' ' . ($lead['contact_last'] ?? '')) ?: ($lead['contact_company'] ?? 'Linked customer')); ?>
+                                        <?php echo e($lead_customer_name ?: ($lead['contact_company'] ?? 'Linked customer')); ?>
                                     </a>
                                     <?php if (!empty($lead['contact_customer_number'])): ?>
                                         <br><small class="text-muted"><?php echo e($lead['contact_customer_number']); ?></small>

@@ -189,5 +189,77 @@
                 });
             });
         }
+
+        var modalAddForm = document.querySelector('#sf-product-modal .sf-add-form');
+        if (modalAddForm && window.fetch && window.FormData) {
+            var feedback = document.createElement('p');
+            feedback.className = 'sf-modal-cart-feedback';
+            feedback.setAttribute('role', 'status');
+            feedback.setAttribute('aria-live', 'polite');
+            feedback.hidden = true;
+            modalAddForm.parentNode.insertBefore(feedback, modalAddForm.nextSibling);
+
+            var updateCartCount = function (count) {
+                var link = document.querySelector('.sf-cart-link');
+                if (!link) return;
+                count = Math.max(0, parseInt(count, 10) || 0);
+                var badge = link.querySelector('.sf-cart-count');
+                if (count > 0) {
+                    if (!badge) {
+                        badge = document.createElement('strong');
+                        badge.className = 'sf-cart-count';
+                        link.appendChild(badge);
+                    }
+                    badge.textContent = count;
+                } else if (badge) {
+                    badge.remove();
+                }
+                link.setAttribute('aria-label', 'Cart, ' + count + ' item' + (count === 1 ? '' : 's'));
+            };
+
+            var showFeedback = function (message, type) {
+                feedback.textContent = message;
+                feedback.className = 'sf-modal-cart-feedback is-' + (type || 'success');
+                feedback.hidden = false;
+            };
+
+            modalAddForm.addEventListener('submit', function (event) {
+                event.preventDefault();
+                var form = this;
+                var button = form.querySelector('button[type="submit"]');
+                if (form.getAttribute('data-sf-submitting') === '1') return;
+                form.setAttribute('data-sf-submitting', '1');
+                var wasDisabled = button ? button.disabled : false;
+                if (button) button.disabled = true;
+                feedback.hidden = true;
+
+                fetch(form.getAttribute('action') || window.location.href, {
+                    method: 'POST',
+                    body: new FormData(form),
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    credentials: 'same-origin'
+                }).then(function (response) {
+                    return response.json().catch(function () {
+                        throw new Error('The cart could not be updated. Please try again.');
+                    }).then(function (data) {
+                        if (!response.ok) {
+                            throw new Error(data && data.message ? data.message : 'The cart could not be updated.');
+                        }
+                        return data;
+                    });
+                }).then(function (data) {
+                    if (typeof data.cart_count !== 'undefined') updateCartCount(data.cart_count);
+                    showFeedback(data.message || 'Cart updated.', data.type);
+                }).catch(function (error) {
+                    showFeedback(error.message || 'The cart could not be updated. Please try again.', 'danger');
+                }).then(function () {
+                    form.setAttribute('data-sf-submitting', '0');
+                    if (button) button.disabled = wasDisabled;
+                });
+            });
+        }
     });
 })();

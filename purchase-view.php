@@ -6,11 +6,16 @@ $page_title = 'View Purchase';
 
 $tenant_id = (int)$current_user->tenant_id;
 $id = (int)($_GET['id'] ?? 0);
+$purchase_scope = is_godown_manager() ? ' AND pu.created_by = ?' : '';
+$purchase_params = [$id, $tenant_id];
+if (is_godown_manager()) {
+    $purchase_params[] = (int)$current_user->user_id;
+}
 $row = fetch_one("SELECT pu.*, pr.name product_name, pr.code product_code, s.company_name supplier_name
                    FROM purchases pu
                    JOIN products pr ON pr.product_id = pu.product_id AND pr.tenant_id = pu.tenant_id
                    LEFT JOIN suppliers s ON s.supplier_id = pu.supplier_id AND s.tenant_id = pu.tenant_id
-                  WHERE pu.purchase_id = ? AND pu.tenant_id = ?", $id, $tenant_id);
+                  WHERE pu.purchase_id = ? AND pu.tenant_id = ?{$purchase_scope}", ...$purchase_params);
 if (!$row) {
     flash_set('danger', 'Purchase not found.');
     redirect('purchases.php');

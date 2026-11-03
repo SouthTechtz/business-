@@ -2,12 +2,45 @@
     </div>
 </div>
 
+<div class="modal fade" id="appAlertModal" tabindex="-1" role="dialog" aria-labelledby="appAlertModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="appAlertModalTitle">Notice</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+            </div>
+            <div class="modal-body" id="appAlertModalMessage"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-dismiss="modal">OK</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
+    function showAppAlert(message, title, onClose) {
+        var $modal = $('#appAlertModal');
+        $modal.off('hidden.bs.modal');
+        if (typeof onClose === 'function') {
+            $modal.one('hidden.bs.modal', onClose);
+        }
+        $('#appAlertModalTitle').text(title || 'Notice');
+        $('#appAlertModalMessage').text(message || 'An unexpected issue occurred.');
+        $modal.modal('show');
+    }
+
+    if ($.fn.dataTable && $.fn.dataTable.ext) {
+        $.fn.dataTable.ext.errMode = function (settings, techNote, message) {
+            showAppAlert(message, 'Table Error');
+        };
+    }
+
     $(function () {
         $('table.data-table').each(function () {
+            var configuredPageLength = parseInt($(this).attr('data-page-length'), 10);
             var table = $(this).DataTable({
-                pageLength: 10,
-                lengthMenu: [[10, 25, 50, -1], [10, 25, 50, 'All']],
+                pageLength: configuredPageLength > 0 ? configuredPageLength : 10,
+                lengthMenu: [[10, 20, 25, 50, -1], [10, 20, 25, 50, 'All']],
                 order: [],
                 dom: 'lrtip'
             });

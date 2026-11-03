@@ -6,9 +6,10 @@ $page_title = 'Central Godown';
 
 $tenant_id = (int)$current_user->tenant_id;
 $can_manage = can('manage_godown');
+$can_configure_godown = $can_manage && !is_godown_manager();
 
 // The system always keeps one active Central Godown available.
-if ($can_manage) {
+if ($can_manage && !is_godown_manager()) {
     ensure_central_godown($tenant_id);
 }
 
@@ -22,6 +23,12 @@ if (!in_array($tab, $valid_tabs, true)) {
 /** Load a Godown row within the current tenant. */
 function godown_find(int $tenant_id, int $warehouse_id): ?array
 {
+    if (
+        is_godown_manager()
+        && !in_array($warehouse_id, godown_manager_location_ids($tenant_id, true), true)
+    ) {
+        return null;
+    }
     return fetch_one(
         "SELECT w.*, TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) manager_name,
                 u.username manager_username
@@ -92,6 +99,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $in_transaction = false;
 
     try {
+        if (
+            is_godown_manager()
+            && in_array($action, ['create_godown', 'update_godown', 'delete_godown'], true)
+        ) {
+            throw new RuntimeException('Godown Managers may manage stock and transfers, but cannot change Godown configuration.');
+        }
+
         if ($action === 'create_godown') {
             $name = trim((string)($_POST['name'] ?? ''));
             $code = strtoupper(trim((string)($_POST['code'] ?? '')));
@@ -507,8 +521,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $godown = find_active_godown($tenant_id, false);
 
-$archived_godowns = $can_manage
-    ? fetch_all(
+$archived_godowns = [];
+if ($can_manage) {
+    $archived_sql =
         "SELECT w.*,
                 TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) manager_name,
                 u.username manager_username,
@@ -517,10 +532,20 @@ $archived_godowns = $can_manage
            FROM warehouses w
            LEFT JOIN users u ON u.user_id = w.manager_user_id
           WHERE w.tenant_id = ? AND w.location_type = 'godown' AND w.is_active = 0
-          ORDER BY w.updated_at DESC, w.name",
-        $tenant_id
-    )
-    : [];
+          ";
+    $archived_params = [$tenant_id];
+    if (is_godown_manager()) {
+        $archived_ids = godown_manager_location_ids($tenant_id, true);
+        if ($archived_ids) {
+            $archived_sql .= ' AND w.warehouse_id IN (' . implode(',', array_fill(0, count($archived_ids), '?')) . ')';
+            $archived_params = array_merge($archived_params, $archived_ids);
+        } else {
+            $archived_sql .= ' AND 1 = 0';
+        }
+    }
+    $archived_sql .= ' ORDER BY w.updated_at DESC, w.name';
+    $archived_godowns = fetch_all($archived_sql, ...$archived_params);
+}
 
 $shops = accessible_shops(null, false);
 $stores = accessible_stores(null, false);
@@ -547,21 +572,24 @@ foreach (fetch_all(
     ];
 }
 
-$stock_summary = ['qty' => 0.0, 'products' => 0];
+$stock_summary = ['qty' => 0.0, 'products' => 0, 'expected_sales_value' => 0.0];
 if ($godown) {
     $row = fetch_one(
-        "SELECT COALESCE(SUM(quantity), 0) qty,
-                COUNT(DISTINCT CASE WHEN quantity <> 0 THEN product_id END) products
-           FROM inventory_stock
-          WHERE tenant_id = ? AND warehouse_id = ?",
+        "SELECT COALESCE(SUM(s.quantity), 0) qty,
+                COUNT(DISTINCT CASE WHEN s.quantity <> 0 THEN s.product_id END) products,
+                COALESCE(SUM(CASE WHEN s.quantity > 0 THEN s.quantity * p.sale_price ELSE 0 END), 0) expected_sales_value
+           FROM inventory_stock s
+           JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
+          WHERE s.tenant_id = ? AND s.warehouse_id = ?",
         $tenant_id,
         (int)$godown['warehouse_id']
     ) ?: [];
     $stock_summary['qty'] = (float)($row['qty'] ?? 0);
     $stock_summary['products'] = (int)($row['products'] ?? 0);
+    $stock_summary['expected_sales_value'] = (float)($row['expected_sales_value'] ?? 0);
 }
 
-$godown_managers = $can_manage
+$godown_managers = $can_configure_godown
     ? fetch_all(
         "SELECT user_id, username, first_name, last_name FROM users
           WHERE tenant_id = ? AND is_active = 1
@@ -631,16 +659,6 @@ $product_rows = $godown ? fetch_all(
     ...array_merge($product_params, [$per_page, $offset])
 ) : [];
 
-$receive_products = $godown ? fetch_all(
-    "SELECT p.product_id, p.code, p.name, COALESCE(u.is_decimal, 0) is_decimal,
-            COALESCE(u.short_name, '') unit_short
-       FROM products p
-       LEFT JOIN units_of_measurement u ON u.unit_id = p.unit_id AND u.tenant_id = p.tenant_id
-      WHERE p.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0
-      ORDER BY p.name",
-    $tenant_id
-) : [];
-
 $recent_receipts = $godown ? fetch_all(
     "SELECT gr.*, p.name product_name, p.code product_code, COALESCE(u.short_name, '') unit_short,
             TRIM(CONCAT(COALESCE(usr.first_name, ''), ' ', COALESCE(usr.last_name, ''))) received_by_name,
@@ -708,7 +726,7 @@ require_once 'sidebar.php';
 
 <div class="page-head">
     <div>
-        <h1 class="page-title">Central Godown</h1>
+        <h1 class="page-title"><?php echo is_godown_manager() ? 'My Godown' : 'Central Godown'; ?></h1>
         <div class="page-sub">The Godown is an independent warehouse. Its stock is separate from shop POS stock and is moved to shops through transfers.</div>
     </div>
     <div>
@@ -744,8 +762,12 @@ require_once 'sidebar.php';
 <?php if ($tab === 'products'): ?>
     <?php if (!$godown): ?>
         <div class="alert alert-warning">
+            <?php if (is_godown_manager()): ?>
+                Your account does not have an active Godown assigned. Contact an administrator to assign one.
+            <?php else: ?>
             No Central Godown has been created yet. By default, an empty system godown needs to be set up.
             <a href="godown.php?tab=overview" class="alert-link">Go to Overview to create one</a>.
+            <?php endif; ?>
         </div>
     <?php else: ?>
         <?php
@@ -754,16 +776,18 @@ require_once 'sidebar.php';
                 "SELECT
                     COUNT(p.product_id) total_products,
                     COALESCE(SUM(COALESCE(s.quantity, 0)), 0) total_qty,
+                    COALESCE(SUM(CASE WHEN COALESCE(s.quantity, 0) > 0
+                        THEN COALESCE(s.quantity, 0) * p.sale_price ELSE 0 END), 0) expected_sales_value,
                     COALESCE(SUM(CASE WHEN COALESCE(s.quantity, 0) > 0 AND COALESCE(s.quantity, 0) <= p.min_stock_level THEN 1 ELSE 0 END), 0) low_stock_count,
                     COALESCE(SUM(CASE WHEN COALESCE(s.quantity, 0) <= 0 THEN 1 ELSE 0 END), 0) out_stock_count"
                 . $product_from . $product_where,
                 ...$product_params
-            ) ?: ['total_products' => 0, 'total_qty' => 0, 'low_stock_count' => 0, 'out_stock_count' => 0];
+            ) ?: ['total_products' => 0, 'total_qty' => 0, 'expected_sales_value' => 0, 'low_stock_count' => 0, 'out_stock_count' => 0];
         ?>
 
         <!-- Summary Cards Row -->
         <div class="row mb-4">
-            <div class="col-sm-6 col-xl-3 mb-3 mb-xl-0">
+            <div class="col-sm-6 col-xl mb-3">
                 <div class="card border-left-primary shadow-sm h-100 py-2">
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
@@ -779,7 +803,7 @@ require_once 'sidebar.php';
                 </div>
             </div>
 
-            <div class="col-sm-6 col-xl-3 mb-3 mb-xl-0">
+            <div class="col-sm-6 col-xl mb-3">
                 <div class="card border-left-success shadow-sm h-100 py-2">
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
@@ -795,7 +819,23 @@ require_once 'sidebar.php';
                 </div>
             </div>
 
-            <div class="col-sm-6 col-xl-3 mb-3 mb-sm-0">
+            <div class="col-sm-6 col-xl mb-3">
+                <div class="card border-left-info shadow-sm h-100 py-2">
+                    <div class="card-body">
+                        <div class="row no-gutters align-items-center">
+                            <div class="col mr-2">
+                                <div class="text-xs font-weight-bold text-info text-uppercase mb-1">Expected Sales Value</div>
+                                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($metrics['expected_sales_value'], tenant_currency())); ?></div>
+                            </div>
+                            <div class="col-auto">
+                                <i class="fa fa-money fa-2x text-gray-300"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-sm-6 col-xl mb-3">
                 <div class="card border-left-warning shadow-sm h-100 py-2">
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
@@ -811,7 +851,7 @@ require_once 'sidebar.php';
                 </div>
             </div>
 
-            <div class="col-sm-6 col-xl-3">
+            <div class="col-sm-6 col-xl mb-3">
                 <div class="card border-left-danger shadow-sm h-100 py-2">
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
@@ -844,14 +884,14 @@ require_once 'sidebar.php';
                         <div class="row">
                             <div class="col-md-5 form-group">
                                 <label>Product <span class="text-danger">*</span></label>
-                                <select name="product_id" id="receive_product" class="form-control" required>
-                                    <option value="">— Select Product —</option>
-                                    <?php foreach ($receive_products as $product): ?>
-                                        <option value="<?php echo (int)$product['product_id']; ?>" data-decimal="<?php echo (int)$product['is_decimal']; ?>">
-                                            <?php echo e($product['name'] . ' (' . $product['code'] . ')'); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <input type="hidden" name="product_id" id="receive_product_id">
+                                <input type="text" id="receive_product_search" class="form-control"
+                                       placeholder="Search by name, code, SKU or barcode" autocomplete="off"
+                                       aria-autocomplete="list" aria-controls="receive_product_results">
+                                <div id="receive_product_results" class="list-group mt-1" role="listbox"
+                                     style="max-height: 240px; overflow-y: auto;"></div>
+                                <small class="form-text text-muted" id="receive_product_status">Type at least 2 characters to search.</small>
+                                <div class="small text-success mt-1" id="receive_product_selected" aria-live="polite"></div>
                             </div>
                             <div class="col-md-3 form-group">
                                 <label>Quantity <span class="text-danger">*</span></label>
@@ -1014,9 +1054,12 @@ require_once 'sidebar.php';
     <?php if (!$godown): ?>
         <div class="card mb-4">
             <div class="card-header">
-                <h5 class="card-title mb-0"><i class="fa fa-plus-circle mr-1"></i> Initialize Central Godown</h5>
+                <h5 class="card-title mb-0"><i class="fa fa-<?php echo is_godown_manager() ? 'archive' : 'plus-circle'; ?> mr-1"></i> <?php echo is_godown_manager() ? 'Assigned Godown' : 'Initialize Central Godown'; ?></h5>
             </div>
             <div class="card-body">
+                <?php if (is_godown_manager()): ?>
+                    <div class="alert alert-warning mb-0">No active Godown is assigned to your account. Contact an administrator to assign one.</div>
+                <?php else: ?>
                 <p class="text-muted">By default, the system requires an active central Godown. Set up your primary empty warehouse below.</p>
                 <?php if (!$can_manage): ?>
                     <div class="alert alert-warning mb-0">You can view the Godown configuration but do not have permission to create one.</div>
@@ -1056,6 +1099,7 @@ require_once 'sidebar.php';
                         </div>
                         <button type="submit" class="btn btn-primary"><i class="fa fa-check mr-1"></i> Create Central Godown</button>
                     </form>
+                <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
@@ -1097,6 +1141,10 @@ require_once 'sidebar.php';
                                 <div class="text-muted small">Total quantity</div>
                                 <div class="font-weight-semibold"><?php echo e(format_quantity($stock_summary['qty'])); ?></div>
                             </div>
+                            <div class="col-sm-6 mb-2">
+                                <div class="text-muted small">Expected sales value</div>
+                                <div class="font-weight-semibold"><?php echo e(money($stock_summary['expected_sales_value'], tenant_currency())); ?></div>
+                            </div>
                         </div>
                         <div class="mt-2">
                             <a href="godown.php?tab=products" class="btn btn-light btn-sm"><i class="fa fa-cubes mr-1"></i> View Products</a>
@@ -1106,7 +1154,7 @@ require_once 'sidebar.php';
                 </div>
             </div>
             <div class="col-lg-5 mb-4">
-                <?php if ($can_manage): ?>
+                <?php if ($can_configure_godown): ?>
                     <div class="card mb-4">
                         <div class="card-header"><h5 class="card-title mb-0"><i class="fa fa-pencil mr-1"></i> Edit Godown</h5></div>
                         <div class="card-body">
@@ -1149,7 +1197,7 @@ require_once 'sidebar.php';
                         </div>
                     </div>
                 <?php endif; ?>
-                <?php if ($can_manage): ?>
+                <?php if ($can_configure_godown): ?>
                     <div class="card border-danger">
                         <div class="card-header"><h5 class="card-title mb-0 text-danger"><i class="fa fa-trash mr-1"></i> Delete Godown</h5></div>
                         <div class="card-body">
@@ -1157,13 +1205,36 @@ require_once 'sidebar.php';
                                 Stock must be zero and all transfers must be closed. If the Godown has receipt or transfer history,
                                 it is archived instead of being removed so the history stays intact.
                             </p>
-                            <form method="POST" action="godown.php?tab=overview" onsubmit="return confirm('Delete or archive this Godown? This cannot be undone from this page.');">
-                                <?php echo csrf_field(); ?>
-                                <?php echo form_token_field(); ?>
-                                <input type="hidden" name="action" value="delete_godown">
-                                <input type="hidden" name="warehouse_id" value="<?php echo (int)$godown['warehouse_id']; ?>">
-                                <button type="submit" class="btn btn-outline-danger btn-sm"><i class="fa fa-trash mr-1"></i> Delete Godown</button>
-                            </form>
+                            <button type="button" class="btn btn-outline-danger btn-sm" data-toggle="modal" data-target="#deleteGodownModal">
+                                <i class="fa fa-trash mr-1"></i> Delete Godown
+                            </button>
+                        </div>
+                    </div>
+                    <div class="modal fade" id="deleteGodownModal" tabindex="-1" role="dialog" aria-labelledby="deleteGodownModalLabel" aria-hidden="true">
+                        <div class="modal-dialog" role="document">
+                            <div class="modal-content">
+                                <form method="POST" action="godown.php?tab=overview">
+                                    <?php echo csrf_field(); ?>
+                                    <?php echo form_token_field(); ?>
+                                    <input type="hidden" name="action" value="delete_godown">
+                                    <input type="hidden" name="warehouse_id" value="<?php echo (int)$godown['warehouse_id']; ?>">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title text-danger" id="deleteGodownModalLabel"><i class="fa fa-trash mr-1"></i> Delete Godown</h5>
+                                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <div class="alert alert-warning mb-0" role="alert">
+                                            Delete or archive this Godown? This cannot be undone from this page.
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                                        <button type="submit" class="btn btn-danger"><i class="fa fa-trash mr-1"></i> Delete Godown</button>
+                                    </div>
+                                </form>
+                            </div>
                         </div>
                     </div>
                 <?php endif; ?>
@@ -1296,7 +1367,7 @@ require_once 'sidebar.php';
                                     <td><?php echo e(format_quantity($stock['qty'])); ?></td>
                                     <td class="text-right">
                                         <?php if ($godown && $can_manage): ?>
-                                            <a href="godown-transfer-add.php?shop=<?php echo (int)$store['shop_id']; ?>" class="btn btn-action btn-light" title="New transfer to this shop"><i class="fa fa-exchange"></i></a>
+                                           <a href="godown-transfer-add.php?shop=<?php echo (int)$store['shop_id']; ?>" class="btn btn-action btn-light" title="New transfer to this shop"><i class="fa fa-exchange"></i></a>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
@@ -1312,21 +1383,6 @@ require_once 'sidebar.php';
         </div>
     </div>
 <?php endif; ?>
-
-<script>
-    $(function () {
-        function syncReceiveUnit() {
-            var $product = $('#receive_product');
-            var $qty = $('#receive_quantity');
-            var decimal = String($product.find('option:selected').data('decimal')) === '1';
-            $qty.attr('step', decimal ? '0.01' : '1');
-            $qty.attr('min', decimal ? '0.01' : '1');
-            $('#receive_unit_hint').text(decimal ? 'Decimal quantities are allowed for this product.' : 'Whole units only for this product.');
-        }
-        $('#receive_product').on('change', syncReceiveUnit);
-        syncReceiveUnit();
-    });
-</script>
 
 <!-- Adjust Stock Modal -->
 <div class="modal fade" id="adjustStockModal" tabindex="-1" role="dialog" aria-labelledby="adjustStockModalLabel" aria-hidden="true">
@@ -1375,15 +1431,104 @@ require_once 'sidebar.php';
 
 <script>
     $(function () {
+        var productSearchTimer = null;
+        var productSearchRequest = null;
+
         function syncReceiveUnit() {
-            var $product = $('#receive_product');
             var $qty = $('#receive_quantity');
-            var decimal = String($product.find('option:selected').data('decimal')) === '1';
+            var decimal = String($('#receive_product_id').attr('data-decimal')) === '1';
             $qty.attr('step', decimal ? '0.01' : '1');
             $qty.attr('min', decimal ? '0.01' : '1');
-            $('#receive_unit_hint').text(decimal ? 'Decimal quantities are allowed for this product.' : 'Whole units only for this product.');
+            $('#receive_unit_hint').text(
+                decimal
+                    ? 'Decimal quantities are allowed for this product.'
+                    : 'Whole units only for this product.'
+            );
         }
-        $('#receive_product').on('change', syncReceiveUnit);
+
+        $('#receive_product_search').on('input', function () {
+            var query = $.trim($(this).val());
+            $('#receive_product_id').val('').removeAttr('data-decimal');
+            $('#receive_product_selected').empty();
+            $('#receive_product_results').empty();
+            syncReceiveUnit();
+            window.clearTimeout(productSearchTimer);
+            if (productSearchRequest) {
+                productSearchRequest.abort();
+                productSearchRequest = null;
+            }
+
+            if (query.length < 2) {
+                $('#receive_product_status').text('Type at least 2 characters to search.');
+                return;
+            }
+
+            $('#receive_product_status').text('Searching...');
+            productSearchTimer = window.setTimeout(function () {
+                productSearchRequest = $.ajax({
+                    url: 'ajax-godown-product-search.php',
+                    method: 'GET',
+                    dataType: 'json',
+                    data: { q: query }
+                }).done(function (response) {
+                    var $results = $('#receive_product_results').empty();
+                    if (!response || !Array.isArray(response.products)) {
+                        $('#receive_product_status').text('Could not load products. Please try again.');
+                        return;
+                    }
+                    if (response.products.length === 0) {
+                        $('#receive_product_status').text('No active stock products found.');
+                        return;
+                    }
+
+                    response.products.forEach(function (product) {
+                        var label = product.name + ' (' + product.code + ')';
+                        if (product.sku) label += ' · SKU ' + product.sku;
+                        $('<a>', {
+                            href: '#',
+                            class: 'list-group-item list-group-item-action',
+                            role: 'option'
+                        })
+                            .text(label)
+                            .attr('data-product-id', product.product_id)
+                            .attr('data-product-name', label)
+                            .attr('data-decimal', product.is_decimal)
+                            .appendTo($results);
+                    });
+                    $('#receive_product_status').text('Select a product from the results.');
+                }).fail(function (xhr, status) {
+                    if (status === 'abort') return;
+                    var message = xhr.responseJSON && xhr.responseJSON.error
+                        ? xhr.responseJSON.error
+                        : 'Product search failed. Please try again.';
+                    $('#receive_product_status').text(message);
+                }).always(function () {
+                    productSearchRequest = null;
+                });
+            }, 250);
+        });
+
+        $('#receive_product_results').on('click', 'a[data-product-id]', function (event) {
+            event.preventDefault();
+            var $option = $(this);
+            $('#receive_product_id')
+                .val($option.attr('data-product-id'))
+                .attr('data-decimal', $option.attr('data-decimal'));
+            $('#receive_product_search').val($option.attr('data-product-name'));
+            $('#receive_product_selected').text('Selected: ' + $option.attr('data-product-name'));
+            $('#receive_product_results').empty();
+            $('#receive_product_status').empty();
+            syncReceiveUnit();
+        });
+
+        $('#godownReceiveForm').on('submit', function (event) {
+            if (!$('#receive_product_id').val()) {
+                event.preventDefault();
+                $('#receive_product_status').text('Search for and select a product before receiving stock.');
+                $('#receive_product_search').trigger('focus');
+            }
+        });
+
         syncReceiveUnit();
 
         // Trigger modal popup from product rows

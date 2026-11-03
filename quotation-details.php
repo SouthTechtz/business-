@@ -74,7 +74,7 @@ $cur = tenant_currency();
         <h1 class="page-title">Quotation <?php echo e($quotation['quotation_number']); ?></h1>
         <div class="page-sub">
             <?php echo e(trim(($quotation['first_name'] ?? '') . ' ' . ($quotation['last_name'] ?? '')) ?: ($quotation['company_name'] ?? 'Customer')); ?>
-            &middot; <?php echo e($quotation['store_name'] ? trim(($quotation['shop_name'] ?? '') . ' / ' . $quotation['store_name'], ' /') : 'No store'); ?>
+            &middot; <?php echo e($quotation['store_name'] ? trim(($quotation['shop_name'] ?? '') . ' / ' . $quotation['store_name'], ' /') : (is_godown_manager() ? 'No Godown' : 'No store')); ?>
         </div>
     </div>
     <div>
@@ -82,7 +82,7 @@ $cur = tenant_currency();
         <a href="quotation-print.php?id=<?php echo $id; ?>" class="btn btn-outline-primary"><i class="fa fa-print mr-1"></i> Print</a>
         <a href="quotation-download.php?id=<?php echo $id; ?>" class="btn btn-outline-success"><i class="fa fa-download mr-1"></i> Download PDF</a>
         <?php if ($can_convert): ?>
-            <form method="POST" action="quotation-details.php?id=<?php echo $id; ?>" class="d-inline" onsubmit="return confirm('Convert this quotation into an invoice? Stock will be deducted from the selected store.');">
+            <form method="POST" action="quotation-details.php?id=<?php echo $id; ?>" class="d-inline" onsubmit="return confirm('Convert this quotation into an invoice? Stock will be deducted from the selected location.');">
                 <?php echo csrf_field(); ?>
                 <input type="hidden" name="quotation_id" value="<?php echo $id; ?>">
                 <input type="hidden" name="action" value="convert">
@@ -145,7 +145,7 @@ $cur = tenant_currency();
             </div>
         </div>
         <div class="alert alert-info small">
-            A quotation does not reserve or deduct stock. Converting it creates an invoice and deducts stock from the selected store once.
+            A quotation does not reserve or deduct stock. Converting it creates an invoice and deducts stock from the selected location once.
         </div>
     </div>
     <div class="col-lg-4 mb-3">
@@ -158,7 +158,7 @@ $cur = tenant_currency();
                         <tr><th>Issue Date</th><td><?php echo e(date('M d, Y', strtotime($quotation['issue_date']))); ?></td></tr>
                         <tr><th>Valid Until</th><td><?php echo !empty($quotation['valid_until']) ? e(date('M d, Y', strtotime($quotation['valid_until']))) : '—'; ?></td></tr>
                         <tr><th>Status</th><td><span class="badge badge-<?php echo e(quotation_status_class($display_status)); ?>"><?php echo e(quotation_status_label($display_status)); ?></span></td></tr>
-                        <tr><th>Store</th><td><?php echo e($quotation['store_name'] ? trim(($quotation['shop_name'] ?? '') . ' / ' . $quotation['store_name'], ' /') : '—'); ?></td></tr>
+                        <tr><th><?php echo is_godown_manager() ? 'Godown' : 'Store'; ?></th><td><?php echo e($quotation['store_name'] ? trim(($quotation['shop_name'] ?? '') . ' / ' . $quotation['store_name'], ' /') : '—'); ?></td></tr>
                         <tr><th>Reference</th><td><?php echo e($quotation['reference'] ?: '—'); ?></td></tr>
                         <tr><th>Terms</th><td><?php echo e($quotation['terms'] ?: '—'); ?></td></tr>
                         <tr><th>Notes</th><td><?php echo e($quotation['notes'] ?: '—'); ?></td></tr>

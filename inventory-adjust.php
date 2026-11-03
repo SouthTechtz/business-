@@ -45,7 +45,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $has_access = $warehouse
         && (string)$warehouse['location_type'] === 'godown'
-        && (int)$warehouse['is_active'] === 1;
+        && (int)$warehouse['is_active'] === 1
+        && (!is_godown_manager() || find_accessible_store($warehouse_id, false, true) !== null);
 
     if (!$product) {
         $res = ['success' => false, 'message' => 'Product not found.'];
@@ -117,12 +118,14 @@ if ($is_ajax) {
 $prefill_product = (int)($_GET['product'] ?? 0);
 $prefill_warehouse = (int)($_GET['warehouse'] ?? 0);
 $products = fetch_all("SELECT product_id, code, name, is_service FROM products WHERE tenant_id = ? AND is_active = 1 AND is_service = 0 ORDER BY name", $current_user->tenant_id);
-$warehouses = fetch_all(
-    "SELECT * FROM warehouses
-      WHERE tenant_id = ? AND location_type = 'godown' AND is_active = 1
-      ORDER BY name",
-    $current_user->tenant_id
-);
+$warehouses = is_godown_manager()
+    ? accessible_locations(false, (int)$current_user->tenant_id)
+    : fetch_all(
+        "SELECT * FROM warehouses
+          WHERE tenant_id = ? AND location_type = 'godown' AND is_active = 1
+          ORDER BY name",
+        $current_user->tenant_id
+    );
 
 require_once 'navbar.php';
 require_once 'sidebar.php';

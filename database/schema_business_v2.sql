@@ -204,19 +204,6 @@ CREATE TABLE `products` (
   CONSTRAINT `fk_products_uom` FOREIGN KEY (`unit_id`) REFERENCES `units_of_measurement`(`unit_id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE `product_variants` (
-  `variant_id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `tenant_id` INT UNSIGNED NOT NULL,
-  `product_id` INT UNSIGNED NOT NULL,
-  `name` VARCHAR(191) NOT NULL,
-  `options` TEXT,
-  `price_adjustment` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`variant_id`),
-  KEY `fk_pv_product` (`product_id`),
-  CONSTRAINT `fk_pv_product` FOREIGN KEY (`product_id`) REFERENCES `products`(`product_id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 CREATE TABLE `inventory_stock` (
   `stock_id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `tenant_id` INT UNSIGNED NOT NULL,

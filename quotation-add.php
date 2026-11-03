@@ -8,16 +8,21 @@ $tenant_id = (int)$current_user->tenant_id;
 $tax_enabled = tax_enabled();
 $error = '';
 
-$stores = accessible_stores(null, false);
+$stores = accessible_stores(null, false, null, is_godown_manager());
 if (!$stores) {
-    flash_set('danger', 'No active store is assigned to your account. Ask an administrator to grant shop/store access.');
+    flash_set(
+        'danger',
+        is_godown_manager()
+            ? 'No active Godown is assigned to your account. Ask an administrator to assign one.'
+            : 'No active store is assigned to your account. Ask an administrator to grant shop/store access.'
+    );
     redirect('quotations.php');
 }
 $requested_store_id = (int)($_POST['warehouse_id'] ?? $_SESSION['quotation_warehouse_id'] ?? 0);
 if ($requested_store_id <= 0) {
     $requested_store_id = (int)$stores[0]['warehouse_id'];
 }
-$selected_store = find_accessible_store($requested_store_id, false);
+$selected_store = find_accessible_store($requested_store_id, false, is_godown_manager());
 if (!$selected_store) {
     $selected_store = $stores[0];
 }
@@ -33,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $contact_id = (int)($_POST['contact_id'] ?? 0);
     $warehouse_id = (int)($_POST['warehouse_id'] ?? 0);
-    $quote_store = find_accessible_store($warehouse_id, false);
+    $quote_store = find_accessible_store($warehouse_id, false, is_godown_manager());
     $issue_date = trim((string)($_POST['issue_date'] ?? ''));
     $valid_until = trim((string)($_POST['valid_until'] ?? ''));
     $status = (string)($_POST['status'] ?? 'draft');
@@ -226,13 +231,13 @@ $cur = tenant_currency();
                     <?php echo form_token_field(); ?>
                     <div class="row">
                         <div class="col-md-4 form-group">
-                            <label>Store <span class="text-danger">*</span></label>
+                            <label><?php echo is_godown_manager() ? 'Godown' : 'Store'; ?> <span class="text-danger">*</span></label>
                             <select name="warehouse_id" class="form-control" required>
                                 <?php foreach ($stores as $store): ?>
                                     <option value="<?php echo (int)$store['warehouse_id']; ?>" <?php echo (int)$store['warehouse_id'] === $selected_store_id ? 'selected' : ''; ?>><?php echo e(store_label($store)); ?></option>
                                 <?php endforeach; ?>
                             </select>
-                            <small class="text-muted">Prices are quoted for this store. Stock is checked only when converting.</small>
+                            <small class="text-muted">Prices are quoted for this <?php echo is_godown_manager() ? 'Godown' : 'store'; ?>. Stock is checked only when converting.</small>
                         </div>
                         <div class="col-md-4 form-group">
                             <label>Customer <span class="text-danger">*</span></label>

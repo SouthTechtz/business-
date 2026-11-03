@@ -4,7 +4,7 @@ if (!isset($sf_tenant) || !$sf_tenant) {
     exit('The storefront is not configured.');
 }
 $sf_settings = $sf_settings ?? storefront_settings($sf_tenant);
-$sf_company = trim((string)($sf_settings['company_name'] ?? '')) ?: APP_NAME;
+$sf_company = storefront_company_name($sf_tenant, $sf_settings);
 $sf_logo = storefront_logo($sf_settings);
 $sf_cart_count = storefront_cart_count();
 $sf_search_q = $sf_search_q ?? '';
@@ -13,7 +13,6 @@ $sf_tenant_id = $sf_tenant_id ?? (int)$sf_tenant['tenant_id'];
 $sf_nav_categories = $sf_nav_categories ?? storefront_categories($sf_tenant_id);
 $sf_meta_description = $sf_meta_description ?? ('Browse the ' . $sf_company . ' catalogue and send an order request. No online payment is taken.');
 $sf_canonical_url = $sf_canonical_url ?? storefront_absolute_url('index.php');
-$sf_logged_in = !empty($_SESSION['user_id']);
 $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.php';
 ?>
 <!DOCTYPE html>
@@ -44,12 +43,9 @@ $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.
     <div class="sf-topbar">
         <div class="sf-container sf-topbar-inner">
             <span>Order requests only. No online payment is taken.</span>
-            <label class="sf-region">
-                <span class="sr-only">Currency and region</span>
-                <select aria-label="Currency and region" title="Only TZS is configured for this store">
-                    <option><?php echo e($sf_currency ?? storefront_currency($sf_tenant, $sf_settings)); ?> &middot; Tanzania</option>
-                </select>
-            </label>
+            <nav class="sf-company-links" aria-label="About our company">
+                <a href="index.php#about-us"><?php echo e($sf_company); ?></a>
+            </nav>
         </div>
     </div>
 
@@ -63,6 +59,19 @@ $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.
                 <small>Online shop</small>
             </span>
         </a>
+
+        <nav class="sf-nav" aria-label="Shop navigation">
+            <a href="index.php" <?php echo empty($sf_category) && empty($sf_search_q) && empty($_GET['all']) ? 'aria-current="page"' : ''; ?>>Home</a>
+            <a href="index.php?all=1#catalogue" <?php echo !empty($_GET['all']) ? 'aria-current="page"' : ''; ?>>Shop All</a>
+            <?php foreach ($sf_nav_categories as $sf_nav_category): ?>
+                <a href="index.php?category=<?php echo (int)$sf_nav_category['category_id']; ?>#catalogue"
+                   <?php echo isset($sf_category) && (int)$sf_category === (int)$sf_nav_category['category_id'] ? 'aria-current="page"' : ''; ?>>
+                    <?php echo e($sf_nav_category['name']); ?>
+                </a>
+            <?php endforeach; ?>
+            <a href="index.php#about-us">About us</a>
+            <a href="index.php#contact">Contact</a>
+        </nav>
 
         <div class="sf-search-wrap">
             <form class="sf-search" action="index.php" method="get" role="search" data-suggest-url="storefront-suggest.php">
@@ -79,10 +88,9 @@ $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.
         </div>
 
         <div class="sf-actions">
-            <a class="sf-header-link" href="<?php echo $sf_logged_in ? 'dashboard.php' : 'login.php'; ?>"
-               aria-label="<?php echo $sf_logged_in ? 'Open my account' : 'Log in'; ?>">
+            <a class="sf-header-link" href="login.php" aria-label="Log in" title="Log in">
                 <i class="fa fa-user" aria-hidden="true"></i>
-                <span><?php echo $sf_logged_in ? 'Account' : 'Log in'; ?></span>
+                <span class="sr-only">Log in</span>
             </a>
             <a class="sf-cart-link" href="cart.php" aria-label="Cart, <?php echo (int)$sf_cart_count; ?> item(s)">
                 <i class="fa fa-shopping-cart" aria-hidden="true"></i>
@@ -93,18 +101,6 @@ $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.
             </a>
         </div>
     </div>
-
-    <nav class="sf-nav" aria-label="Product categories">
-        <div class="sf-container sf-nav-inner">
-            <a href="index.php"<?php echo empty($sf_category) && empty($sf_search_q) ? ' aria-current="page"' : ''; ?>>All products</a>
-            <?php foreach ($sf_nav_categories as $sf_nav_category): ?>
-                <a href="index.php?category=<?php echo (int)$sf_nav_category['category_id']; ?>#catalogue"
-                   <?php echo isset($sf_category) && (int)$sf_category === (int)$sf_nav_category['category_id'] ? 'aria-current="page"' : ''; ?>>
-                    <?php echo e($sf_nav_category['name']); ?>
-                </a>
-            <?php endforeach; ?>
-        </div>
-    </nav>
 </header>
 
 <?php if ($sf_flash = flash_get()): ?>

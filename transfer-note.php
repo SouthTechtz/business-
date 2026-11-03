@@ -8,7 +8,7 @@ $transfer = fetch_one("SELECT t.*, sw.name source_name, sw.location_type source_
 if (!$transfer) { flash_set('danger','Transfer not found.'); redirect('godown-transfers.php'); }
 $items = fetch_all("SELECT ti.*, p.name product_name, p.code product_code FROM stock_transfer_items ti LEFT JOIN products p ON p.product_id=ti.product_id AND p.tenant_id=ti.tenant_id WHERE ti.transfer_id=? AND ti.tenant_id=? ORDER BY ti.line_no", $transfer_id, $tenant_id);
 $settings = fetch_one("SELECT company_name, company_address, company_phone FROM system_settings WHERE tenant_id=?", $tenant_id);
-$company = $settings['company_name'] ?? APP_NAME;
+$company = $settings['company_name'] ?? system_title($tenant_id);
 ?>
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Goods Transfer Note #<?php echo e($transfer['transfer_number']); ?></title>

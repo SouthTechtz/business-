@@ -20,7 +20,7 @@ if (!$invoice) {
     flash_set('danger', 'Invoice not found.');
     redirect('invoices.php');
 }
-if ((int)($invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$invoice['warehouse_id'], true)) {
+if ((int)($invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$invoice['warehouse_id'], true, is_godown_manager())) {
     flash_set('danger', 'You do not have access to the store for this invoice.');
     redirect('invoices.php');
 }
@@ -40,7 +40,7 @@ $payments = fetch_all(
 );
 
 $settings = fetch_one("SELECT * FROM system_settings WHERE tenant_id = ?", $current_user->tenant_id);
-$company = $settings ?: ['company_name' => APP_NAME, 'company_email' => '', 'company_phone' => '', 'company_address' => ''];
+$company = $settings ?: ['company_name' => system_title($current_user->tenant_id), 'company_email' => '', 'company_phone' => '', 'company_address' => ''];
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
@@ -50,7 +50,7 @@ $cur = tenant_currency();
 <div class="page-head">
     <div>
         <h1 class="page-title">Invoice Details</h1>
-        <div class="page-sub"><?php echo e($invoice['invoice_number']); ?><?php if (!empty($invoice['store_name'])): ?> · Store: <strong><?php echo e(trim(($invoice['shop_name'] ?? '') . ' / ' . $invoice['store_name'], ' /')); ?></strong><?php endif; ?></div>
+        <div class="page-sub"><?php echo e($invoice['invoice_number']); ?><?php if (!empty($invoice['store_name'])): ?> · <?php echo is_godown_manager() ? 'Godown' : 'Store'; ?>: <strong><?php echo e(trim(($invoice['shop_name'] ?? '') . ' / ' . $invoice['store_name'], ' /')); ?></strong><?php endif; ?></div>
     </div>
     <div>
         <?php if ((float)$invoice['amount_due'] > 0 && can('manage_receipts')): ?>

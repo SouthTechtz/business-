@@ -10,7 +10,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $invoice = fetch_one("SELECT * FROM invoices WHERE invoice_id = ? AND tenant_id = ?", $id, $current_user->tenant_id);
     if (!$invoice) {
         flash_set('danger', 'Invoice not found.');
-    } elseif ((int)($invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$invoice['warehouse_id'], true)) {
+    } elseif ((int)($invoice['warehouse_id'] ?? 0) > 0 && !store_is_accessible((int)$invoice['warehouse_id'], true, is_godown_manager())) {
         flash_set('danger', 'You do not have access to the store for this invoice.');
     } else {
         $conn->begin_transaction();
@@ -47,7 +47,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
                 // Restore only to the item's original store. Unknown or
                 // inaccessible stores block the deletion instead of guessing.
                 $item_warehouse_id = (int)($item['warehouse_id'] ?? 0);
-                if (!$item_warehouse_id || !find_accessible_store($item_warehouse_id, true)) {
+                if (!$item_warehouse_id || !find_accessible_store($item_warehouse_id, true, is_godown_manager())) {
                     throw new Exception('An item has an unknown or inaccessible store. The invoice was not deleted.');
                 }
 
@@ -89,7 +89,7 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
 $status_filter = (int)($_GET['status'] ?? 0);
 $search = trim($_GET['q'] ?? '');
 $warehouse_filter = (int)($_GET['warehouse'] ?? 0);
-$stores = accessible_stores(null, true);
+$stores = accessible_stores(null, true, null, is_godown_manager());
 $store_ids = array_map(fn($s) => (int)$s['warehouse_id'], $stores);
 if ($warehouse_filter > 0 && !in_array($warehouse_filter, $store_ids, true)) {
     $warehouse_filter = 0;
@@ -105,7 +105,7 @@ $sql = "SELECT i.*, ds.name status_name, c.first_name, c.last_name, c.company_na
         WHERE i.tenant_id = ?";
 $params = [$current_user->tenant_id];
 $types = 'i';
-$scope_ids = accessible_warehouse_ids();
+$scope_ids = accessible_warehouse_ids(null, true, is_godown_manager());
 if ($scope_ids !== null) {
     if (!$scope_ids) {
         $sql .= " AND 1 = 0";
@@ -174,7 +174,7 @@ $cur = tenant_currency();
             </select>
             <input type="text" name="q" class="form-control form-control-sm mr-2 mb-1" placeholder="Search invoice # or customer" value="<?php echo e($search); ?>">
             <select name="warehouse" class="form-control form-control-sm mr-2 mb-1">
-                <option value="0">All Stores</option>
+                <option value="0">All <?php echo is_godown_manager() ? 'Godowns' : 'Stores'; ?></option>
                 <?php foreach ($stores as $store): ?>
                     <option value="<?php echo (int)$store['warehouse_id']; ?>" <?php echo $warehouse_filter === (int)$store['warehouse_id'] ? 'selected' : ''; ?>><?php echo e(store_label($store)); ?><?php echo (int)$store['is_active'] ? '' : ' (inactive)'; ?></option>
                 <?php endforeach; ?>
@@ -191,7 +191,15 @@ $cur = tenant_currency();
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Invoice #</th><th>Customer</th><th>Store</th><th>Issue Date</th><th>Due Date</th><th>Status</th><th class="text-right">Total</th><th class="text-right">Balance</th><th class="text-right">Actions</th>
+                        <th>Invoice #</th>
+                        <th>Customer</th>
+                        <th><?php echo is_godown_manager() ? 'Godown' : 'Store'; ?></th>
+                        <th>Issue Date</th>
+                        <th>Due Date</th>
+                        <th>Status</th>
+                        <th class="text-right">Total</th>
+                        <th class="text-right">Balance</th>
+                        <th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>

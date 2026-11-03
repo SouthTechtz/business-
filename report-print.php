@@ -82,17 +82,22 @@ switch ($type) {
         break;
 
     case 'sales':
-        $title = 'Sales Report (POS)';
-        $sales_date = report_date_condition('o.order_date', $from, $to);
-        $rows = fetch_all(
-            "SELECT o.order_number, o.order_date, o.status, o.total, o.tax_amount,
-                    CONCAT(COALESCE(c.first_name,''), ' ', COALESCE(c.last_name,'')) customer_name, c.company_name
-             FROM pos_orders o LEFT JOIN contacts c ON c.contact_id = o.contact_id
-             WHERE o.tenant_id = ?" . $pos_scope['sql'] . $sales_date['sql'] . " ORDER BY o.order_date DESC",
-            $current_user->tenant_id, ...array_merge($pos_scope['params'], $sales_date['params'])
-        );
-        $totals['total'] = array_sum(array_map(fn($r) => (float)$r['total'], $rows));
-        $totals['count'] = count($rows);
+        $title = 'Sales Report (POS and Invoice)';
+        $sales_summary = report_sales_summary($from, $to);
+        $sales_by_shop = report_sales_by_shop($from, $to);
+        $sales_by_product = report_sales_by_product($from, $to);
+        $rows = report_pos_sale_rows($from, $to);
+        $totals['total'] = $sales_summary['pos']['gross_sales'];
+        $totals['count'] = $sales_summary['pos']['sale_count'];
+        break;
+
+    case 'invoice-sales':
+        $title = 'Invoice Sales Report';
+        $invoice_summary = report_invoice_sales_summary($from, $to);
+        $invoice_status_summary = report_invoice_status_summary($from, $to);
+        $rows = report_invoice_sale_rows($from, $to);
+        $totals['total'] = $invoice_summary['gross_sales'];
+        $totals['count'] = $invoice_summary['sale_count'];
         break;
 
     case 'payments':
@@ -241,19 +246,115 @@ switch ($type) {
         </table>
     <?php elseif ($type === 'sales'): ?>
         <table class="table table-bordered">
-            <thead><tr><th>Order #</th><th>Date</th><th>Customer</th><th>Status</th><th class="text-right">VAT</th><th class="text-right">Total</th></tr></thead>
+            <thead><tr><th>Channel</th><th class="text-right">Gross Sales</th><th class="text-right">Accepted Returns</th><th class="text-right">Net Sales</th><th class="text-right">Transactions</th></tr></thead>
+            <tbody>
+                <tr><td>POS</td><td class="text-right"><?php echo e(money($sales_summary['pos']['gross_sales'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['pos']['accepted_returns'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['pos']['net_sales'], $cur)); ?></td><td class="text-right"><?php echo (int)$sales_summary['pos']['sale_count']; ?></td></tr>
+                <tr><td>Invoice</td><td class="text-right"><?php echo e(money($sales_summary['invoice']['gross_sales'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['invoice']['accepted_returns'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['invoice']['net_sales'], $cur)); ?></td><td class="text-right"><?php echo (int)$sales_summary['invoice']['sale_count']; ?></td></tr>
+                <tr class="strong"><td>Combined</td><td class="text-right"><?php echo e(money($sales_summary['gross_sales'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['accepted_returns'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['net_sales'], $cur)); ?></td><td class="text-right"><?php echo (int)$sales_summary['sale_count']; ?></td></tr>
+            </tbody>
+        </table>
+
+        <h4>Sales by Shop</h4>
+        <table class="table table-bordered">
+            <thead><tr><th>Shop</th><th class="text-right">POS Gross</th><th class="text-right">POS Returns</th><th class="text-right">POS Net</th><th class="text-right">Invoice Gross</th><th class="text-right">Invoice Returns</th><th class="text-right">Invoice Net</th><th class="text-right">Combined Net</th></tr></thead>
+            <tbody>
+            <?php foreach ($sales_by_shop as $shop): ?>
+                <tr>
+                    <td><?php echo e($shop['shop_name']); ?></td>
+                    <td class="text-right"><?php echo e(money($shop['pos_gross_sales'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($shop['pos_accepted_returns'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($shop['pos_net_sales'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($shop['invoice_gross_sales'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($shop['invoice_accepted_returns'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($shop['invoice_net_sales'], $cur)); ?></td>
+                    <td class="text-right font-weight-bold"><?php echo e(money($shop['net_sales'], $cur)); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <h4>Product Sales and Accepted Returns</h4>
+        <table class="table table-bordered">
+            <thead><tr><th>Product</th><th class="text-right">Sold Qty</th><th class="text-right">Returned Qty</th><th class="text-right">Resale Qty</th><th class="text-right">Net Qty</th><th class="text-right">Gross</th><th class="text-right">Returns</th><th class="text-right">Net</th></tr></thead>
+            <tbody>
+            <?php foreach ($sales_by_product as $product): ?>
+                <tr>
+                    <td><?php echo e($product['product_name']); ?></td>
+                    <td class="text-right"><?php echo e((float)$product['sold_qty']); ?></td>
+                    <td class="text-right"><?php echo e((float)$product['returned_qty']); ?></td>
+                    <td class="text-right"><?php echo e((float)$product['resale_qty']); ?></td>
+                    <td class="text-right"><?php echo e((float)$product['net_qty']); ?></td>
+                    <td class="text-right"><?php echo e(money($product['gross_sales'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($product['accepted_returns'], $cur)); ?></td>
+                    <td class="text-right font-weight-bold"><?php echo e(money($product['net_sales'], $cur)); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <h4>POS Transactions</h4>
+        <table class="table table-bordered">
+            <thead><tr><th>Order #</th><th>Date</th><th>Shop</th><th>Customer</th><th>Status</th><th class="text-right">Gross</th><th class="text-right">Returns</th><th class="text-right">Net</th></tr></thead>
             <tbody>
             <?php foreach ($rows as $r): ?>
                 <tr>
                     <td><?php echo e($r['order_number']); ?></td>
                     <td><?php echo e(date('M d, Y', strtotime($r['order_date']))); ?></td>
-                    <td><?php echo e(trim($r['customer_name']) ?: ($r['company_name'] ?: 'Walk-in Customer')); ?></td>
+                    <td><?php echo e($r['shop_name'] ?: 'Unattributed (historical)'); ?></td>
+                    <td><?php echo e(trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')) ?: ($r['company_name'] ?: 'Walk-in Customer')); ?></td>
                     <td><?php echo e(ucfirst($r['status'])); ?></td>
-                    <td class="text-right"><?php echo e(money($r['tax_amount'], $cur)); ?></td>
                     <td class="text-right"><?php echo e(money($r['total'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($r['accepted_returns'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($r['net_sales'], $cur)); ?></td>
                 </tr>
             <?php endforeach; ?>
-            <tr class="totals-row"><td colspan="4">TOTAL — <?php echo (int)$totals['count']; ?> sales</td><td class="text-right"></td><td class="text-right"><?php echo e(money($totals['total'], $cur)); ?></td></tr>
+            <tr class="totals-row"><td colspan="5">TOTAL — <?php echo (int)$totals['count']; ?> completed sales</td><td class="text-right"><?php echo e(money($totals['total'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['pos']['accepted_returns'], $cur)); ?></td><td class="text-right"><?php echo e(money($sales_summary['pos']['net_sales'], $cur)); ?></td></tr>
+            </tbody>
+        </table>
+    <?php elseif ($type === 'invoice-sales'): ?>
+        <table class="table table-bordered">
+            <thead><tr><th>Gross Invoice Sales</th><th>Accepted Returns</th><th>Net Invoice Sales</th><th>Outstanding Balance</th><th>Refund Due</th><th>Partial Returns</th><th>Full Returns</th></tr></thead>
+            <tbody><tr>
+                <td class="text-right"><?php echo e(money($invoice_summary['gross_sales'], $cur)); ?></td>
+                <td class="text-right"><?php echo e(money($invoice_summary['accepted_returns'], $cur)); ?></td>
+                <td class="text-right font-weight-bold"><?php echo e(money($invoice_summary['net_sales'], $cur)); ?></td>
+                <td class="text-right"><?php echo e(money($invoice_summary['outstanding_balance'], $cur)); ?></td>
+                <td class="text-right"><?php echo e(money($invoice_summary['refund_due'], $cur)); ?></td>
+                <td class="text-right"><?php echo (int)$invoice_summary['partial_return_count']; ?></td>
+                <td class="text-right"><?php echo (int)$invoice_summary['full_return_count']; ?></td>
+            </tr></tbody>
+        </table>
+        <div class="small text-muted mb-2">Refund due is not actual cash refunded. Returned quantity and quantity accepted for resale are distinct.</div>
+
+        <h4>Invoice Status Summary</h4>
+        <table class="table table-bordered">
+            <thead><tr><th>Status</th><th class="text-right">Invoices</th><th class="text-right">Total</th><th class="text-right">Outstanding</th><th class="text-right">Refund Due</th></tr></thead>
+            <tbody>
+            <?php foreach ($invoice_status_summary as $status): ?>
+                <tr><td><?php echo e($status['status_name']); ?></td><td class="text-right"><?php echo (int)$status['invoice_count']; ?></td><td class="text-right"><?php echo e(money($status['invoice_total'], $cur)); ?></td><td class="text-right"><?php echo e(money($status['outstanding_balance'], $cur)); ?></td><td class="text-right"><?php echo e(money($status['refund_due'], $cur)); ?></td></tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <h4>Invoice Transactions</h4>
+        <table class="table table-bordered">
+            <thead><tr><th>Invoice #</th><th>Issue Date</th><th>Shop</th><th>Status</th><th>Return State</th><th class="text-right">Gross</th><th class="text-right">Returns</th><th class="text-right">Net</th><th class="text-right">Due</th><th class="text-right">Refund Due</th></tr></thead>
+            <tbody>
+            <?php foreach ($rows as $r): ?>
+                <tr>
+                    <td><?php echo e($r['invoice_number']); ?></td>
+                    <td><?php echo e(date('M d, Y', strtotime($r['issue_date']))); ?></td>
+                    <td><?php echo e($r['shop_name'] ?: 'Unattributed (historical)'); ?></td>
+                    <td><?php echo e($r['status_name'] ?: 'Unknown'); ?></td>
+                    <td><?php echo e($r['return_state']); ?></td>
+                    <td class="text-right"><?php echo e(money($r['total'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($r['accepted_returns'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($r['net_sales'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($r['amount_due'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($r['refund_due'], $cur)); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <tr class="totals-row"><td colspan="5">TOTAL — <?php echo (int)$totals['count']; ?> eligible invoices</td><td class="text-right"><?php echo e(money($totals['total'], $cur)); ?></td><td class="text-right"><?php echo e(money($invoice_summary['accepted_returns'], $cur)); ?></td><td class="text-right"><?php echo e(money($invoice_summary['net_sales'], $cur)); ?></td><td class="text-right"><?php echo e(money($invoice_summary['outstanding_balance'], $cur)); ?></td><td class="text-right"><?php echo e(money($invoice_summary['refund_due'], $cur)); ?></td></tr>
             </tbody>
         </table>
     <?php elseif ($type === 'payments'): ?>
@@ -340,7 +441,7 @@ switch ($type) {
     <?php endif; ?>
 
     <div class="report-foot">
-        Generated by <?php echo e(APP_NAME); ?> &middot; This report reflects records entered in the system for the selected period.
+        Generated by <?php echo e(system_title()); ?> &middot; This report reflects records entered in the system for the selected period.
     </div>
 </div>
 </body>

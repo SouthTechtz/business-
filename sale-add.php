@@ -6,28 +6,66 @@ $page_title = 'New Sale';
 
 $tax_enabled = tax_enabled();
 
-// Resolve the selling store from the signed-in user's accessible stores.
-$stores = accessible_stores(null, false);
-$selected_store = $stores ? find_accessible_store((int)$stores[0]['warehouse_id'], false) : null;
-if (!$selected_store) {
-    flash_set('danger', 'No active store is available for your account. Ask an administrator to grant shop/store access.');
-    redirect('index.php');
+// Resolve accessible Shops for the signed-in user.
+$shops = accessible_shops(null, false);
+$selected_shop_id = (int)($_SESSION['active_shop_id'] ?? 0);
+
+// Validate stored selection on every request.
+if ($selected_shop_id > 0 && !shop_is_accessible($selected_shop_id, false)) {
+    $selected_shop_id = 0;
+    unset($_SESSION['active_shop_id'], $_SESSION['pos_cart']);
 }
-$selected_store_id = (int)$selected_store['warehouse_id'];
-$shop_id_for_store = (int)($selected_store['shop_id'] ?? 0);
-if ($shop_id_for_store > 0 && shop_inventory_ready($shop_id_for_store)) {
-    $shop_wh = shop_inventory_warehouse_id($shop_id_for_store);
-    if ($shop_wh) { $selected_store_id = $shop_wh; }
+$selected_shop_warehouse_id = null;
+if ($selected_shop_id > 0) {
+    $selected_shop_warehouse_id = shop_inventory_warehouse_id($selected_shop_id);
+    if (!$selected_shop_warehouse_id) {
+        $selected_shop_id = 0;
+        unset($_SESSION['active_shop_id'], $_SESSION['pos_cart']);
+    }
 }
-$_SESSION['pos_warehouse_id'] = $selected_store_id;
+
+// Auto-select the sole accessible Shop, but never substitute another location.
+if ($selected_shop_id === 0 && count($shops) === 1) {
+    $only_shop_id = (int)$shops[0]['shop_id'];
+    unset($_SESSION['pos_cart']);
+    $_SESSION['active_shop_id'] = $only_shop_id;
+    $selected_shop_id = $only_shop_id;
+    $selected_shop_warehouse_id = shop_inventory_warehouse_id($only_shop_id);
+}
+
+$selected_store = null;
+$selected_store_id = $selected_shop_warehouse_id;
+if ($selected_shop_id > 0) {
+    foreach ($shops as $sh) {
+        if ((int)$sh['shop_id'] === $selected_shop_id) { $selected_store = $sh; break; }
+    }
+}
 
 // ---- Cart actions ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $action = $_POST['action'] ?? '';
 
-    if ($action === 'set_store') {
-        flash_set('danger', 'The POS session location is fixed. Close the session to sell from another shop/store.');
+    if ($action === 'set_shop') {
+        $requested = (int)($_POST['shop_id'] ?? 0);
+        if ($requested <= 0 || !shop_is_accessible($requested, false)) {
+            flash_set('danger', 'You do not have access to the selected shop.');
+            redirect('sale-add.php');
+        }
+        $wh = shop_inventory_warehouse_id($requested);
+        if (!$wh) {
+            flash_set('danger', 'The selected shop has no active inventory warehouse.');
+            redirect('sale-add.php');
+        }
+        if ((int)($_SESSION['active_shop_id'] ?? 0) !== $requested) {
+            unset($_SESSION['pos_cart']);
+        }
+        $_SESSION['active_shop_id'] = $requested;
+        redirect('sale-add.php');
+    }
+
+    if (!$selected_shop_id || !$selected_shop_warehouse_id) {
+        flash_set('danger', 'Select an active shop with an inventory warehouse before using the POS.');
         redirect('sale-add.php');
     }
 
@@ -177,17 +215,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $conn->begin_transaction();
         try {
-            // The session and its location cannot change while checkout runs.
-            $locked_session = fetch_one(
-                "SELECT session_id, warehouse_id FROM pos_sessions
-                 WHERE session_id = ? AND tenant_id = ? AND user_id = ? AND is_closed = 0
-                 FOR UPDATE",
-                $session_id,
-                $current_user->tenant_id,
-                $current_user->user_id
-            );
-            if (!$locked_session || (int)$locked_session['warehouse_id'] !== $selected_store_id) {
-                throw new Exception('Your POS session was closed or its location changed. Open a new session and try again.');
+            // Revalidate the selected Shop and its own inventory warehouse at checkout.
+            $checkout_warehouse_id = shop_is_accessible($selected_shop_id, false)
+                ? shop_inventory_warehouse_id($selected_shop_id)
+                : null;
+            if (!$checkout_warehouse_id || $checkout_warehouse_id !== $selected_store_id) {
+                throw new Exception('No shop inventory warehouse is selected.');
             }
 
             // Lock and re-check store stock inside the transaction. Active
@@ -219,10 +252,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $stmt = $conn->prepare(
                 "INSERT INTO pos_orders (tenant_id, session_id, warehouse_id, order_number, contact_id, order_date, subtotal, tax_amount, discount, total, status, created_by)
-                 VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, 'completed', ?)"
+                 VALUES (?, NULL, ?, ?, ?, NOW(), ?, ?, ?, ?, 'completed', ?)"
             );
             $contact_db = $contact_id ?: null;
-            $stmt->bind_param('iiisiddddi', $current_user->tenant_id, $session_id, $selected_store_id, $order_number, $contact_db, $subtotal, $tax_total, $discount, $grand_total, $current_user->user_id);
+            $stmt->bind_param('iisiddddi', $current_user->tenant_id, $selected_store_id, $order_number, $contact_db, $subtotal, $tax_total, $discount, $grand_total, $current_user->user_id);
             $stmt->execute();
             $order_id = $stmt->insert_id;
             $stmt->close();
@@ -270,7 +303,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             audit_log('create', 'pos_order', $order_id, 'Sale ' . $order_number . ' created');
             flash_set('success', 'Sale completed successfully.');
             redirect('sale-details.php?id=' . $order_id);
-        } catch (Exception $ex) {
+        } catch (Throwable $ex) {
             $conn->rollback();
             flash_set('danger', 'Checkout failed: ' . $ex->getMessage());
             redirect('sale-add.php');
@@ -312,8 +345,8 @@ require_once 'sidebar.php';
     <div>
         <h1 class="page-title">New Sale</h1>
         <div class="page-sub">
-            Selling from <strong><?php echo e(store_label($selected_store)); ?></strong>
-            · Session <?php echo e($open_session['session_number']); ?>
+            Selling from <strong><?php echo $selected_store ? e($selected_store['name']) : '—'; ?></strong>
+            <?php if ($selected_store_id): ?>· Shop inventory warehouse<?php endif; ?>
             · Location is fixed
         </div>
     </div>
@@ -326,7 +359,31 @@ require_once 'sidebar.php';
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
 
-<div class="pos-layout">
+<?php if ($selected_shop_id && !$selected_shop_warehouse_id): ?>
+    <div class="alert alert-warning">The selected Shop has no active inventory warehouse. POS sales are unavailable until one is configured.</div>
+<?php endif; ?>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="POST" action="sale-add.php" class="form-inline">
+      <?php echo csrf_field(); ?>
+      <input type="hidden" name="action" value="set_shop">
+      <label class="mr-2">Shop:</label>
+      <select name="shop_id" class="form-control mr-2" required>
+        <option value="">Choose shop...</option>
+        <?php foreach ($shops as $sh): ?>
+          <option value="<?php echo (int)$sh['shop_id']; ?>" <?php echo (int)$sh['shop_id'] === $selected_shop_id ? 'selected' : ''; ?>><?php echo e($sh['name']); ?></option>
+        <?php endforeach; ?>
+      </select>
+      <button type="submit" class="btn btn-primary">Switch Shop</button>
+    </form>
+    <?php if ($selected_shop_id && $selected_shop_warehouse_id): ?>
+      <small class="text-muted d-block mt-2">Current shop inventory warehouse: <?php echo (int)$selected_shop_warehouse_id; ?></small>
+    <?php endif; ?>
+  </div>
+</div>
+
+<?php if ($selected_shop_id): ?>
     <div class="pos-products">
         <div class="pos-search">
             <div class="input-group">
@@ -470,6 +527,8 @@ require_once 'sidebar.php';
     </div>
 </div>
 
+<?php endif; ?>
+
 <script>
     var curSymbol = '<?php echo e($cur); ?>';
     var taxEnabled = <?php echo $tax_enabled ? '1' : '0'; ?>;
@@ -596,8 +655,9 @@ require_once 'sidebar.php';
                     $('#checkoutTotal').text(fmtMoney(grand));
                     syncAmountPaid(grand);
                 } else if (res && res.message) {
-                    alert(res.message);
-                    location.reload();
+                    showAppAlert(res.message, 'Sale Update', function () {
+                        location.reload();
+                    });
                 }
             },
             error: function () { location.reload(); }
@@ -672,12 +732,12 @@ require_once 'sidebar.php';
             if (isNaN(paid)) paid = 0;
             if (isWalkIn() && Math.abs(paid - lastGrand) > 0.009) {
                 e.preventDefault();
-                alert('Walk-in customers must pay the full total.');
+                showAppAlert('Walk-in customers must pay the full total.', 'Payment Validation');
                 return;
             }
             if (paid < 0 || paid > lastGrand + 0.009) {
                 e.preventDefault();
-                alert('Amount paid must be between 0 and the sale total.');
+                showAppAlert('Amount paid must be between 0 and the sale total.', 'Payment Validation');
             }
         });
 

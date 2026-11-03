@@ -88,7 +88,8 @@ The user-supplied report of MariaDB 11 is not correct for this machine. The loca
 - `sidebar.php`, `sales.php`
   - Add POS Session navigation/actions.
 - `shops.php`, `stores.php`
-  - Dependency-aware confirmation before deactivating a shop/store; no hard-delete UI.
+  - Dependency-aware confirmation before deactivating a shop/store; hard deletion is allowed only
+    for locations with no foreign-key references or transaction history.
 - `inventory.php`
   - Add a shop filter alongside the warehouse filter.
 - `inventory-adjust.php`
@@ -232,3 +233,34 @@ The local PHP test server on port 8899 was stopped. A pre-migration database dum
 - Payment-bearing invoice deletion and customer deletion were not exercised through the UI in this
   test run; their new guards are code-reviewed but should be included in deployment regression.
 
+## 9. Follow-on local implementation (2026-11-02; not deployed)
+
+This section supersedes the earlier POS-session requirement above for the POS flow:
+
+- `sale-add.php` now selects the active accessible Shop through `$_SESSION['active_shop_id']`.
+  A sole accessible Shop is selected automatically; multiple Shops require a choice. Switching
+  Shops clears the cart only when the selected Shop actually changes.
+- POS stock checks and checkout resolve the Shop's `location_type = 'shop'` warehouse on the
+  server. POS search and cart-update AJAX endpoints use that same warehouse, not the first Store.
+  Checkout does not require an open POS session and stores `pos_orders.session_id` as `NULL`;
+  the isolated test schema confirms that column is nullable.
+- Transfer destinations now follow the Godown/Store/Shop matrix. Creation, approval, dispatch,
+  and receipt validate active tenant locations and the same location-type rules server-side.
+  Receipt creates a missing destination stock row or increments an existing row, records the
+  incoming movement, and remains transactionally protected against duplicate submissions.
+- The transfer failure was a location-type mismatch: Shop inventory warehouses use
+  `location_type = 'shop'`, while the transfer lifecycle only accepted `location_type = 'store'`.
+  A transfer directed to Shop inventory could therefore not proceed through the full receipt path.
+- No migration or database changes were made. Local verification used PHP 8.2.12 and the isolated
+  `u839560293_agensupply_test` database; no production host was contacted.
+
+## 10. Admin-only shop and store management (2026-11-03)
+
+- Shop and Store configuration screens now require the existing tenant administrator scope in
+  addition to `manage_shops`; staff keep using their assigned Shop/Store operational pages.
+- The Administration sidebar exposes an Inventory Locations link for administrators.
+- Administrators can add, edit, and delete shops and stores. Bootstrap confirmation modals protect
+  deletes. A shop cannot be deleted while it has stores, assignments, inventory, or history; a
+  store cannot be deleted while any declared foreign key points to it. In-use locations must be
+  deactivated instead so history remains intact.
+- No schema migration was needed.

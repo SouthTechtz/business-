@@ -23,11 +23,53 @@ function tenant_currency() {
         $stmt = $conn->prepare("SELECT currency_code FROM tenants WHERE tenant_id = ?");
         $stmt->bind_param('i', $current_user->tenant_id);
         $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
+        $result = $stmt->get_result();
+        $row = $result->fetch_assoc();
         if ($row) $currency = $row['currency_code'];
         $stmt->close();
     }
     return $currency;
+}
+
+/**
+ * Display name of the business as saved in System Settings.
+ *
+ * Uses the signed-in tenant when available, otherwise the first tenant with a
+ * configured company name (so the public storefront and login screen match).
+ * APP_NAME is only a fallback for installations where no company name is set.
+ */
+function system_title($tenant_id = null) {
+    global $current_user;
+    static $titles = [];
+
+    if ($tenant_id === null) {
+        if (isset($current_user->tenant_id)) {
+            $tenant_id = (int)$current_user->tenant_id;
+        } elseif (!empty($_SESSION['tenant_id'])) {
+            $tenant_id = (int)$_SESSION['tenant_id'];
+        }
+    }
+
+    $cache_key = $tenant_id !== null ? (int)$tenant_id : 0;
+    if (array_key_exists($cache_key, $titles)) return $titles[$cache_key];
+
+    if ($cache_key > 0) {
+        $row = fetch_one("SELECT company_name FROM system_settings WHERE tenant_id = ? LIMIT 1", $cache_key);
+    } else {
+        $row = fetch_one(
+            "SELECT ss.company_name
+               FROM tenants t
+               LEFT JOIN system_settings ss ON ss.tenant_id = t.tenant_id
+              ORDER BY (ss.company_name IS NULL OR TRIM(ss.company_name) = '') ASC, t.tenant_id ASC
+              LIMIT 1"
+        );
+    }
+
+    $title = trim((string)($row['company_name'] ?? ''));
+    if ($title === '') $title = APP_NAME;
+
+    $titles[$cache_key] = $title;
+    return $title;
 }
 
 /** Whether the business charges tax (VAT) on sales and invoices (cached per request). */
@@ -67,15 +109,316 @@ function redirect($url) {
     exit;
 }
 
+/** Clear session data and invalidate the browser's session cookie. */
+function end_session() {
+    if (session_status() !== PHP_SESSION_ACTIVE) return;
+
+    if (ini_get('session.use_cookies')) {
+        $cookie = session_get_cookie_params();
+        setcookie(
+            session_name(),
+            '',
+            time() - 42000,
+            $cookie['path'],
+            $cookie['domain'],
+            $cookie['secure'],
+            $cookie['httponly']
+        );
+    }
+
+    $_SESSION = [];
+    session_unset();
+    session_destroy();
+    session_id('');
+}
+
+/** Store an uploaded product image and return its relative path, or false on error. */
+function store_product_image_upload($file, &$error) {
+    $error = '';
+    if (!is_array($file) || !isset($file['error']) || $file['error'] === UPLOAD_ERR_NO_FILE) {
+        return '';
+    }
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        $error = 'The product image could not be uploaded.';
+        return false;
+    }
+    if (!isset($file['size']) || (int)$file['size'] <= 0 || (int)$file['size'] > 5 * 1024 * 1024) {
+        $error = 'Product images must be no larger than 5 MB.';
+        return false;
+    }
+    if (empty($file['tmp_name']) || !is_uploaded_file($file['tmp_name'])) {
+        $error = 'The uploaded product image is invalid.';
+        return false;
+    }
+
+    $image_info = @getimagesize($file['tmp_name']);
+    $extensions = [
+        IMAGETYPE_JPEG => 'jpg',
+        IMAGETYPE_PNG => 'png',
+        IMAGETYPE_WEBP => 'webp',
+        IMAGETYPE_GIF => 'gif',
+    ];
+    if (!$image_info || !isset($extensions[$image_info[2]])) {
+        $error = 'Choose a valid JPG, PNG, WEBP or GIF image.';
+        return false;
+    }
+
+    $directory = __DIR__ . '/uploads/products';
+    if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+        $error = 'The product image upload directory is unavailable.';
+        return false;
+    }
+    $filename = bin2hex(random_bytes(16)) . '.' . $extensions[$image_info[2]];
+    $destination = $directory . '/' . $filename;
+    if (!move_uploaded_file($file['tmp_name'], $destination)) {
+        $error = 'The product image could not be saved.';
+        return false;
+    }
+    return 'uploads/products/' . $filename;
+}
+
+/** Remove an image only when it is a locally stored product upload. */
+function remove_product_image_file($path) {
+    $path = str_replace('\\', '/', (string)$path);
+    if (!preg_match('#^uploads/products/[a-f0-9]{32}\.(jpg|png|webp|gif)$#i', $path)) {
+        return;
+    }
+    $file = __DIR__ . '/' . $path;
+    if (is_file($file)) {
+        unlink($file);
+    }
+}
+
 /** Check a permission on behalf of the current user. */
 function can($permission) {
     global $current_user;
-    return $current_user && $current_user->hasPermission($permission);
+    if (!$current_user || !$current_user->hasPermission($permission)) return false;
+    if (
+        is_godown_manager()
+        && !in_array($permission, [
+            'manage_godown',
+            'view_godown',
+            'manage_inventory',
+            'manage_expenses',
+            'manage_purchases',
+            'manage_suppliers',
+            'manage_invoices',
+            'approve_godown_transfers',
+            'dispatch_godown_transfers',
+            'receive_godown_transfers',
+            'request_godown_transfers',
+        ], true)
+    ) {
+        return false;
+    }
+    return true;
+}
+
+function godown_manager_page_allowed($page) {
+    return in_array(basename((string)$page), [
+        'dashboard.php',
+        'godown.php',
+        'ajax-godown-product-search.php',
+        'inventory.php',
+        'expenses.php',
+        'export-expenses.php',
+        'purchases.php',
+        'purchase-add.php',
+        'purchase-edit.php',
+        'purchase-view.php',
+        'purchase-delete.php',
+        'suppliers.php',
+        'invoices.php',
+        'invoice-add.php',
+        'invoice-details.php',
+        'invoice-edit.php',
+        'invoice-cancel.php',
+        'invoice-print.php',
+        'export-invoices.php',
+        'quotations.php',
+        'quotation-add.php',
+        'quotation-details.php',
+        'quotation-print.php',
+        'quotation-download.php',
+        'godown-transfers.php',
+        'godown-transfer-add.php',
+        'godown-transfer-view.php',
+        'inventory-adjust.php',
+        'profile.php',
+        'update-profile.php',
+        'logout.php',
+    ], true);
 }
 
 /** True when the user has tenant-wide shop visibility (full administrators). */
 function tenant_admin_scope() {
     return can('manage_users') || can('manage_settings');
+}
+
+/**
+ * Count rows that refer to a tenant-owned shop or inventory location.
+ * Column names are read from MySQL metadata and validated before use.
+ */
+function location_reference_count(string $table, string $column, int $record_id, int $tenant_id, string $exclude_table = ''): int
+{
+    global $conn;
+    if ($table === 'warehouses' && $column === 'warehouse_id') {
+        $reference_columns = ['warehouse_id', 'source_warehouse_id', 'destination_warehouse_id', 'godown_id', 'location_id'];
+    } elseif ($table === 'shops' && $column === 'shop_id') {
+        $reference_columns = ['shop_id', 'destination_shop_id'];
+    } else {
+        throw new InvalidArgumentException('Invalid foreign-key reference target.');
+    }
+
+    $column_placeholders = implode(', ', array_fill(0, count($reference_columns), '?'));
+    $stmt = $conn->prepare(
+        "SELECT c.TABLE_NAME, c.COLUMN_NAME,
+                MAX(CASE WHEN tenant_col.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END) has_tenant_id
+           FROM information_schema.COLUMNS c
+           LEFT JOIN information_schema.COLUMNS tenant_col
+             ON tenant_col.TABLE_SCHEMA = c.TABLE_SCHEMA
+            AND tenant_col.TABLE_NAME = c.TABLE_NAME
+            AND tenant_col.COLUMN_NAME = 'tenant_id'
+          WHERE c.TABLE_SCHEMA = ?
+            AND c.TABLE_NAME NOT IN (?, ?)
+            AND c.COLUMN_NAME IN ({$column_placeholders})
+          GROUP BY c.TABLE_NAME, c.COLUMN_NAME"
+    );
+    if (!$stmt) {
+        throw new RuntimeException('Could not inspect location references: ' . $conn->error);
+    }
+    $metadata_params = array_merge([DB_NAME, $table, $exclude_table], $reference_columns);
+    if (!$stmt->bind_param(str_repeat('s', count($metadata_params)), ...$metadata_params) || !$stmt->execute()) {
+        $error = $stmt->error;
+        $stmt->close();
+        throw new RuntimeException('Could not inspect location references: ' . $error);
+    }
+    $result = $stmt->get_result();
+    if (!$result) {
+        $stmt->close();
+        throw new RuntimeException('Could not read location reference metadata.');
+    }
+    $references = $result->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+
+    $count = 0;
+    foreach ($references as $reference) {
+        $child_table = (string)$reference['TABLE_NAME'];
+        $child_column = (string)$reference['COLUMN_NAME'];
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $child_table) || !preg_match('/^[a-zA-Z0-9_]+$/', $child_column)) {
+            throw new RuntimeException('Unexpected location reference metadata returned by the database.');
+        }
+
+        $sql = 'SELECT COUNT(*) AS reference_count FROM `' . $child_table . '` WHERE `' . $child_column . '` = ?';
+        $params = [$record_id];
+        if ((int)$reference['has_tenant_id'] === 1) {
+            $sql .= ' AND tenant_id = ?';
+            $params[] = $tenant_id;
+        }
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            throw new RuntimeException('Could not count location references: ' . $conn->error);
+        }
+        $types = (int)$reference['has_tenant_id'] === 1 ? 'ii' : 'i';
+        if (!$stmt->bind_param($types, ...$params) || !$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException('Could not count location references: ' . $error);
+        }
+        $result = $stmt->get_result();
+        if (!$result) {
+            $stmt->close();
+            throw new RuntimeException('Could not read location reference counts.');
+        }
+        $row = $result->fetch_assoc();
+        $stmt->close();
+        $count += (int)($row['reference_count'] ?? 0);
+    }
+    return $count;
+}
+
+/** Whether the current user has the built-in Shop Manager role. */
+function is_shop_manager() {
+    global $current_user;
+    if (!$current_user || !is_array($current_user->roles)) return false;
+    foreach ($current_user->roles as $role) {
+        if (strtolower(trim((string)$role)) === 'shop manager') return true;
+    }
+    return false;
+}
+
+/** Whether the current user can verify storefront order requests. */
+function can_verify_storefront_order_requests() {
+    return can('manage_orders')
+        && (tenant_admin_scope() || (is_shop_manager() && count(accessible_shops(null, false)) > 0));
+}
+
+/** Whether the current account uses the restricted Godown Manager role. */
+function is_godown_manager() {
+    global $current_user;
+    if (!$current_user || !is_array($current_user->roles)) return false;
+    if ($current_user->hasPermission('manage_users') || $current_user->hasPermission('manage_settings')) {
+        return false;
+    }
+    foreach ($current_user->roles as $role) {
+        if (strtolower(trim((string)$role)) === 'godown manager') return true;
+    }
+    return false;
+}
+
+/** Active or historical Godowns explicitly assigned to the current manager. */
+function godown_manager_location_ids($tenant_id = null, $include_inactive = true) {
+    global $current_user;
+    if (!$current_user) return [];
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    if ($tenant_id !== (int)$current_user->tenant_id) return [];
+
+    $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+    $rows = fetch_all(
+        "SELECT DISTINCT w.warehouse_id
+           FROM warehouses w
+          WHERE w.tenant_id = ? AND w.location_type = 'godown'{$active_sql}
+            AND (
+                EXISTS (
+                    SELECT 1 FROM user_inventory_locations uil
+                     WHERE uil.tenant_id = w.tenant_id
+                       AND uil.user_id = ? AND uil.location_id = w.warehouse_id
+                )
+                OR EXISTS (
+                    SELECT 1 FROM user_godowns ug
+                     WHERE ug.tenant_id = w.tenant_id
+                       AND ug.user_id = ? AND ug.warehouse_id = w.warehouse_id
+                )
+            )
+          ORDER BY w.warehouse_id",
+        $tenant_id,
+        (int)$current_user->user_id,
+        (int)$current_user->user_id
+    );
+    return array_map(fn($row) => (int)$row['warehouse_id'], $rows);
+}
+
+/** Permission names granted by selected roles in the current tenant. */
+function role_permissions_for_ids(array $role_ids, int $tenant_id): array
+{
+    $role_ids = array_values(array_unique(array_filter(array_map('intval', $role_ids), fn($id) => $id > 0)));
+    if (!$role_ids || $tenant_id <= 0) return [];
+
+    $placeholders = implode(',', array_fill(0, count($role_ids), '?'));
+    $params = array_merge([$tenant_id], $role_ids);
+    $rows = fetch_all(
+        "SELECT DISTINCT r.role_id, p.name permission_name
+           FROM roles r
+           JOIN role_permissions rp ON rp.role_id = r.role_id
+           JOIN permissions p ON p.permission_id = rp.permission_id
+          WHERE r.tenant_id = ? AND r.role_id IN ($placeholders)",
+        ...$params
+    );
+    $permissions = [];
+    foreach ($rows as $row) {
+        $permissions[(int)$row['role_id']][] = (string)$row['permission_name'];
+    }
+    return $permissions;
 }
 
 /**
@@ -87,6 +430,7 @@ function accessible_shops($tenant_id = null, $include_inactive = false) {
     if (!$current_user) return [];
     $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
     if ($tenant_id !== (int)$current_user->tenant_id) return [];
+    if (is_godown_manager()) return [];
     $active_sql = $include_inactive ? '' : ' AND s.is_active = 1';
     if (tenant_admin_scope()) {
         return fetch_all(
@@ -125,6 +469,21 @@ function accessible_stores($shop_id = null, $include_inactive = false, $tenant_i
     if (!$current_user) return [];
     $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
     if ($tenant_id !== (int)$current_user->tenant_id) return [];
+    if (is_godown_manager()) {
+        if (!$include_godown || $shop_id !== null || !can_access_godown()) return [];
+        $godown_ids = godown_manager_location_ids($tenant_id, $include_inactive);
+        if (!$godown_ids) return [];
+        $id_list = implode(',', array_map('intval', $godown_ids));
+        $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+        return fetch_all(
+            "SELECT w.*, NULL AS shop_name, NULL AS shop_code, 1 AS shop_is_active
+               FROM warehouses w
+              WHERE w.tenant_id = ? AND w.location_type = 'godown'
+                AND w.warehouse_id IN ({$id_list}){$active_sql}
+              ORDER BY w.name",
+            $tenant_id
+        );
+    }
 
     $shops = accessible_shops($tenant_id, $include_inactive);
     $shop_ids = array_map(fn($row) => (int)$row['shop_id'], $shops);
@@ -149,6 +508,29 @@ function accessible_stores($shop_id = null, $include_inactive = false, $tenant_i
         $rows = fetch_all($sql, ...$params);
     }
 
+    if (!tenant_admin_scope()) {
+        $rows_by_id = [];
+        foreach ($rows as $row) {
+            $rows_by_id[(int)$row['warehouse_id']] = $row;
+        }
+        $active_sql = $include_inactive ? '' : " AND w.is_active = 1 AND s.is_active = 1";
+        $assigned_stores = fetch_all(
+            "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+               FROM user_inventory_locations uil
+               JOIN warehouses w ON w.warehouse_id = uil.location_id AND w.tenant_id = uil.tenant_id
+               JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+              WHERE uil.tenant_id = ? AND uil.user_id = ? AND w.location_type = 'store'{$active_sql}
+              ORDER BY s.name, w.name",
+            $tenant_id,
+            $current_user->user_id
+        );
+        foreach ($assigned_stores as $assigned_store) {
+            if ($shop_id !== null && (int)$assigned_store['shop_id'] !== (int)$shop_id) continue;
+            $rows_by_id[(int)$assigned_store['warehouse_id']] = $assigned_store;
+        }
+        $rows = array_values($rows_by_id);
+    }
+
     // A Godown is an independent warehouse that does not belong to a shop, so
     // it cannot come from the shop join above. Central pages pass
     // $include_godown = true after checking a Godown permission.
@@ -164,7 +546,11 @@ function accessible_stores($shop_id = null, $include_inactive = false, $tenant_i
         $rows = array_merge($rows, $godowns);
     }
 
-    return $rows;
+    $unique = [];
+    foreach ($rows as $row) {
+        $unique[(int)$row['warehouse_id']] = $row;
+    }
+    return array_values($unique);
 }
 
 /** Whether the current user may work with Godown records. */
@@ -183,6 +569,11 @@ function can_access_godown() {
  * of allowed IDs for a shop-scoped user. An empty array means no access.
  */
 function accessible_warehouse_ids($tenant_id = null, $include_inactive = true, $include_godown = false) {
+    if (is_godown_manager()) {
+        return $include_godown && can_access_godown()
+            ? godown_manager_location_ids($tenant_id, $include_inactive)
+            : [];
+    }
     if (tenant_admin_scope()) return null;
     return array_map(
         fn($row) => (int)$row['warehouse_id'],
@@ -202,6 +593,7 @@ function shop_is_accessible($shop_id, $include_inactive = true) {
     );
     if (!$shop) return false;
     if (!$include_inactive && !(int)$shop['is_active']) return false;
+    if (is_godown_manager()) return false;
     if (tenant_admin_scope()) return true;
     $mapped = fetch_one(
         "SELECT 1 FROM user_shops WHERE tenant_id = ? AND user_id = ? AND shop_id = ?",
@@ -237,8 +629,15 @@ function find_accessible_store($warehouse_id, $include_inactive = false, $includ
     if ((string)($store['location_type'] ?? '') === 'godown') {
         if (!$include_godown) return null;
         if (!$include_inactive && !(int)$store['is_active']) return null;
+        if (
+            is_godown_manager()
+            && !in_array($warehouse_id, godown_manager_location_ids(null, true), true)
+        ) {
+            return null;
+        }
         return can_access_godown() ? $store : null;
     }
+    if (is_godown_manager()) return null;
 
     if (!$include_inactive && (!(int)$store['is_active'] || !(int)$store['shop_is_active'])) return null;
     if (!$include_godown && (int)($store['is_godown'] ?? 0) === 1) return null;
@@ -263,14 +662,22 @@ function find_active_godown($tenant_id = null, $include_inactive = false) {
     if (!$current_user) return null;
     $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
     if ($tenant_id !== (int)$current_user->tenant_id) return null;
+    $params = [$tenant_id];
+    $assignment_sql = '';
+    if (is_godown_manager()) {
+        $godown_ids = godown_manager_location_ids($tenant_id, true);
+        if (!$godown_ids) return null;
+        $assignment_sql = ' AND w.warehouse_id IN (' . implode(',', array_fill(0, count($godown_ids), '?')) . ')';
+        $params = array_merge($params, $godown_ids);
+    }
     $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
     return fetch_one(
         "SELECT w.*, NULL AS shop_name, NULL AS shop_code, 1 AS shop_is_active
          FROM warehouses w
-         WHERE w.tenant_id = ? AND w.location_type = 'godown'{$active_sql}
+         WHERE w.tenant_id = ? AND w.location_type = 'godown'{$assignment_sql}{$active_sql}
          ORDER BY w.is_active DESC, w.warehouse_id
          LIMIT 1",
-        $tenant_id
+        ...$params
     );
 }
 
@@ -437,20 +844,53 @@ function accessible_locations($include_inactive = false, $tenant_id = null) {
     if (!$current_user) return [];
     $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
     if ($tenant_id !== (int)$current_user->tenant_id) return [];
+    if (is_godown_manager()) {
+        $godown_ids = godown_manager_location_ids($tenant_id, $include_inactive);
+        if (!$godown_ids) return [];
+        return fetch_all(
+            "SELECT w.*, NULL AS shop_name, NULL AS shop_code
+               FROM warehouses w
+              WHERE w.tenant_id = ? AND w.location_type = 'godown'
+                AND w.warehouse_id IN (" . implode(',', array_fill(0, count($godown_ids), '?')) . ")
+              ORDER BY w.name",
+            ...array_merge([$tenant_id], $godown_ids)
+        );
+    }
     if (tenant_admin_scope()) {
-        $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+        $active_sql = $include_inactive ? '' : " AND w.is_active = 1 AND (w.location_type = 'godown' OR s.is_active = 1)";
         return fetch_all("SELECT w.*, s.name shop_name, s.code shop_code FROM warehouses w LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id WHERE w.tenant_id = ?{$active_sql} ORDER BY w.name", $tenant_id);
     }
     $ids = accessible_warehouse_ids($tenant_id, $include_inactive, true);
     if ($ids === null) $ids = [];
+    $shop_ids = accessible_shop_ids($tenant_id, $include_inactive);
+    if ($shop_ids) {
+        $shop_placeholders = implode(',', array_fill(0, count($shop_ids), '?'));
+        $shop_locations = fetch_all(
+            "SELECT warehouse_id FROM warehouses
+              WHERE tenant_id = ? AND shop_id IN ({$shop_placeholders})
+                AND location_type = 'shop'" . ($include_inactive ? '' : ' AND is_active = 1'),
+            ...array_merge([$tenant_id], $shop_ids)
+        );
+        foreach ($shop_locations as $location) $ids[] = (int)$location['warehouse_id'];
+    }
     $uil = fetch_all("SELECT location_id FROM user_inventory_locations WHERE tenant_id = ? AND user_id = ?", $tenant_id, $current_user->user_id);
     foreach ($uil as $r) $ids[] = (int)$r['location_id'];
     $ids = array_values(array_unique($ids));
     if (!$ids) return [];
     $ph = implode(',', array_fill(0, count($ids), '?'));
-    $active_sql = $include_inactive ? '' : ' AND w.is_active = 1';
+    $active_sql = $include_inactive ? '' : " AND w.is_active = 1 AND (w.location_type = 'godown' OR s.is_active = 1)";
     $params = array_merge([$tenant_id], $ids);
     return fetch_all("SELECT w.*, s.name shop_name, s.code shop_code FROM warehouses w LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.warehouse_id IN ($ph){$active_sql} ORDER BY w.name", ...$params);
+}
+
+/** Whether a stock transfer may move from one location type to another. */
+function stock_transfer_destination_allowed($source_type, $destination_type) {
+    $allowed = [
+        'godown' => ['store', 'shop'],
+        'store' => ['store', 'shop'],
+        'shop' => ['shop'],
+    ];
+    return in_array((string)$destination_type, $allowed[(string)$source_type] ?? [], true);
 }
 
 /** The independent inventory location (warehouse) for a shop, or null. */
@@ -528,16 +968,78 @@ function stock_transfer_is_visible($transfer) {
     $destination_shop_id = (int)($transfer['destination_shop_id'] ?? 0);
     if ($destination_shop_id > 0 && shop_is_accessible($destination_shop_id, true)) return true;
 
-    // Source-side visibility belongs to Godown oversight staff. A requester
-    // must not see another shop's request just because it came from the same
-    // Godown; requesters rely on their destination-shop access above.
+    $source_location = find_accessible_store(
+        (int)($transfer['source_warehouse_id'] ?? 0),
+        true,
+        true
+    );
     $godown_oversight = can('manage_godown')
         || can('view_godown')
         || can('approve_godown_transfers')
         || can('dispatch_godown_transfers')
         || can('receive_godown_transfers');
-    return $godown_oversight
-        && find_accessible_store((int)($transfer['source_warehouse_id'] ?? 0), true, true) !== null;
+    $source_location_staff = can('manage_inventory')
+        || can('manage_pos')
+        || can('manage_shops');
+    return $source_location !== null
+        && ($godown_oversight || $source_location_staff);
+}
+
+/** Whether the current user manages a Shop that owns this location. */
+function stock_transfer_shop_staff_for_location($location) {
+    if (!$location || (int)($location['shop_id'] ?? 0) <= 0) return false;
+    if (!can('manage_inventory') && !can('manage_shops')) return false;
+    return shop_is_accessible((int)$location['shop_id'], true);
+}
+
+/** Whether the current user manages an accessible Store location. */
+function stock_transfer_store_staff_for_location($location) {
+    if (!$location || (string)($location['location_type'] ?? '') !== 'store') return false;
+    if (!can('manage_inventory') && !can('manage_shops')) return false;
+    return store_is_accessible((int)($location['warehouse_id'] ?? 0), true);
+}
+
+/** Whether the current user manages an accessible Shop or Store location. */
+function stock_transfer_location_staff($location) {
+    return stock_transfer_shop_staff_for_location($location)
+        || stock_transfer_store_staff_for_location($location);
+}
+
+/** Whether the current user may approve a transfer from an accessible location. */
+function stock_transfer_can_approve_from_location($location) {
+    if (!$location) return false;
+    return can('approve_godown_transfers')
+        || stock_transfer_location_staff($location);
+}
+
+/** Whether the current user may dispatch a transfer from an accessible location. */
+function stock_transfer_can_dispatch_from_location($location) {
+    if (!$location) return false;
+    return can('dispatch_godown_transfers')
+        || stock_transfer_location_staff($location);
+}
+
+/** Whether the current user may receive a transfer into an accessible location. */
+function stock_transfer_can_receive_at_location($location) {
+    if (!$location) return false;
+    return can('receive_godown_transfers')
+        || stock_transfer_location_staff($location);
+}
+
+/** Whether the current user may cancel an undispatched transfer from an accessible location. */
+function stock_transfer_can_cancel_from_location($location) {
+    if (!$location) return false;
+    return can('approve_godown_transfers')
+        || can('manage_godown')
+        || stock_transfer_location_staff($location);
+}
+
+/** Whether the current user may resolve a discrepancy involving an accessible Shop. */
+function stock_transfer_can_resolve_discrepancy($source, $destination) {
+    return can('approve_godown_transfers')
+        || can('manage_godown')
+        || stock_transfer_location_staff($source)
+        || stock_transfer_location_staff($destination);
 }
 
 /** Create/retrieve a per-session CSRF token. */
@@ -798,10 +1300,15 @@ function order_allowed_transitions($status) {
 function lead_statuses() {
     return [
         'pending'   => 'Pending',
-        'confirmed' => 'Confirmed',
         'follow_up' => 'Follow Up',
+        'confirmed' => 'Confirmed',
         'cancelled' => 'Cancelled',
     ];
+}
+
+/** Whether a lead update must include a next follow-up date. */
+function lead_follow_up_date_required($status, $date) {
+    return (string)$status === 'follow_up' && trim((string)$date) === '';
 }
 
 /** Statuses a lead may move to from its current status. */
@@ -854,6 +1361,22 @@ function order_status_class($status) {
         'cancelled'    => 'secondary',
     ];
     return $map[$status] ?? 'secondary';
+}
+
+/** Customer name to display for a lead, preserving the name entered at storefront checkout. */
+function lead_customer_display_name($lead) {
+    if (!$lead) return '';
+    $contact_name = trim((string)($lead['contact_name'] ?? ''));
+    if ((string)($lead['source'] ?? '') === 'storefront' && $contact_name !== '') {
+        return $contact_name;
+    }
+
+    $company_name = trim((string)($lead['contact_company'] ?? ''));
+    if ($company_name === '') $company_name = trim((string)($lead['company_name'] ?? ''));
+    if ($company_name !== '') return $company_name;
+
+    $contact_person = trim((string)($lead['contact_first'] ?? '') . ' ' . (string)($lead['contact_last'] ?? ''));
+    return $contact_person !== '' ? $contact_person : $contact_name;
 }
 
 /** Bootstrap badge class for a lead status. */
@@ -1153,6 +1676,204 @@ function consume_order_reservations($order_id, $tenant_id, $invoice_id) {
     return $count;
 }
 
+/** Whether an order has a committed stock deduction for transport. */
+function order_stock_was_dispatched($order_id, $tenant_id) {
+    $row = fetch_one(
+        "SELECT COUNT(*) movement_count
+           FROM inventory_movements
+          WHERE tenant_id = ? AND reference_id = ?
+            AND reference_type = 'order_transport' AND movement_type = 'order_transport'",
+        (int)$tenant_id,
+        (int)$order_id
+    );
+    return (int)($row['movement_count'] ?? 0) > 0;
+}
+
+/**
+ * Deduct an order's stock for transport. The caller must hold an open transaction.
+ * The order, reservations, and inventory rows are locked before stock is changed.
+ */
+function dispatch_order_stock_for_transport($order_id, $tenant_id, $created_by = null) {
+    global $conn;
+    $order_id = (int)$order_id;
+    $tenant_id = (int)$tenant_id;
+
+    $order = fetch_one(
+        "SELECT * FROM orders WHERE order_id = ? AND tenant_id = ? FOR UPDATE",
+        $order_id,
+        $tenant_id
+    );
+    if (!$order) throw new RuntimeException('Order not found.');
+    if (($order['stage'] ?? 'shop') !== 'shop') {
+        throw new RuntimeException('Only an order at the shop can be moved into transport.');
+    }
+    if (!empty($order['fulfilled_invoice_id'])) {
+        throw new RuntimeException('This order already has a fulfilment invoice and cannot be dispatched again.');
+    }
+    if (in_array((string)$order['status'], ['cancelled', 'rejected', 'fulfilled'], true)) {
+        throw new RuntimeException('This order is no longer eligible for transport.');
+    }
+
+    $warehouse_id = (int)($order['warehouse_id'] ?? 0);
+    if ($warehouse_id <= 0) {
+        throw new RuntimeException('Select a store for this order before moving it into transport.');
+    }
+    $warehouse = fetch_one(
+        "SELECT warehouse_id, name FROM warehouses
+          WHERE warehouse_id = ? AND tenant_id = ? AND is_active = 1 FOR UPDATE",
+        $warehouse_id,
+        $tenant_id
+    );
+    if (!$warehouse) throw new RuntimeException('The order store is no longer active.');
+    if (order_stock_was_dispatched($order_id, $tenant_id)) {
+        throw new RuntimeException('Stock for this order has already been deducted for transport.');
+    }
+
+    $items = fetch_all(
+        "SELECT oi.order_item_id, oi.product_id, oi.quantity, p.name product_name,
+                p.is_active, p.is_service
+           FROM order_items oi
+           LEFT JOIN products p ON p.product_id = oi.product_id AND p.tenant_id = oi.tenant_id
+          WHERE oi.order_id = ? AND oi.tenant_id = ?
+          ORDER BY oi.line_no
+          FOR UPDATE",
+        $order_id,
+        $tenant_id
+    );
+    if (!$items) throw new RuntimeException('This order has no products to dispatch.');
+
+    $needed = [];
+    $expected_reservations = [];
+    foreach ($items as $item) {
+        if ($item['product_id'] === null) {
+            throw new RuntimeException('An order item is not linked to a product and cannot be deducted from stock.');
+        }
+        if ((int)$item['is_active'] !== 1) {
+            throw new RuntimeException('A product on this order is inactive and cannot be dispatched.');
+        }
+        if ((int)$item['is_service'] === 1) continue;
+
+        $product_id = (int)$item['product_id'];
+        $quantity = (float)$item['quantity'];
+        if ($quantity <= 0) throw new RuntimeException('An order line has an invalid quantity.');
+        if (!isset($needed[$product_id])) {
+            $needed[$product_id] = [
+                'quantity' => 0.0,
+                'name' => (string)$item['product_name'],
+            ];
+        }
+        $needed[$product_id]['quantity'] += $quantity;
+        $expected_reservations[(int)$item['order_item_id']] = [
+            'product_id' => $product_id,
+            'quantity' => $quantity,
+        ];
+    }
+
+    $reservation_history = order_reservation_rows($order_id, $tenant_id, null, true);
+    $active_reservations = array_values(array_filter(
+        $reservation_history,
+        static function ($reservation) {
+            return $reservation['status'] === 'active';
+        }
+    ));
+    if ($reservation_history && count($active_reservations) !== count($expected_reservations)) {
+        throw new RuntimeException('This order has incomplete or already-used stock reservations and cannot be dispatched.');
+    }
+    foreach ($active_reservations as $reservation) {
+        $item_id = (int)$reservation['order_item_id'];
+        if (!isset($expected_reservations[$item_id])
+            || (int)$reservation['product_id'] !== $expected_reservations[$item_id]['product_id']
+            || (int)$reservation['warehouse_id'] !== $warehouse_id
+            || abs((float)$reservation['quantity'] - $expected_reservations[$item_id]['quantity']) > 0.0001) {
+            throw new RuntimeException('The order stock reservation no longer matches its store or quantities.');
+        }
+    }
+
+    ksort($needed);
+    foreach ($needed as $product_id => $need) {
+        $stock = fetch_one(
+            "SELECT quantity FROM inventory_stock
+              WHERE tenant_id = ? AND product_id = ? AND warehouse_id = ?
+              FOR UPDATE",
+            $tenant_id,
+            (int)$product_id,
+            $warehouse_id
+        );
+        $on_hand = $stock ? (float)$stock['quantity'] : 0.0;
+        $reserved_by_others = reserved_stock_quantity(
+            $tenant_id,
+            (int)$product_id,
+            $warehouse_id,
+            $order_id
+        );
+        if (!$stock || $on_hand - $need['quantity'] + 0.0001 < $reserved_by_others) {
+            throw new RuntimeException(
+                'Insufficient available stock for ' . $need['name']
+                . ' at ' . $warehouse['name'] . ' (requested: ' . $need['quantity']
+                . ', available: ' . max(0, $on_hand - $reserved_by_others) . ').'
+            );
+        }
+    }
+
+    foreach ($needed as $product_id => $need) {
+        $stmt = $conn->prepare(
+            "UPDATE inventory_stock SET quantity = quantity - ?
+              WHERE tenant_id = ? AND product_id = ? AND warehouse_id = ? AND quantity >= ?"
+        );
+        if (!$stmt) throw new RuntimeException($conn->error);
+        $quantity = (float)$need['quantity'];
+        $stmt->bind_param('diiid', $quantity, $tenant_id, $product_id, $warehouse_id, $quantity);
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException($error);
+        }
+        if ($stmt->affected_rows !== 1) {
+            $stmt->close();
+            throw new RuntimeException('Stock changed while the order was being dispatched. Reload and try again.');
+        }
+        $stmt->close();
+
+        $stmt = $conn->prepare(
+            "INSERT INTO inventory_movements
+                (tenant_id, product_id, warehouse_id, movement_type, quantity, reference_id, reference_type, created_by, notes)
+             VALUES (?, ?, ?, 'order_transport', ?, ?, 'order_transport', ?, ?)"
+        );
+        if (!$stmt) throw new RuntimeException($conn->error);
+        $created_by_db = $created_by ? (int)$created_by : null;
+        $notes = 'Stock deducted when order moved into transport';
+        $stmt->bind_param('iiidiis', $tenant_id, $product_id, $warehouse_id, $quantity, $order_id, $created_by_db, $notes);
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException($error);
+        }
+        $stmt->close();
+    }
+
+    if ($active_reservations) {
+        $stmt = $conn->prepare(
+            "UPDATE order_stock_reservations
+                SET status = 'consumed', consumed_at = NOW(), consumed_invoice_id = NULL
+              WHERE order_id = ? AND tenant_id = ? AND status = 'active'"
+        );
+        if (!$stmt) throw new RuntimeException($conn->error);
+        $stmt->bind_param('ii', $order_id, $tenant_id);
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException($error);
+        }
+        if ($stmt->affected_rows !== count($active_reservations)) {
+            $stmt->close();
+            throw new RuntimeException('The order reservation changed while stock was being dispatched.');
+        }
+        $stmt->close();
+    }
+
+    return count($needed);
+}
+
 /** True when an invoice contains exactly the same product quantities as an order. */
 function order_invoice_matches($order_id, $tenant_id, $invoice_id) {
     $order_lines = fetch_all(
@@ -1243,7 +1964,7 @@ function quotation_is_visible($quotation) {
     if (!$current_user || !$quotation) return false;
     if ((int)$quotation['tenant_id'] !== (int)$current_user->tenant_id) return false;
     if (tenant_admin_scope()) return true;
-    $scope_ids = accessible_warehouse_ids();
+    $scope_ids = accessible_warehouse_ids(null, true, is_godown_manager());
     if ($scope_ids === null) return true;
     $warehouse_id = (int)($quotation['warehouse_id'] ?? 0);
     return $warehouse_id > 0 && in_array($warehouse_id, $scope_ids, true);
@@ -1276,7 +1997,7 @@ function convert_quotation_to_invoice($quotation_id, $tenant_id) {
         throw new RuntimeException('A rejected quotation cannot be converted.');
     }
 
-    $store = find_accessible_store((int)$quotation['warehouse_id'], false);
+    $store = find_accessible_store((int)$quotation['warehouse_id'], false, is_godown_manager());
     if (!$store) {
         throw new RuntimeException('The quotation store is no longer active or accessible.');
     }
@@ -1342,12 +2063,23 @@ function convert_quotation_to_invoice($quotation_id, $tenant_id) {
     }
 
     $settings = fetch_one(
-        "SELECT * FROM system_settings WHERE tenant_id = ? FOR UPDATE",
-        $tenant_id
-    );
-    $prefix = ($settings && isset($settings['invoice_prefix'])) ? $settings['invoice_prefix'] : 'INV-';
-    $next_no = ($settings && isset($settings['invoice_next_number'])) ? (int)$settings['invoice_next_number'] : 1001;
-    $invoice_number = $prefix . $next_no;
+            "SELECT invoice_prefix FROM system_settings WHERE tenant_id = ? FOR UPDATE",
+            $tenant_id
+        );
+        $prefix = ($settings && !empty($settings['invoice_prefix'])) ? $settings['invoice_prefix'] : 'INV-';
+
+        $last_inv = fetch_one(
+            "SELECT invoice_number FROM invoices WHERE tenant_id = ? ORDER BY invoice_id DESC LIMIT 1 FOR UPDATE",
+            $tenant_id
+        );
+
+        if (!$last_inv || empty($last_inv['invoice_number'])) {
+            $next_no = 1001;
+        } else {
+            $numeric_part = (int)preg_replace('/[^0-9]/', '', $last_inv['invoice_number']);
+            $next_no = $numeric_part + 1;
+        }
+        $invoice_number = $prefix . $next_no;
 
     $status = fetch_one(
         "SELECT status_id FROM document_statuses
@@ -1470,15 +2202,6 @@ function convert_quotation_to_invoice($quotation_id, $tenant_id) {
     }
     $stmt->close();
 
-    if ($settings && isset($settings['invoice_next_number'])) {
-        $stmt = $conn->prepare(
-            "UPDATE system_settings SET invoice_next_number = invoice_next_number + 1 WHERE tenant_id = ?"
-        );
-        $stmt->bind_param('i', $tenant_id);
-        $stmt->execute();
-        $stmt->close();
-    }
-
     $stmt = $conn->prepare(
         "UPDATE quotations
             SET status = 'converted', converted_invoice_id = ?, converted_at = NOW()
@@ -1560,4 +2283,3 @@ function store_stock_summary($warehouse_id, $tenant_id) {
     }
     return $out;
 }
-

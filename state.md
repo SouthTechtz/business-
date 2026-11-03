@@ -1094,3 +1094,81 @@ If approved, a future phase could:
 - Update queries to treat godown/store/shop as independent locations.
 - Add reservation/in-transit tracking.
 
+## Helper functions (exact code)
+
+### accessible_shops()
+```php
+function accessible_shops($tenant_id = null, $include_inactive = false) {
+    global $current_user;
+    if (!$current_user) return [];
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    if ($tenant_id !== (int)$current_user->tenant_id) return [];
+    $active_sql = $include_inactive ? '' : ' AND s.is_active = 1';
+    if (tenant_admin_scope()) {
+        return fetch_all(
+            "SELECT s.* FROM shops s WHERE s.tenant_id = ?{$active_sql} ORDER BY s.name",
+            $tenant_id
+        );
+    }
+    return fetch_all(
+        "SELECT s.* FROM shops s
+         WHERE s.tenant_id = ?{$active_sql}
+           AND (
+             EXISTS (SELECT 1 FROM user_shops us WHERE us.tenant_id = s.tenant_id AND us.user_id = ? AND us.shop_id = s.shop_id)
+             OR EXISTS (SELECT 1 FROM user_inventory_locations uil JOIN warehouses w ON w.warehouse_id = uil.location_id AND w.tenant_id = uil.tenant_id WHERE uil.tenant_id = s.tenant_id AND uil.user_id = ? AND w.shop_id = s.shop_id AND w.location_type = 'shop')
+           )
+         ORDER BY s.name",
+        $tenant_id,
+        $current_user->user_id,
+        $current_user->user_id
+    );
+}
+```
+
+### shop_inventory_warehouse_id($shop_id)
+```php
+function shop_inventory_warehouse_id($shop_id, $tenant_id = null) {
+    global $current_user;
+    $shop_id = (int)$shop_id;
+    if ($shop_id <= 0) return null;
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $row = fetch_one("SELECT warehouse_id FROM warehouses WHERE tenant_id = ? AND shop_id = ? AND location_type = 'shop' AND is_active = 1 LIMIT 1", $tenant_id, $shop_id);
+    return $row ? (int)$row['warehouse_id'] : null;
+}
+```
+
+### shop_inventory_ready($shop_id)
+```php
+function shop_inventory_ready($shop_id, $tenant_id = null) {
+    global $current_user;
+    $wh = shop_inventory_warehouse_id($shop_id, $tenant_id);
+    if (!$wh) return false;
+    $tid = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $row = fetch_one("SELECT COALESCE(SUM(quantity),0) AS q FROM inventory_stock WHERE tenant_id = ? AND warehouse_id = ?", $tid, $wh);
+    return $row && (float)$row['q'] > 0;
+}
+```
+
+### tenant_admin_scope()
+```php
+function tenant_admin_scope() {
+    return can('manage_users') || can('manage_settings');
+}
+```
+
+### shop_is_accessible($shop_id)
+```php
+function shop_is_accessible($shop_id, $include_inactive = true) {
+    global $current_user;
+    $shop_id = (int)$shop_id;
+    if (!$current_user || $shop_id <= 0) return false;
+    $shop = fetch_one("SELECT * FROM shops WHERE shop_id = ? AND tenant_id = ?", $shop_id, $current_user->tenant_id);
+    if (!$shop) return false;
+    if (!$include_inactive && !(int)$shop['is_active']) return false;
+    if (tenant_admin_scope()) return true;
+    $mapped = fetch_one("SELECT 1 FROM user_shops WHERE tenant_id = ? AND user_id = ? AND shop_id = ?", $current_user->tenant_id, $current_user->user_id, $shop_id);
+    if ($mapped) return true;
+    $loc = fetch_one("SELECT 1 FROM user_inventory_locations uil JOIN warehouses w ON w.warehouse_id = uil.location_id AND w.tenant_id = uil.tenant_id WHERE uil.tenant_id = ? AND uil.user_id = ? AND w.shop_id = ? AND w.location_type = 'shop'", $current_user->tenant_id, $current_user->user_id, $shop_id);
+    return (bool)$loc;
+}
+```

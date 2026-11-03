@@ -9,7 +9,7 @@ if (!$sf_tenant) {
 $sf_settings = storefront_settings($sf_tenant);
 $sf_currency = storefront_currency($sf_tenant, $sf_settings);
 $sf_tenant_id = (int)$sf_tenant['tenant_id'];
-$sf_company = trim((string)($sf_settings['company_name'] ?? '')) ?: APP_NAME;
+$sf_company = storefront_company_name($sf_tenant, $sf_settings);
 $sf_format = strtolower((string)($_GET['format'] ?? 'json'));
 if (!in_array($sf_format, ['json', 'csv'], true)) $sf_format = 'json';
 

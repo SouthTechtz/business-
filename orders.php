@@ -9,55 +9,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
     header('Content-Type: application/json');
 
     try {
+        $posted_token = $_POST['csrf_token'] ?? '';
+        $known_token = $_SESSION['csrf_token'] ?? '';
+        if (!is_string($posted_token) || $known_token === '' || !hash_equals($known_token, $posted_token)) {
+            echo json_encode(['success' => false, 'message' => 'Your session expired. Refresh the page and try again.']);
+            exit;
+        }
+
         $order_id = (int)($_POST['order_id'] ?? 0);
-        $amount_paid = (float)($_POST['Amount_paid'] ?? 0);
+        $amount_paid_input = $_POST['Amount_paid'] ?? '';
+        $order_total_input = $_POST['order_total'] ?? '';
         $stage = trim($_POST['stage'] ?? 'shop');
         $valid_stages = ['shop', 'transport', 'completed', 'returned'];
 
-        if ($order_id <= 0) {
-            echo json_encode(['success' => false, 'message' => 'Invalid order ID.']);
+        if (
+            $order_id <= 0
+            || !is_numeric($amount_paid_input)
+            || !is_numeric($order_total_input)
+        ) {
+            echo json_encode(['success' => false, 'message' => 'Enter a valid order total and amount paid.']);
             exit;
         }
 
         $order = fetch_one("SELECT * FROM orders WHERE order_id = ? AND tenant_id = ?", $order_id, (int)$current_user->tenant_id);
 
-        if (!$order) {
+        if (!$order || !order_is_visible($order)) {
             echo json_encode(['success' => false, 'message' => 'Order not found.']);
             exit;
         }
 
         if (!in_array($stage, $valid_stages, true)) {
-            $stage = 'shop';
-        }
-
-        $total = (float)$order['total'];
-
-        if ($amount_paid >= $total && $total > 0) {
-            $status = 'paid';
-        } elseif ($amount_paid > 0) {
-            $status = 'partially_paid';
-        } else {
-            $status = 'unpaid';
-        }
-
-        $stmt = $conn->prepare("UPDATE orders SET Amount_paid = ?, status = ?, stage = ? WHERE order_id = ? AND tenant_id = ?");
-        if (!$stmt) {
-            echo json_encode(['success' => false, 'message' => 'SQL Prepare failed: ' . $conn->error]);
+            echo json_encode(['success' => false, 'message' => 'Choose a valid order stage.']);
             exit;
         }
 
-        $stmt->bind_param('dssii', $amount_paid, $status, $stage, $order_id, (int)$current_user->tenant_id);
-
-        if ($stmt->execute()) {
-            if (function_exists('audit_log')) {
-                audit_log('update', 'order', $order_id, 'Quick updated amount paid and stage');
-            }
-            echo json_encode(['success' => true]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Database update failed: ' . $stmt->error]);
+        $total = round((float)$order_total_input, 2);
+        $amount_paid = round((float)$amount_paid_input, 2);
+        if ($total < 0 || $total > 9999999999.99 || $amount_paid < 0 || $amount_paid > $total) {
+            echo json_encode(['success' => false, 'message' => 'Amounts must be valid, and amount paid cannot exceed the order total.']);
+            exit;
         }
-        $stmt->close();
-    } catch (Exception $e) {
+
+        $tenant_id = (int)$current_user->tenant_id;
+        $conn->begin_transaction();
+        try {
+            $locked_order = fetch_one(
+                "SELECT * FROM orders WHERE order_id = ? AND tenant_id = ? FOR UPDATE",
+                $order_id,
+                $tenant_id
+            );
+            if (!$locked_order || !order_is_visible($locked_order)) {
+                throw new RuntimeException('Order not found.');
+            }
+
+            $current_stage = (string)($locked_order['stage'] ?? 'shop');
+            if ($stage === 'transport' && $current_stage !== 'transport') {
+                if (($_POST['confirm_transport'] ?? '') !== '1') {
+                    throw new RuntimeException('Confirm that the stock has started moving before setting the order to In transport.');
+                }
+                dispatch_order_stock_for_transport(
+                    $order_id,
+                    $tenant_id,
+                    (int)$current_user->user_id
+                );
+            } elseif ($current_stage === 'transport' && $stage === 'shop') {
+                throw new RuntimeException('An order already in transport cannot be moved back to At the shop.');
+            }
+
+            $stmt = $conn->prepare(
+                "UPDATE orders
+                    SET subtotal = ?, total = ?, Amount_paid = ?, stage = ?
+                  WHERE order_id = ? AND tenant_id = ?"
+            );
+            if (!$stmt) throw new RuntimeException('SQL Prepare failed: ' . $conn->error);
+            $stmt->bind_param('dddsii', $total, $total, $amount_paid, $stage, $order_id, $tenant_id);
+            if (!$stmt->execute()) {
+                $error = $stmt->error;
+                $stmt->close();
+                throw new RuntimeException('Database update failed: ' . $error);
+            }
+            $stmt->close();
+            $conn->commit();
+        } catch (Throwable $e) {
+            $conn->rollback();
+            throw $e;
+        }
+
+        if (function_exists('audit_log')) {
+            audit_log('update', 'order', $order_id, 'Quick updated total, amount paid, and stage');
+        }
+        echo json_encode(['success' => true]);
+    } catch (Throwable $e) {
         echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
     }
     exit;
@@ -111,7 +153,11 @@ $sql .= $scope_sql;
 $params = array_merge($params, $scope_params);
 
 if ($status !== '') {
-    $sql .= " AND o.status = ?";
+    $sql .= " AND CASE
+        WHEN o.total > 0 AND COALESCE(o.Amount_paid, 0) >= o.total THEN 'paid'
+        WHEN COALESCE(o.Amount_paid, 0) > 0 THEN 'partially_paid'
+        ELSE 'unpaid'
+    END = ?";
     $params[] = $status;
 }
 if ($shop_id > 0) {
@@ -142,7 +188,7 @@ $staff = users_with_permission('manage_orders');
 $total_paid_sum = 0;
 $total_amount_sum = 0;
 foreach ($orders as $o) {
-    $p_amount = isset($o['Amount_paid']) ? (float)$o['Amount_paid'] : ($o['status'] === 'paid' ? (float)$o['total'] : 0.00);
+    $p_amount = (float)($o['Amount_paid'] ?? 0);
     $total_paid_sum += $p_amount;
     $total_amount_sum += (float)$o['total'];
 }
@@ -262,7 +308,10 @@ function order_stage_class($stage) {
                     <!-- ORDER ROWS -->
                     <?php foreach ($orders as $o): ?>
                         <?php 
-                            $paid_amount = isset($o['Amount_paid']) ? (float)$o['Amount_paid'] : ($o['status'] === 'paid' ? (float)$o['total'] : 0.00);
+                            $paid_amount = (float)($o['Amount_paid'] ?? 0);
+                            $payment_status = $paid_amount >= (float)$o['total'] && (float)$o['total'] > 0
+                                ? 'paid'
+                                : ($paid_amount > 0 ? 'partially_paid' : 'unpaid');
                             $current_stage = isset($o['stage']) && isset($stages[$o['stage']]) ? $o['stage'] : 'shop';
                         ?>
                         <tr data-order-id="<?php echo (int)$o['order_id']; ?>" data-paid-value="<?php echo e($paid_amount); ?>" data-total-value="<?php echo e($o['total']); ?>">
@@ -278,8 +327,8 @@ function order_stage_class($stage) {
                                 </span>
                             </td>
                             <td>
-                                <span class="badge badge-<?php echo e(payment_status_class($o['status'])); ?>">
-                                    <?php echo e($statuses[$o['status']] ?? ucfirst(str_replace('_', ' ', $o['status']))); ?>
+                                <span class="badge badge-<?php echo e(payment_status_class($payment_status)); ?>">
+                                    <?php echo e($statuses[$payment_status]); ?>
                                 </span>
                             </td>
                             <td class="text-right font-weight-semibold text-success"><?php echo e(money($paid_amount, $o['currency_code'] ?: $cur)); ?></td>
@@ -294,11 +343,12 @@ function order_stage_class($stage) {
                             <td><?php echo e(date('M d, Y H:i', strtotime($o['created_at']))); ?></td>
                             <td class="text-right">
                                 <a href="order-view.php?id=<?php echo (int)$o['order_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                                <button type="button" class="btn btn-action btn-light btn-quick-edit" title="Update Amount & Stage" 
+                                <button type="button" class="btn btn-action btn-light btn-quick-edit" title="Update Total, Amount & Stage"
                                     data-order-id="<?php echo (int)$o['order_id']; ?>"
                                     data-order-number="<?php echo e($o['order_number']); ?>"
                                     data-amount-paid="<?php echo e($paid_amount); ?>"
                                     data-total="<?php echo e(money($o['total'], $o['currency_code'] ?: $cur)); ?>"
+                                    data-order-total="<?php echo e($o['total']); ?>"
                                     data-stage="<?php echo e($current_stage); ?>">
                                     <i class="fa fa-pencil"></i>
                                 </button>
@@ -321,6 +371,7 @@ function order_stage_class($stage) {
             <form id="quickEditForm" method="POST" action="orders.php">
                 <input type="hidden" name="ajax_action" value="quick_update_order">
                 <input type="hidden" name="order_id" id="qe_order_id">
+                <?php echo csrf_field(); ?>
                 
                 <div class="modal-header">
                     <h5 class="modal-title">Update Order: <span id="qe_order_number"></span></h5>
@@ -330,9 +381,12 @@ function order_stage_class($stage) {
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <label>Amount Paid</label>
+                        <label>Order Total <span class="text-danger">*</span></label>
+                        <input type="number" name="order_total" id="qe_order_total" class="form-control" step="0.01" min="0" max="9999999999.99" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Amount Paid <span class="text-danger">*</span></label>
                         <input type="number" name="Amount_paid" id="qe_amount_paid" class="form-control" step="0.01" min="0" required>
-                        <small class="text-muted">Total Order Amount: <span id="qe_total_display"></span></small>
                     </div>
                     <div class="form-group">
                         <label>Order Stage</label>
@@ -342,6 +396,14 @@ function order_stage_class($stage) {
                             <option value="completed">Completed</option>
                             <option value="returned">Returned</option>
                         </select>
+                    </div>
+                    <div class="alert alert-warning d-none" id="qe_transport_confirmation">
+                        <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="qe_confirm_transport" name="confirm_transport" value="1">
+                            <label class="custom-control-label" for="qe_confirm_transport">
+                                I confirm this stock has started moving. The order quantities will be deducted from the selected store.
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -391,10 +453,22 @@ function order_stage_class($stage) {
             $('#qe_order_id').val(btn.data('order-id'));
             $('#qe_order_number').text(btn.data('order-number'));
             $('#qe_amount_paid').val(btn.data('amount-paid'));
-            $('#qe_total_display').text(btn.data('total'));
-            $('#qe_stage').val(btn.data('stage'));
+            $('#qe_order_total').val(btn.data('order-total'));
+            $('#qe_stage').data('original-stage', btn.data('stage')).val(btn.data('stage'));
+            $('#qe_confirm_transport').prop('checked', false);
+            toggleTransportConfirmation();
             $('#quickEditModal').modal('show');
         });
+
+        function toggleTransportConfirmation() {
+            var needsConfirmation = $('#qe_stage').val() === 'transport'
+                && $('#qe_stage').data('original-stage') !== 'transport';
+            $('#qe_transport_confirmation').toggleClass('d-none', !needsConfirmation);
+            $('#qe_confirm_transport').prop('required', needsConfirmation);
+            if (!needsConfirmation) $('#qe_confirm_transport').prop('checked', false);
+        }
+
+        $('#qe_stage').on('change', toggleTransportConfirmation);
 
         // Submit quick edit via AJAX
         $('#quickEditForm').on('submit', function (e) {
@@ -411,11 +485,11 @@ function order_stage_class($stage) {
                         $('#quickEditModal').modal('hide');
                         location.reload();
                     } else {
-                        alert(res.message || 'Failed to update order.');
+                        showAppAlert(res.message || 'Failed to update order.', 'Order Update');
                     }
                 },
                 error: function () {
-                    alert('Server error occurred.');
+                    showAppAlert('Server error occurred.', 'Order Update');
                 }
             });
         });

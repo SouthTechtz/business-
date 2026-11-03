@@ -4,33 +4,124 @@ require_once 'auth_check.php';
 require_permission_any(['manage_godown', 'request_godown_transfers']);
 $can_manage_godown = can('manage_godown');
 $can_request = can('request_godown_transfers');
-$page_title = $can_manage_godown ? 'New Stock Transfer' : 'Request Stock';
+$request_shop_id = (int)($_GET['request_shop_id'] ?? 0);
+$request_store_id = (int)($_GET['request_store_id'] ?? 0);
+$is_location_request = $request_shop_id > 0 || $request_store_id > 0;
+$request_destination = null;
+$request_destination_type = '';
 
 $tenant_id = (int)$current_user->tenant_id;
-ensure_central_godown($tenant_id);
-$godown = find_tenant_godown();
-if (!$godown) {
-    flash_set('danger', 'Configure an active default Godown before creating a transfer request.');
-    redirect($can_manage_godown ? 'godown.php' : 'godown-transfers.php');
+if ($request_shop_id > 0 && $request_store_id > 0) {
+    http_response_code(400);
+    die('Choose one request destination.');
 }
 
-$shops = accessible_shops(null, false);
-$stores = accessible_locations(false);
+if ($is_location_request) {
+    if (!$can_request && !$can_manage_godown) {
+        http_response_code(403);
+        die('You do not have permission to request stock.');
+    }
+    if ($request_shop_id > 0) {
+        $request_shop = fetch_one(
+            "SELECT shop_id, name FROM shops WHERE shop_id = ? AND tenant_id = ? AND is_active = 1",
+            $request_shop_id,
+            $tenant_id
+        );
+        if (!$request_shop || !shop_is_accessible($request_shop_id, false)) {
+            http_response_code(403);
+            die('You do not have access to this active Shop.');
+        }
+        $destination_warehouse_id = shop_inventory_warehouse_id($request_shop_id, $tenant_id);
+        $request_destination = $destination_warehouse_id
+            ? fetch_one(
+                "SELECT w.*, s.name shop_name, s.is_active shop_is_active
+                   FROM warehouses w JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
+                    AND w.location_type = 'shop' AND w.is_active = 1 AND s.is_active = 1",
+                $destination_warehouse_id,
+                $tenant_id,
+                $request_shop_id
+            )
+            : null;
+        $request_destination_type = 'shop';
+    } else {
+        $request_destination = find_accessible_store($request_store_id, false, false);
+        if (!$request_destination || (string)$request_destination['location_type'] !== 'store') {
+            http_response_code(403);
+            die('You do not have access to this active Store.');
+        }
+        $request_destination_type = 'store';
+    }
+    if (!$request_destination) {
+        flash_set('danger', 'The request destination has no active inventory warehouse.');
+        redirect($request_shop_id > 0 ? 'shop-view.php?id=' . $request_shop_id : 'store-view.php?id=' . $request_store_id);
+    }
+    $page_title = 'Request Stock';
+    $request_context_params = $request_shop_id > 0
+        ? ['request_shop_id' => $request_shop_id]
+        : ['request_store_id' => $request_store_id];
+    $transfer_add_url = 'godown-transfer-add.php?' . http_build_query($request_context_params);
+    $godown = null;
+} else {
+    $page_title = $can_manage_godown ? 'New Stock Transfer' : 'Request Stock';
+    if ($can_manage_godown && !is_godown_manager()) {
+        ensure_central_godown($tenant_id);
+    }
+    $godown = is_godown_manager() ? find_active_godown($tenant_id) : find_tenant_godown($tenant_id);
+    if (!$godown) {
+        flash_set('danger', 'Configure an active default Godown before creating a transfer request.');
+        redirect($can_manage_godown ? 'godown.php' : 'godown-transfers.php');
+    }
+    $transfer_add_url = 'godown-transfer-add.php';
+}
 
-// Source may be the Central Godown, another shop, or any available store.
-$source_options = fetch_all(
-    "SELECT w.*, s.name shop_name, s.code shop_code
-       FROM warehouses w
-       LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-      WHERE w.tenant_id = ? AND w.is_active = 1
-        AND w.location_type IN ('godown', 'store', 'shop')
-      ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, w.name",
-    $tenant_id
-);
+$stores = accessible_locations(false);
+if ($can_request && !$can_manage_godown && !$is_location_request) {
+    // Requesters may choose tenant locations for transfer requests without
+    // receiving broader inventory visibility or management permissions.
+    $stores = fetch_all(
+        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+           FROM warehouses w
+           LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE w.tenant_id = ? AND w.is_active = 1
+            AND w.location_type IN ('godown', 'store', 'shop')
+            AND (w.location_type = 'godown' OR s.is_active = 1)
+          ORDER BY CASE w.location_type WHEN 'godown' THEN 0 WHEN 'store' THEN 1 ELSE 2 END,
+                   s.name, w.name",
+        $tenant_id
+    );
+}
+
+if ($is_location_request) {
+    $source_options = fetch_all(
+        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+           FROM warehouses w
+           LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE w.tenant_id = ? AND w.is_active = 1
+            AND w.location_type IN ('godown', 'store')
+            AND (w.location_type = 'godown' OR s.is_active = 1)
+          ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, s.name, w.name",
+        $tenant_id
+    );
+    $source_options = array_values(array_filter(
+        $source_options,
+        fn($location) => (int)$location['warehouse_id'] !== (int)$request_destination['warehouse_id']
+            && stock_transfer_destination_allowed((string)$location['location_type'], $request_destination_type)
+    ));
+} else {
+    $source_options = array_values(array_filter(
+        $stores,
+        fn($location) => in_array((string)$location['location_type'], ['godown', 'store', 'shop'], true)
+    ));
+}
 $source_ids = array_map(fn($row) => (int)$row['warehouse_id'], $source_options);
 $source_id = (int)($_GET['source'] ?? $_POST['source_warehouse_id'] ?? 0);
-if (!in_array($source_id, $source_ids, true)) {
-    $source_id = (int)$godown['warehouse_id'];
+if ($is_location_request) {
+    if (!in_array($source_id, $source_ids, true)) $source_id = 0;
+} elseif (!in_array($source_id, $source_ids, true)) {
+    $source_id = in_array((int)$godown['warehouse_id'], $source_ids, true)
+        ? (int)$godown['warehouse_id']
+        : (int)($source_ids[0] ?? 0);
 }
 $source = null;
 foreach ($source_options as $option) {
@@ -39,15 +130,54 @@ foreach ($source_options as $option) {
         break;
     }
 }
-if (!$source) {
-    $source = $godown;
-    $source_id = (int)$godown['warehouse_id'];
+if (!$source && !$is_location_request) {
+    flash_set('danger', 'No active source location is available to your account.');
+    redirect('godown-transfers.php');
 }
-$source_label = trim(($source['shop_name'] ?? '') . ' / ' . $source['name'], ' /');
+$source_type = (string)($source['location_type'] ?? '');
+$source_label = $source
+    ? trim(($source['shop_name'] ?? '') . ' / ' . $source['name'], ' /')
+    : 'Choose a supplying location';
+$accessible_dests = $is_location_request ? [] : $stores;
+if (!$is_location_request && is_godown_manager()) {
+    $accessible_dests = fetch_all(
+        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+           FROM warehouses w
+           JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE w.tenant_id = ? AND w.location_type = 'store'
+            AND w.is_active = 1 AND s.is_active = 1
+          ORDER BY s.name, w.name",
+        $tenant_id
+    );
+}
+$eligible_destinations = [];
+foreach ($accessible_dests as $loc) {
+    if ((int)$loc['warehouse_id'] === $source_id) continue;
+    if (
+        (int)($loc['shop_is_active'] ?? 1) === 1
+        && stock_transfer_destination_allowed($source_type, (string)$loc['location_type'])
+    ) {
+        $eligible_destinations[] = $loc;
+    }
+}
+$locations = $eligible_destinations;
+$prefill_dest_id = $is_location_request ? (int)$request_destination['warehouse_id'] : 0;
+$prefill_shop_id = (int)($_GET['shop'] ?? 0);
+$prefill_location_id = (int)($_GET['store'] ?? 0);
+foreach ($locations as $location) {
+    $location_id = (int)$location['warehouse_id'];
+    if ($prefill_location_id > 0 && $location_id === $prefill_location_id) {
+        $prefill_dest_id = $location_id;
+        break;
+    }
+    if ($prefill_shop_id > 0 && (int)$location['shop_id'] === $prefill_shop_id && $prefill_dest_id === 0) {
+        $prefill_dest_id = $location_id;
+    }
+}
 
 $products = fetch_all(
     "SELECT p.product_id, p.code, p.name, COALESCE(u.is_decimal, 0) is_decimal, COALESCE(u.short_name, '') unit_short,
-            COALESCE(s.quantity, 0) godown_quantity
+            COALESCE(s.quantity, 0) source_quantity
        FROM products p
        LEFT JOIN units_of_measurement u ON u.unit_id = p.unit_id AND u.tenant_id = p.tenant_id
        LEFT JOIN inventory_stock s ON s.product_id = p.product_id AND s.tenant_id = p.tenant_id AND s.warehouse_id = ?
@@ -67,10 +197,11 @@ function render_transfer_line(array $products): string
                 <option value="">— Select Product —</option>
                 <?php foreach ($products as $product): ?>
                     <option value="<?php echo (int)$product['product_id']; ?>"
+                            data-search="<?php echo e(strtolower($product['name'] . ' ' . $product['code'])); ?>"
                             data-decimal="<?php echo (int)$product['is_decimal']; ?>"
-                            data-stock="<?php echo e($product['godown_quantity']); ?>"
+                            data-stock="<?php echo e($product['source_quantity']); ?>"
                             data-unit="<?php echo e($product['unit_short']); ?>">
-                        <?php echo e($product['name'] . ' (' . $product['code'] . ') - ' . format_quantity($product['godown_quantity']) . ' available'); ?>
+                        <?php echo e($product['name'] . ' (' . $product['code'] . ') - ' . format_quantity($product['source_quantity']) . ' available'); ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -100,8 +231,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $in_transaction = false;
     try {
         $source_warehouse_id = (int)($_POST['source_warehouse_id'] ?? 0);
-        $destination_shop_id = (int)($_POST['destination_shop_id'] ?? 0);
-        $destination_warehouse_id = (int)($_POST['destination_warehouse_id'] ?? 0);
+        $destination_shop_id = 0;
+        $destination_warehouse_id = 0;
         $notes = trim((string)($_POST['notes'] ?? ''));
         $product_ids = $_POST['product_id'] ?? [];
         $quantities = $_POST['quantity'] ?? [];
@@ -111,28 +242,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!is_array($quantities)) $quantities = [];
         if (!is_array($line_notes)) $line_notes = [];
 
-        $source_row = fetch_one(
-            "SELECT w.*, s.name shop_name FROM warehouses w
-              LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-             WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1
-               AND w.location_type IN ('godown', 'store', 'shop')",
-            $source_warehouse_id,
-            $tenant_id
-        );
-        if (!$source_row) {
-            throw new RuntimeException('Select an active Godown or store as the source location.');
+        if ($is_location_request) {
+            $source_row = $source_warehouse_id === $source_id
+                ? fetch_one(
+                    "SELECT w.*, s.name shop_name, s.is_active shop_is_active
+                       FROM warehouses w
+                       LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                      WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1
+                        AND w.location_type IN ('godown', 'store')
+                        AND (w.location_type = 'godown' OR s.is_active = 1)",
+                    $source_warehouse_id,
+                    $tenant_id
+                )
+                : null;
+        } else {
+            if ($source_warehouse_id !== $source_id) {
+                $source_row = null;
+            } elseif ($can_request && !$can_manage_godown) {
+                $source_row = fetch_one(
+                    "SELECT w.*, s.name shop_name, s.is_active shop_is_active
+                       FROM warehouses w
+                       LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                      WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1
+                        AND w.location_type IN ('godown', 'store', 'shop')
+                        AND (w.location_type = 'godown' OR s.is_active = 1)",
+                    $source_warehouse_id,
+                    $tenant_id
+                );
+            } else {
+                $source_row = find_accessible_store($source_warehouse_id, false, true);
+            }
+        }
+        if (
+            !$source_row
+            || !in_array($source_warehouse_id, $source_ids, true)
+            || !in_array((string)$source_row['location_type'], ['godown', 'store', 'shop'], true)
+        ) {
+            throw new RuntimeException('Select an active eligible supplying location.');
         }
         $source_label = trim(($source_row['shop_name'] ?? '') . ' / ' . $source_row['name'], ' /');
-        // Destination is any accessible location; derive shop from it (if any).
-        $destination_warehouse = fetch_one("SELECT * FROM warehouses WHERE warehouse_id = ? AND tenant_id = ? AND is_active = 1", $destination_warehouse_id, $tenant_id);
-        if (!$destination_warehouse) {
-            throw new RuntimeException('Select an active destination location you can access.');
+        if ($is_location_request) {
+            $destination_warehouse = $request_destination;
+            $destination_warehouse_id = (int)$request_destination['warehouse_id'];
+            $destination_shop_id = (int)$request_destination['shop_id'];
+            if (!stock_transfer_destination_allowed((string)$source_row['location_type'], $request_destination_type)) {
+                throw new RuntimeException('This supplying location is not allowed for the selected request destination.');
+            }
+        } else {
+            $destination_warehouse_id = (int)($_POST['destination_warehouse_id'] ?? 0);
+            $destination_warehouse = fetch_one(
+                "SELECT w.*, s.name shop_name, s.is_active shop_is_active
+                   FROM warehouses w
+                   JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+                  WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1
+                    AND s.is_active = 1 AND w.location_type IN ('store', 'shop')",
+                $destination_warehouse_id,
+                $tenant_id
+            );
+            if (!$destination_warehouse) {
+                throw new RuntimeException('Select an active Shop or Store destination in this tenant.');
+            }
+            $accessible_dest_ids = array_map(fn($r) => (int)$r['warehouse_id'], $eligible_destinations);
+            if (!in_array($destination_warehouse_id, $accessible_dest_ids, true)) {
+                throw new RuntimeException('The destination is not allowed for this source location.');
+            }
+            $destination_shop_id = (int)($destination_warehouse['shop_id'] ?? 0);
+            if (!stock_transfer_destination_allowed((string)$source_row['location_type'], (string)$destination_warehouse['location_type'])) {
+                throw new RuntimeException('The destination type is not allowed for this source location.');
+            }
         }
-        $accessible_dest_ids = array_map(fn($r) => (int)$r['warehouse_id'], accessible_locations(false));
-        if (!in_array($destination_warehouse_id, $accessible_dest_ids, true)) {
-            throw new RuntimeException('Select an active destination location you can access.');
-        }
-        $destination_shop_id = (int)($destination_warehouse['shop_id'] ?? 0);
         if ($destination_warehouse_id === $source_warehouse_id) {
             throw new RuntimeException('The source and destination cannot be the same location.');
         }
@@ -192,20 +370,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new RuntimeException('Add at least one product line with a quantity.');
         }
 
-        foreach ($merged as $product_id => $line) {
-            $stock = fetch_one(
-                "SELECT quantity FROM inventory_stock
-                  WHERE tenant_id = ? AND warehouse_id = ? AND product_id = ?",
-                $tenant_id,
-                $source_warehouse_id,
-                (int)$product_id
-            );
-            $available = (float)($stock['quantity'] ?? 0);
-            if ($line['quantity'] > $available + 0.0001) {
-                throw new RuntimeException(
-                    'Only ' . format_quantity($available) . ' of ' . $line['product']['name']
-                    . ' is available at ' . $source_label . '. Reduce the requested quantity.'
+        if (!$is_location_request) {
+            foreach ($merged as $product_id => $line) {
+                $stock = fetch_one(
+                    "SELECT quantity FROM inventory_stock
+                      WHERE tenant_id = ? AND warehouse_id = ? AND product_id = ?",
+                    $tenant_id,
+                    $source_warehouse_id,
+                    (int)$product_id
                 );
+                $available = (float)($stock['quantity'] ?? 0);
+                if ($line['quantity'] > $available + 0.0001) {
+                    throw new RuntimeException(
+                        'Only ' . format_quantity($available) . ' of ' . $line['product']['name']
+                        . ' is available at ' . $source_label . '. Reduce the requested quantity.'
+                    );
+                }
             }
         }
 
@@ -213,29 +393,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $in_transaction = true;
 
         $locked_source = fetch_one(
-            "SELECT w.* FROM warehouses w
+            "SELECT w.*, s.is_active shop_is_active FROM warehouses w
+              LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
               WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.location_type IN ('godown', 'store', 'shop')
-                AND w.is_active = 1
+                AND w.is_active = 1 AND (w.location_type = 'godown' OR s.is_active = 1)
               FOR UPDATE",
             $source_warehouse_id,
             $tenant_id
         );
-        if (!$locked_source) {
+        if (
+            !$locked_source
+            || !in_array((string)$locked_source['location_type'], ['godown', 'store', 'shop'], true)
+        ) {
             throw new RuntimeException('The source location is no longer active.');
+        }
+        if ($is_location_request && !stock_transfer_destination_allowed((string)$locked_source['location_type'], $request_destination_type)) {
+            throw new RuntimeException('The supplying location is no longer eligible for this request.');
+        }
+        if (
+            $request_shop_id > 0
+            && (int)$locked_source['shop_id'] === $request_shop_id
+        ) {
+            throw new RuntimeException('A Shop cannot request stock from its own locations.');
         }
 
         $locked_destination = fetch_one(
-            "SELECT w.* FROM warehouses w
-               JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-              WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.shop_id = ?
-                AND w.is_active = 1 AND s.is_active = 1 AND w.location_type = 'store'
-              FOR UPDATE",
+            "SELECT w.*, s.name shop_name, s.is_active shop_is_active
+                FROM warehouses w
+                JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+               WHERE w.warehouse_id = ? AND w.tenant_id = ? AND w.is_active = 1 AND s.is_active = 1
+                 AND w.location_type IN ('store', 'shop')
+               FOR UPDATE",
             $destination_warehouse_id,
-            $tenant_id,
-            $destination_shop_id
+            $tenant_id
         );
-        if (!$locked_destination) {
-            throw new RuntimeException('The destination store is no longer active.');
+        if (
+            !$locked_destination
+            || (int)$locked_destination['shop_id'] !== $destination_shop_id
+            || !stock_transfer_destination_allowed(
+                (string)$locked_source['location_type'],
+                (string)$locked_destination['location_type']
+            )
+        ) {
+            throw new RuntimeException('The destination is no longer active or is not allowed for this source.');
         }
 
         $transfer_number = next_document_number($tenant_id, 'stock_transfer', 'TRF');
@@ -291,34 +491,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'stock_transfer',
             $transfer_id,
             'Transfer ' . $transfer_number . ' requested from ' . $source_label
-            . ' to ' . $destination_shop['name'] . ' / ' . $locked_destination['name']
+            . ' to ' . trim($locked_destination['shop_name'] . ' / ' . $locked_destination['name'], ' /')
             . ' with ' . count($merged) . ' product line(s).'
         );
-        flash_set(
-            'success',
-            'Request ' . $transfer_number . ' created. The source location team will review it. Approval does not move stock.'
-        );
+        flash_set('success', $is_location_request
+            ? 'Stock request ' . $transfer_number . ' submitted for Inventory review. No stock was moved.'
+            : 'Request ' . $transfer_number . ' created. Approval does not move stock.');
         redirect('godown-transfer-view.php?id=' . $transfer_id);
     } catch (Throwable $ex) {
         if ($in_transaction) $conn->rollback();
         flash_set('danger', $ex->getMessage());
-        redirect('godown-transfer-add.php');
+        redirect($transfer_add_url);
     }
-}
-
-$prefill_shop_id = (int)($_GET['shop'] ?? 0);
-$prefill_store_id = (int)($_GET['store'] ?? 0);
-if ($prefill_store_id > 0) {
-    $prefill_store = find_accessible_store($prefill_store_id, false, false);
-    if (!$prefill_store) {
-        $prefill_store_id = 0;
-    } elseif ($prefill_shop_id <= 0) {
-        $prefill_shop_id = (int)$prefill_store['shop_id'];
-    }
-}
-if ($prefill_shop_id > 0 && !shop_is_accessible($prefill_shop_id, false)) {
-    $prefill_shop_id = 0;
-    $prefill_store_id = 0;
 }
 
 require_once 'navbar.php';
@@ -327,27 +511,37 @@ require_once 'sidebar.php';
 
 <div class="page-head">
     <div>
-        <h1 class="page-title"><?php echo $can_manage_godown ? 'New Stock Transfer' : 'Request Stock'; ?></h1>
-        <div class="page-sub">Request stock from <?php echo e($source_label); ?> for a shop store.</div>
+        <h1 class="page-title"><?php echo $is_location_request ? 'Request Stock' : ($can_manage_godown ? 'New Stock Transfer' : 'Request Stock'); ?></h1>
+        <div class="page-sub">
+            <?php if ($is_location_request): ?>
+                Request stock for <?php echo e(trim(($request_destination['shop_name'] ?? '') . ' / ' . $request_destination['name'], ' /')); ?>. Inventory will not change until dispatch.
+            <?php else: ?>
+                Create a transfer from <?php echo e($source_label); ?> to an eligible destination.
+            <?php endif; ?>
+        </div>
     </div>
     <a href="godown-transfers.php" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Transfers</a>
 </div>
 
 <ul class="nav page-tabs">
+    <?php if ($can_manage_godown || can('view_godown')): ?>
     <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
+    <?php endif; ?>
     <li class="nav-item"><a class="nav-link" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
-    <li class="nav-item"><a class="nav-link active" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> <?php echo $can_manage_godown ? 'New Transfer' : 'Request Stock'; ?></a></li>
+    <li class="nav-item"><a class="nav-link active" href="<?php echo e($transfer_add_url); ?>"><i class="fa fa-plus mr-1"></i> <?php echo $is_location_request || !$can_manage_godown ? 'Request Stock' : 'New Transfer'; ?></a></li>
 </ul>
 
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
 
-<?php if (!$shops || !$stores): ?>
-    <div class="alert alert-warning">No active destination shop/store is assigned to your account. Ask an administrator for shop access first.</div>
+<?php if ($is_location_request && !$source_options): ?>
+    <div class="alert alert-warning">No active eligible supplying location is available for this destination.</div>
+<?php elseif (!$is_location_request && !$eligible_destinations): ?>
+    <div class="alert alert-warning">No active destination compatible with this source is available in this tenant.</div>
 <?php endif; ?>
 
-<form method="POST" action="godown-transfer-add.php" id="transferForm">
+<form method="POST" action="<?php echo e($transfer_add_url); ?>" id="transferForm">
     <?php echo csrf_field(); ?>
     <?php echo form_token_field(); ?>
 
@@ -357,29 +551,37 @@ require_once 'sidebar.php';
                 <div class="card-header"><h5 class="card-title mb-0">Destination</h5></div>
                 <div class="card-body">
                     <div class="form-group">
-                        <label>Source Location <span class="text-danger">*</span></label>
-                        <select name="source_warehouse_id" id="sourceLocation" class="form-control" required onchange="window.location='godown-transfer-add.php?source=' + encodeURIComponent(this.value);">
+                        <label><?php echo $is_location_request ? 'Supplying Location' : 'Source Location'; ?> <span class="text-danger">*</span></label>
+                        <select name="source_warehouse_id" id="sourceLocation" class="form-control" required data-source-base="<?php echo e($transfer_add_url); ?>">
+                            <option value="">— Select <?php echo $is_location_request ? 'Supplying' : 'Source'; ?> Location —</option>
                             <?php foreach ($source_options as $option): ?>
                                 <option value="<?php echo (int)$option['warehouse_id']; ?>" <?php echo $source_id === (int)$option['warehouse_id'] ? 'selected' : ''; ?>>
-                                    <?php echo e(trim(($option['shop_name'] ?? '') . ' / ' . $option['name'], ' /')); ?><?php echo (string)$option['location_type'] === 'godown' ? ' (Godown)' : ''; ?>
+                                    <?php echo e(trim(($option['shop_name'] ?? '') . ' / ' . $option['name'], ' /')); ?> (<?php echo e(ucfirst((string)$option['location_type'])); ?>)
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <small class="text-muted">Request from the Central Godown, another shop, or any available store.</small>
+                        <small class="text-muted"><?php echo $is_location_request ? 'Choose the active supplying location for this request.' : 'Changing the source refreshes allowed destinations and available quantities.'; ?></small>
                     </div>
-                                        <div class="form-group">
-                        <label>Destination Location <span class="text-danger">*</span></label>
-                        <select name="destination_warehouse_id" id="destination_location" class="form-control" required>
-                            <option value="">— Select Destination —</option>
-                            <?php foreach ($locations as $loc): ?>
-                                <option value="<?php echo (int)$loc['warehouse_id']; ?>" <?php echo $prefill_dest_id === (int)$loc['warehouse_id'] ? 'selected' : ''; ?>>
-                                    <?php echo e(trim(($loc['shop_name'] ?? '') . ' / ' . $loc['name'], ' /') . ' (' . $loc['location_type'] . ')'); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                        <small class="text-muted">Any accessible Godown, Store or Shop.</small>
+                    <div class="form-group">
+                        <?php if ($is_location_request): ?>
+                            <label>Request Destination</label>
+                            <div class="form-control-plaintext font-weight-semibold">
+                                <?php echo e(trim(($request_destination['shop_name'] ?? '') . ' / ' . $request_destination['name'], ' /')); ?>
+                            </div>
+                            <small class="text-muted">This is fixed to the Shop or Store that opened this request.</small>
+                        <?php else: ?>
+                            <label>Destination Location <span class="text-danger">*</span></label>
+                            <select name="destination_warehouse_id" id="destination_location" class="form-control" required>
+                                <option value="">— Select Destination —</option>
+                                <?php foreach ($locations as $loc): ?>
+                                    <option value="<?php echo (int)$loc['warehouse_id']; ?>" <?php echo $prefill_dest_id === (int)$loc['warehouse_id'] ? 'selected' : ''; ?>>
+                                        <?php echo e(trim(($loc['shop_name'] ?? '') . ' / ' . $loc['name'], ' /') . ' (' . $loc['location_type'] . ')'); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="text-muted">Destination types depend on the selected source location.</small>
+                        <?php endif; ?>
                     </div>
-</div>
                     <div class="form-group mb-0">
                         <label>Notes</label>
                         <textarea name="notes" class="form-control" rows="3" maxlength="2000" placeholder="Optional request or dispatch instructions"></textarea>
@@ -394,6 +596,10 @@ require_once 'sidebar.php';
                     <h5 class="card-title mb-0">Products</h5>
                     <button type="button" id="addTransferLine" class="btn btn-sm btn-light"><i class="fa fa-plus mr-1"></i> Add product</button>
                 </div>
+                <div class="card-body border-bottom">
+                    <label for="productSearch" class="sr-only">Search products</label>
+                    <input type="search" id="productSearch" class="form-control form-control-sm" placeholder="Search products by name or code">
+                </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
                         <table class="table mb-0">
@@ -405,8 +611,8 @@ require_once 'sidebar.php';
                     </div>
                 </div>
                 <div class="card-footer d-flex justify-content-between align-items-center">
-                    <small class="text-muted">Quantities are checked again at dispatch. A request or approval never changes physical stock.</small>
-                    <button type="submit" class="btn btn-primary" <?php echo ($shops && $stores) ? '' : 'disabled'; ?>><i class="fa fa-paper-plane mr-1"></i> Create Request</button>
+                    <small class="text-muted"><?php echo $is_location_request ? 'No stock is reserved or deducted when you submit. Inventory checks availability at dispatch.' : 'Quantities are checked again at dispatch. A request or approval never changes physical stock.'; ?></small>
+                    <button type="submit" class="btn btn-primary" <?php echo ($is_location_request ? (bool)$source_options : (bool)$eligible_destinations) ? '' : 'disabled'; ?>><i class="fa fa-paper-plane mr-1"></i> <?php echo $is_location_request ? 'Submit Request' : 'Create Request'; ?></button>
                 </div>
             </div>
         </div>
@@ -419,20 +625,23 @@ require_once 'sidebar.php';
 
 <script>
     $(function () {
-        function filterStores() {
-            var shopId = $('#destination_shop').val();
-            var $store = $('#destination_store');
-            $store.find('option').each(function () {
-                if (!this.value) return;
-                var match = String($(this).data('shop')) === String(shopId);
-                $(this).prop('disabled', !match).toggle(match);
+        $('#sourceLocation').on('change', function () {
+            var base = $(this).data('source-base');
+            var separator = base.indexOf('?') === -1 ? '?' : '&';
+            window.location = base + separator + 'source=' + encodeURIComponent(this.value);
+        });
+
+        function filterProductOptions() {
+            var term = $('#productSearch').val().trim().toLowerCase();
+            $('.transfer-product').each(function () {
+                $(this).find('option').each(function () {
+                    if (!this.value) return;
+                    this.hidden = term !== '' && String($(this).data('search') || '').indexOf(term) === -1;
+                });
             });
-            if (!shopId) {
-                $store.val('');
-            } else if (!$store.find('option:selected').length || $store.find('option:selected').prop('disabled')) {
-                $store.val('');
-            }
         }
+
+        $('#productSearch').on('input', filterProductOptions);
 
         function syncLine($line) {
             var $product = $line.find('.transfer-product');
@@ -464,14 +673,13 @@ require_once 'sidebar.php';
             syncLine($line);
         }
 
-        $('#destination_shop').on('change', filterStores);
-        filterStores();
         bindLine($('#transferLines .transfer-line').first());
 
         $('#addTransferLine').on('click', function () {
             var $line = $($('#transferLineTemplate').html()).filter('tr');
             $('#transferLines').append($line);
             bindLine($line);
+            filterProductOptions();
         });
 
         $('#transferForm').on('submit', function () {
@@ -479,8 +687,12 @@ require_once 'sidebar.php';
             $('#transferLines .transfer-line').each(function () {
                 if ($(this).find('.transfer-product').val()) hasLine = true;
             });
+            if (!$('#sourceLocation').val()) {
+                showAppAlert('Select a supplying location.', 'Request Stock');
+                return false;
+            }
             if (!hasLine) {
-                alert('Add at least one product line.');
+                showAppAlert('Add at least one product line.', 'Request Stock');
                 return false;
             }
         });

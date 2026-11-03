@@ -12,9 +12,15 @@ $uid = 1;
 function rc($table) { $GLOBALS['conn']->query("SET FOREIGN_KEY_CHECKS=0"); $GLOBALS['conn']->query("TRUNCATE TABLE `$table`"); $GLOBALS['conn']->query("SET FOREIGN_KEY_CHECKS=1"); }
 
 $tables = ['pos_payments','pos_order_items','pos_orders','pos_sessions','invoice_items','payments','invoices',
-           'expense_items','expenses','inventory_movements','inventory_stock','products','product_variants',
+           'expense_items','expenses','inventory_movements','inventory_stock','products',
            'product_categories','units_of_measurement','warehouses','suppliers','contacts','audit_logs',
            'document_statuses','payment_methods','tax_rates','expense_categories','user_roles','users'];
+if (fetch_one(
+    "SELECT 1 FROM information_schema.tables
+      WHERE table_schema = DATABASE() AND table_name = 'product_variants'"
+)) {
+    $tables[] = 'product_variants';
+}
 foreach ($tables as $t) rc($t);
 
 $conn->query("ALTER TABLE products AUTO_INCREMENT = 1");

@@ -6,8 +6,13 @@ require_permission('manage_purchases');
 $tenant_id = (int)$current_user->tenant_id;
 $id = (int)($_GET['id'] ?? 0);
 
-$stmt = $conn->prepare("DELETE FROM purchases WHERE purchase_id = ? AND tenant_id = ?");
-$stmt->bind_param('ii', $id, $tenant_id);
+$owner_filter = is_godown_manager() ? ' AND created_by = ?' : '';
+$stmt = $conn->prepare("DELETE FROM purchases WHERE purchase_id = ? AND tenant_id = ?{$owner_filter}");
+if (is_godown_manager()) {
+    $stmt->bind_param('iii', $id, $tenant_id, $current_user->user_id);
+} else {
+    $stmt->bind_param('ii', $id, $tenant_id);
+}
 if ($stmt->execute() && $stmt->affected_rows > 0) {
     flash_set('success', 'Purchase deleted successfully.');
 } else {

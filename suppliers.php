@@ -8,18 +8,19 @@ $msg = '';
 
 // Create
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add') {
+    $full_name = trim($_POST['full_name'] ?? '');
     $data = [
         'tenant_id'    => $current_user->tenant_id,
         'company_name' => trim($_POST['company_name'] ?? ''),
-        'first_name'   => trim($_POST['first_name'] ?? ''),
-        'last_name'    => trim($_POST['last_name'] ?? ''),
+        'first_name'   => $full_name,
+        'last_name'    => '',
         'email'        => trim($_POST['email'] ?? ''),
         'phone'        => trim($_POST['phone'] ?? ''),
         'address'      => trim($_POST['address'] ?? ''),
         'tax_id'       => trim($_POST['tax_id'] ?? ''),
     ];
-    if ($data['company_name'] === '') {
-        $msg = ['danger', 'Company name is required.'];
+    if ($data['company_name'] === '' || $data['phone'] === '') {
+        $msg = ['danger', 'Company name and phone number are required.'];
     } else {
         $dup = fetch_one("SELECT COUNT(*) c FROM suppliers WHERE tenant_id = ? AND email = ? AND email != ''", $current_user->tenant_id, $data['email']);
         if (($dup['c'] ?? 0) > 0) {
@@ -34,18 +35,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'add')
 // Edit
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'edit') {
     $id = (int)($_POST['supplier_id'] ?? 0);
-    $fields = ['company_name', 'first_name', 'last_name', 'email', 'phone', 'address', 'tax_id'];
-    $set = [];
-    $vals = [];
-    foreach ($fields as $f) {
-        $set[] = "`$f` = ?";
-        $vals[] = trim($_POST[$f] ?? '');
+    $company_name = trim($_POST['company_name'] ?? '');
+    $full_name = trim($_POST['full_name'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+    if ($company_name === '' || $phone === '') {
+        $msg = ['danger', 'Company name and phone number are required.'];
+    } else {
+        $fields = ['company_name', 'first_name', 'last_name', 'email', 'phone', 'address', 'tax_id'];
+        $posted_fields = [
+            'company_name' => $company_name,
+            'first_name' => $full_name,
+            'last_name' => '',
+            'email' => trim($_POST['email'] ?? ''),
+            'phone' => $phone,
+            'address' => trim($_POST['address'] ?? ''),
+            'tax_id' => trim($_POST['tax_id'] ?? ''),
+        ];
+        $set = [];
+        $vals = [];
+        foreach ($fields as $f) {
+            $set[] = "`$f` = ?";
+            $vals[] = $posted_fields[$f];
+        }
+        $vals[] = $id;
+        $vals[] = $current_user->tenant_id;
+        $stmt = $conn->prepare("UPDATE suppliers SET " . implode(', ', $set) . " WHERE supplier_id = ? AND tenant_id = ?");
+        $stmt->bind_param(str_repeat('s', count($fields)) . 'ii', ...$vals);
+        $msg = $stmt->execute() ? ['success', 'Supplier updated.'] : ['danger', 'Could not update supplier.'];
     }
-    $vals[] = $id;
-    $vals[] = $current_user->tenant_id;
-    $stmt = $conn->prepare("UPDATE suppliers SET " . implode(', ', $set) . " WHERE supplier_id = ? AND tenant_id = ?");
-    $stmt->bind_param(str_repeat('s', count($fields)) . 'ii', ...$vals);
-    $msg = $stmt->execute() ? ['success', 'Supplier updated.'] : ['danger', 'Could not update supplier.'];
 }
 
 // Delete
@@ -116,10 +133,9 @@ require_once 'sidebar.php';
                 <form method="POST" action="suppliers.php">
                     <input type="hidden" name="action" value="add">
                     <div class="form-group"><label>Company Name <span class="text-danger">*</span></label><input type="text" name="company_name" class="form-control" required></div>
-                    <div class="form-group"><label>Contact First Name</label><input type="text" name="first_name" class="form-control"></div>
-                    <div class="form-group"><label>Contact Last Name</label><input type="text" name="last_name" class="form-control"></div>
+                    <div class="form-group"><label>Full Name</label><input type="text" name="full_name" class="form-control"></div>
                     <div class="form-group"><label>Email</label><input type="email" name="email" class="form-control"></div>
-                    <div class="form-group"><label>Phone</label><input type="text" name="phone" class="form-control"></div>
+                    <div class="form-group"><label>Phone Number <span class="text-danger">*</span></label><input type="text" name="phone" class="form-control" required></div>
                     <div class="form-group"><label>Address</label><textarea name="address" class="form-control" rows="2"></textarea></div>
                     <div class="form-group"><label>Tax ID</label><input type="text" name="tax_id" class="form-control"></div>
                     <button type="submit" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Add Supplier</button>
@@ -139,10 +155,9 @@ require_once 'sidebar.php';
                     <input type="hidden" name="action" value="edit">
                     <input type="hidden" name="supplier_id" value="<?php echo $s['supplier_id']; ?>">
                     <div class="form-group"><label>Company Name <span class="text-danger">*</span></label><input type="text" name="company_name" class="form-control" value="<?php echo e($s['company_name']); ?>" required></div>
-                    <div class="form-group"><label>Contact First Name</label><input type="text" name="first_name" class="form-control" value="<?php echo e($s['first_name']); ?>"></div>
-                    <div class="form-group"><label>Contact Last Name</label><input type="text" name="last_name" class="form-control" value="<?php echo e($s['last_name']); ?>"></div>
+                    <div class="form-group"><label>Full Name</label><input type="text" name="full_name" class="form-control" value="<?php echo e(trim(($s['first_name'] ?? '') . ' ' . ($s['last_name'] ?? ''))); ?>"></div>
                     <div class="form-group"><label>Email</label><input type="email" name="email" class="form-control" value="<?php echo e($s['email']); ?>"></div>
-                    <div class="form-group"><label>Phone</label><input type="text" name="phone" class="form-control" value="<?php echo e($s['phone']); ?>"></div>
+                    <div class="form-group"><label>Phone Number <span class="text-danger">*</span></label><input type="text" name="phone" class="form-control" value="<?php echo e($s['phone']); ?>" required></div>
                     <div class="form-group"><label>Address</label><textarea name="address" class="form-control" rows="2"><?php echo e($s['address']); ?></textarea></div>
                     <div class="form-group"><label>Tax ID</label><input type="text" name="tax_id" class="form-control" value="<?php echo e($s['tax_id']); ?>"></div>
                 </div>

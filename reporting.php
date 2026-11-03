@@ -88,6 +88,12 @@ function report_accessible_sales_warehouse_ids($include_inactive = true) {
         return null;
     }
 
+    if (is_godown_manager()) {
+        return can_access_godown()
+            ? godown_manager_location_ids(null, $include_inactive)
+            : [];
+    }
+
     // Sales locations must always be active Shop inventory locations. Store
     // access grants inventory access only and never makes a Store a sales location.
     $ids = [];
@@ -226,4 +232,3 @@ function report_inventory_definitions() {
         'in_transit' => 'Dispatched but not yet received stock_transfer quantities. Not included in on-hand stock.',
     ];
 }
-

@@ -7,7 +7,7 @@ if (!$sf_tenant) {
     exit('The storefront is not configured.');
 }
 $sf_settings = storefront_settings($sf_tenant);
-$sf_company = trim((string)($sf_settings['company_name'] ?? '')) ?: APP_NAME;
+$sf_company = storefront_company_name($sf_tenant, $sf_settings);
 $sf_currency = storefront_currency($sf_tenant, $sf_settings);
 $sf_tenant_id = (int)$sf_tenant['tenant_id'];
 
@@ -25,6 +25,23 @@ $sf_search_q = $sf_filters['q'];
 $sf_category = $sf_filters['category'];
 $sf_sort = $sf_filters['sort'];
 $sf_categories = storefront_categories($sf_tenant_id);
+$sf_all_products_view = !empty($_GET['all']);
+$sf_category_cards = fetch_all(
+    "SELECT c.category_id, c.name, COUNT(p.product_id) AS product_count,
+            (SELECT pi.image
+               FROM products pi
+              WHERE pi.tenant_id = c.tenant_id AND pi.category_id = c.category_id
+                AND pi.is_active = 1 AND pi.image IS NOT NULL AND pi.image <> ''
+              ORDER BY pi.product_id DESC
+              LIMIT 1) AS image
+       FROM product_categories c
+       LEFT JOIN products p ON p.category_id = c.category_id
+            AND p.tenant_id = c.tenant_id AND p.is_active = 1
+      WHERE c.tenant_id = ?
+      GROUP BY c.category_id, c.tenant_id, c.name
+      ORDER BY c.name ASC",
+    $sf_tenant_id
+);
 $sf_filter_options = storefront_filter_options($sf_tenant_id);
 
 $sf_category_name = '';
@@ -54,6 +71,19 @@ $sf_has_filters = $sf_search_q !== '' || $sf_category > 0
     || $sf_filters['min_price'] !== null || $sf_filters['max_price'] !== null
     || $sf_filters['size'] !== '' || $sf_filters['color'] !== ''
     || $sf_filters['availability'] !== '';
+$sf_show_category_home = !$sf_all_products_view && !$sf_has_filters && $sf_sort === 'name' && $sf_page === 1;
+$sf_category_groups = [];
+if ($sf_show_category_home) {
+    foreach ($sf_category_cards as $sf_category_card) {
+        if ((int)$sf_category_card['product_count'] < 1) continue;
+        $sf_category_groups[(int)$sf_category_card['category_id']] = storefront_catalogue(
+            $sf_tenant_id,
+            ['category' => (int)$sf_category_card['category_id'], 'sort' => 'newest'],
+            4,
+            0
+        );
+    }
+}
 $sf_page_title_parts = [];
 if ($sf_search_q !== '') $sf_page_title_parts[] = 'Search results';
 if ($sf_category_name !== '') $sf_page_title_parts[] = $sf_category_name;
@@ -72,6 +102,7 @@ $sf_query_params = [
     'availability' => $sf_filters['availability'],
     'sort' => $sf_sort !== 'name' ? $sf_sort : null,
 ];
+if ($sf_all_products_view) $sf_query_params['all'] = '1';
 $sf_query_params = array_filter($sf_query_params, fn($value) => $value !== null && $value !== '');
 $sf_page_url = function ($page) use ($sf_query_params) {
     $params = $sf_query_params;
@@ -84,8 +115,6 @@ $sf_clear_filter_url = function ($key) use ($sf_query_params) {
     return 'index.php' . ($params ? '?' . http_build_query($params) : '') . '#catalogue';
 };
 
-$sf_new_arrivals = storefront_new_arrivals($sf_tenant_id, 4);
-$sf_best_sellers = storefront_best_sellers($sf_tenant_id, 4);
 $sf_recently_viewed = storefront_recently_viewed($sf_tenant_id, 4);
 
 $sf_head_extra = '';
@@ -112,29 +141,64 @@ if ($sf_products) {
 require __DIR__ . '/storefront-header.php';
 ?>
 <main class="sf-main" id="sf-main">
-    <section class="relative overflow-hidden bg-gradient-to-br from-brand-50 via-white to-brand-50">
-        <div class="relative w-full px-4 sm:px-6 lg:px-8 py-10 lg:py-14 grid lg:grid-cols-2 gap-8 items-center">
-            <div>
-                <span class="inline-flex items-center gap-2 rounded-full bg-white border border-brand-100 text-brand-600 text-xs font-semibold px-4 py-1.5 shadow-sm">
-                    <i class="fa fa-shopping-bag" aria-hidden="true"></i> <?php echo e($sf_company); ?> online shop
-                </span>
-                <h1 class="mt-4 text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-gray-900 leading-tight">
-                    Browse the catalogue and send an order request.
-                </h1>
-                <p class="mt-4 text-base text-gray-500 max-w-md leading-relaxed">
-                    Live stock and current prices. The store confirms availability, delivery and payment with you before fulfilment. No payment is taken online.
-                </p>
-                <div class="mt-6 flex flex-wrap gap-3">
-                    <a href="index.php#catalogue" class="inline-flex items-center gap-2 rounded-full bg-gray-900 hover:bg-brand-600 text-white font-semibold px-6 py-3 shadow-xl shadow-gray-900/15 transition">
-                        Shop all products <i class="fa fa-arrow-right" aria-hidden="true"></i>
-                    </a>
-                    <a href="<?php echo $sf_logged_in ? 'dashboard.php' : 'login.php'; ?>" class="inline-flex items-center gap-2 rounded-full bg-white border border-gray-200 text-gray-700 hover:border-brand-300 hover:text-brand-600 font-semibold px-6 py-3 shadow-sm transition">
-                        <i class="fa fa-user" aria-hidden="true"></i> <?php echo $sf_logged_in ? 'My account' : 'Log in'; ?>
-                    </a>
+    <?php if ($sf_show_category_home): ?>
+        <div class="sf-container sf-category-home">
+            <section aria-labelledby="sf-category-title">
+                <div class="sf-home-section-heading">
+                    <span>Categories</span>
+                    <h1 id="sf-category-title">Shop by category</h1>
                 </div>
-            </div>
+                <?php if ($sf_category_cards): ?>
+                    <div class="sf-category-grid">
+                        <?php foreach ($sf_category_cards as $sf_category_card): ?>
+                            <?php $sf_category_image = storefront_image_path($sf_category_card['image'] ?? ''); ?>
+                            <a class="sf-category-tile" href="index.php?category=<?php echo (int)$sf_category_card['category_id']; ?>#catalogue">
+                                <?php if ($sf_category_image !== ''): ?>
+                                    <img src="<?php echo e($sf_category_image); ?>" alt="" loading="lazy">
+                                <?php endif; ?>
+                                <span class="sf-category-tile-shade"></span>
+                                <span class="sf-category-tile-copy">
+                                    <strong><?php echo e($sf_category_card['name']); ?></strong>
+                                    <small><?php echo (int)$sf_category_card['product_count']; ?> product<?php echo (int)$sf_category_card['product_count'] === 1 ? '' : 's'; ?></small>
+                                </span>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="sf-empty">
+                        <h2>Product categories are coming soon</h2>
+                        <p>Browse all available products instead.</p>
+                        <a class="sf-btn sf-btn-primary" href="index.php?all=1#catalogue">Shop all products</a>
+                    </div>
+                <?php endif; ?>
+            </section>
+
+            <?php foreach ($sf_category_cards as $sf_category_card): ?>
+                <?php $sf_group_products = $sf_category_groups[(int)$sf_category_card['category_id']] ?? []; ?>
+                <?php if (!$sf_group_products) continue; ?>
+                <section class="sf-category-products" aria-labelledby="sf-category-products-<?php echo (int)$sf_category_card['category_id']; ?>">
+                    <div class="sf-category-products-head">
+                        <div>
+                            <span>Catalogue</span>
+                            <h2 id="sf-category-products-<?php echo (int)$sf_category_card['category_id']; ?>"><?php echo e($sf_category_card['name']); ?></h2>
+                        </div>
+                        <a href="index.php?category=<?php echo (int)$sf_category_card['category_id']; ?>#catalogue">View category <i class="fa fa-arrow-right" aria-hidden="true"></i></a>
+                    </div>
+                    <div class="sf-product-grid">
+                        <?php foreach ($sf_group_products as $sf_product): ?>
+                            <?php storefront_render_product_card($sf_product, $sf_currency); ?>
+                        <?php endforeach; ?>
+                    </div>
+                </section>
+            <?php endforeach; ?>
+
+            <?php if ($sf_total > 0): ?>
+                <div class="sf-category-home-all">
+                    <a href="index.php?all=1#catalogue" class="sf-btn sf-btn-primary">Shop all products <i class="fa fa-arrow-right" aria-hidden="true"></i></a>
+                </div>
+            <?php endif; ?>
         </div>
-    </section>
+    <?php else: ?>
     <div class="sf-container sf-page">
         <nav aria-label="Breadcrumb">
             <ol class="sf-breadcrumb">
@@ -171,9 +235,10 @@ require __DIR__ . '/storefront-header.php';
             <aside class="sf-filters is-hidden-mobile" id="sf-filters" aria-label="Product filters">
                 <div class="sf-filter-head">
                     <h2>Filters</h2>
-                    <?php if ($sf_has_filters): ?><a class="sf-filter-clear" href="index.php#catalogue">Clear all</a><?php endif; ?>
+                    <?php if ($sf_has_filters): ?><a class="sf-filter-clear" href="<?php echo $sf_all_products_view ? 'index.php?all=1#catalogue' : 'index.php#catalogue'; ?>">Clear all</a><?php endif; ?>
                 </div>
                 <form method="get" action="index.php#catalogue">
+                    <?php if ($sf_all_products_view): ?><input type="hidden" name="all" value="1"><?php endif; ?>
                     <?php if ($sf_sort !== 'name'): ?><input type="hidden" name="sort" value="<?php echo e($sf_sort); ?>"><?php endif; ?>
                     <fieldset class="sf-filter-group">
                         <legend>Search</legend>
@@ -321,40 +386,6 @@ require __DIR__ . '/storefront-header.php';
             </section>
         </div>
 
-        <?php if (!$sf_has_filters && $sf_total > 4 && $sf_new_arrivals): ?>
-            <section class="sf-section" aria-labelledby="new-arrivals-title">
-                <div class="sf-section-head">
-                    <div>
-                        <h2 id="new-arrivals-title">New arrivals</h2>
-                        <p>The latest products added to the catalogue.</p>
-                    </div>
-                    <a class="sf-section-link" href="index.php?sort=newest#catalogue">Sort catalogue by newest &rarr;</a>
-                </div>
-                <div class="sf-product-grid">
-                    <?php foreach ($sf_new_arrivals as $sf_product): ?>
-                        <?php storefront_render_product_card($sf_product, $sf_currency); ?>
-                    <?php endforeach; ?>
-                </div>
-            </section>
-        <?php endif; ?>
-
-        <?php if (!$sf_has_filters && $sf_total > 4 && $sf_best_sellers): ?>
-            <section class="sf-section" aria-labelledby="best-sellers-title">
-                <div class="sf-section-head">
-                    <div>
-                        <h2 id="best-sellers-title">Best sellers</h2>
-                        <p>Products with the most units on existing customer orders.</p>
-                    </div>
-                    <a class="sf-section-link" href="index.php?sort=popular#catalogue">Sort catalogue by popularity &rarr;</a>
-                </div>
-                <div class="sf-product-grid">
-                    <?php foreach ($sf_best_sellers as $sf_product): ?>
-                        <?php storefront_render_product_card($sf_product, $sf_currency); ?>
-                    <?php endforeach; ?>
-                </div>
-            </section>
-        <?php endif; ?>
-
         <?php if (!$sf_has_filters && $sf_total > 4 && $sf_recently_viewed): ?>
             <section class="sf-section" aria-labelledby="recently-viewed-title">
                 <div class="sf-section-head">
@@ -370,6 +401,21 @@ require __DIR__ . '/storefront-header.php';
                 </div>
             </section>
         <?php endif; ?>
+
+    </div>
+    <?php endif; ?>
+
+    <div class="sf-container">
+        <section class="sf-about-section" id="about-us" aria-labelledby="about-us-title">
+            <div class="sf-about-heading">
+                <span>About us</span>
+                <h2 id="about-us-title">The company behind this store</h2>
+                <p>This online catalogue is presented by:</p>
+            </div>
+            <div class="sf-about-companies">
+                <div><?php echo e($sf_company); ?></div>
+            </div>
+        </section>
     </div>
 </main>
 <?php require __DIR__ . '/storefront-footer.php'; ?>

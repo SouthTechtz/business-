@@ -2,6 +2,10 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_shops');
+if (!tenant_admin_scope()) {
+    http_response_code(403);
+    die('Only system administrators can manage shops and stores.');
+}
 $page_title = 'Stores';
 $can_godown = can('manage_godown');
 
@@ -107,6 +111,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash_set('success', 'Store updated successfully.');
         redirect('stores.php?shop=' . $shop_id);
     }
+
+    if ($action === 'delete_store') {
+        $warehouse_id = (int)($_POST['warehouse_id'] ?? 0);
+        $tenant_id = (int)$current_user->tenant_id;
+        $conn->begin_transaction();
+        try {
+            $store = fetch_one(
+                "SELECT warehouse_id, name, location_type, is_godown
+                   FROM warehouses
+                  WHERE warehouse_id = ? AND tenant_id = ?
+                  FOR UPDATE",
+                $warehouse_id,
+                $tenant_id
+            );
+            if (!$store || $store['location_type'] !== 'store' || (int)$store['is_godown'] === 1) {
+                throw new RuntimeException('Store not found or it is a protected Godown location.');
+            }
+            if (location_reference_count('warehouses', 'warehouse_id', $warehouse_id, $tenant_id) > 0) {
+                throw new RuntimeException('This store has stock, user assignments, or transaction history. Deactivate it instead to preserve its records.');
+            }
+
+            $stmt = $conn->prepare(
+                "DELETE FROM warehouses
+                  WHERE warehouse_id = ? AND tenant_id = ? AND location_type = 'store' AND is_godown = 0"
+            );
+            if (!$stmt) throw new RuntimeException($conn->error);
+            $stmt->bind_param('ii', $warehouse_id, $tenant_id);
+            if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+            if ($stmt->affected_rows !== 1) throw new RuntimeException('The store could not be deleted.');
+            $stmt->close();
+            $conn->commit();
+            audit_log('delete', 'warehouse', $warehouse_id, 'Store ' . $store['name'] . ' deleted');
+            flash_set('success', 'Store deleted successfully.');
+        } catch (Throwable $e) {
+            $conn->rollback();
+            flash_set('danger', 'Could not delete the store: ' . $e->getMessage());
+        }
+        redirect('stores.php');
+    }
 }
 
 $shops = accessible_shops(null, true);
@@ -163,6 +206,9 @@ require_once 'sidebar.php';
             <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> Central Godown</a>
         <?php endif; ?>
         <a href="shops.php" class="btn btn-light"><i class="fa fa-building mr-1"></i> Shops</a>
+        <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#addStoreModal">
+            <i class="fa fa-plus mr-1"></i> Add Store
+        </button>
     </div>
 </div>
 
@@ -262,6 +308,12 @@ require_once 'sidebar.php';
                                 <a href="godown.php" class="btn btn-action btn-light" title="Manage central Godown"><i class="fa fa-archive"></i></a>
                             <?php endif; ?>
                             <button type="button" class="btn btn-action btn-light" title="Edit" data-toggle="modal" data-target="#editStoreModal<?php echo (int)$store['warehouse_id']; ?>"><i class="fa fa-pencil"></i></button>
+                            <?php if ((int)($store['is_godown'] ?? 0) !== 1): ?>
+                                <button type="button" class="btn btn-action btn-outline-danger" title="Delete"
+                                        data-toggle="modal" data-target="#deleteStoreModal<?php echo (int)$store['warehouse_id']; ?>">
+                                    <i class="fa fa-trash"></i>
+                                </button>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -351,6 +403,30 @@ require_once 'sidebar.php';
         </div>
     </div>
 </div>
+<?php if ((int)($store['is_godown'] ?? 0) !== 1): ?>
+<div class="modal fade" id="deleteStoreModal<?php echo (int)$store['warehouse_id']; ?>" tabindex="-1" aria-labelledby="deleteStoreTitle<?php echo (int)$store['warehouse_id']; ?>" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteStoreTitle<?php echo (int)$store['warehouse_id']; ?>">Delete Store</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                Delete <strong><?php echo e($store['name']); ?></strong>? Stores with stock, user assignments, or transaction history cannot be deleted; deactivate them instead to preserve records.
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                <form method="POST" action="stores.php">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="action" value="delete_store">
+                    <input type="hidden" name="warehouse_id" value="<?php echo (int)$store['warehouse_id']; ?>">
+                    <button type="submit" class="btn btn-danger">Delete Store</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 <?php endforeach; ?>
 
 <script>

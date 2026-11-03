@@ -7,7 +7,7 @@ if (!$sf_tenant) {
     exit('The storefront is not configured.');
 }
 $sf_settings = storefront_settings($sf_tenant);
-$sf_company = trim((string)($sf_settings['company_name'] ?? '')) ?: APP_NAME;
+$sf_company = storefront_company_name($sf_tenant, $sf_settings);
 $sf_currency = storefront_currency($sf_tenant, $sf_settings);
 $sf_tenant_id = (int)$sf_tenant['tenant_id'];
 $sf_search_q = trim((string)($_GET['q'] ?? ''));

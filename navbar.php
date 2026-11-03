@@ -1,6 +1,6 @@
     <div class="app-main">
         <header class="topbar">
-            <div class="topbar-title"><?php echo isset($page_title) ? e($page_title) : e(APP_NAME); ?><small><?php echo e(APP_NAME); ?></small></div>
+            <div class="topbar-title"><?php echo isset($page_title) ? e($page_title) : e(system_title()); ?><small><?php echo e(system_title()); ?></small></div>
             <div class="topbar-search hide-xs">
                 <div class="search-wrap">
                     <div class="input-group input-group-sm">
