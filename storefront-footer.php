@@ -27,6 +27,7 @@ $sf_payment_methods = storefront_payment_methods($sf_tenant_id);
                 <h2 class="sf-footer-title">Shop</h2>
                 <ul class="sf-footer-links">
                     <li><a href="index.php">All products</a></li>
+                    <li><a href="categories.php">Product categories</a></li>
                     <?php foreach (array_slice($sf_footer_categories, 0, 6) as $sf_footer_category): ?>
                         <li><a href="index.php?category=<?php echo (int)$sf_footer_category['category_id']; ?>#catalogue"><?php echo e($sf_footer_category['name']); ?></a></li>
                     <?php endforeach; ?>
@@ -37,6 +38,7 @@ $sf_payment_methods = storefront_payment_methods($sf_tenant_id);
             <div>
                 <h2 class="sf-footer-title">Ordering</h2>
                 <ul class="sf-footer-links">
+                    <li><a href="wholesale-registration.php">Wholesale registration</a></li>
                     <li><a href="index.php#ordering">How ordering works</a></li>
                     <li><a href="index.php#delivery">Delivery</a></li>
                     <li><a href="index.php#returns">Returns</a></li>

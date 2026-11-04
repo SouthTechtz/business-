@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'pos-invoice.php';
 require_permission('manage_pos');
 $page_title = 'New Sale';
 
@@ -147,11 +148,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('sale-add.php');
         }
 
-        // A registered, active customer is required before a partial payment
-        // can be accepted. Anything else is treated as a walk-in sale.
+        // Only a registered wholesale customer may pay partially. Retail and
+        // walk-in customers always pay the full total.
+        $contact_is_wholesale = false;
         if ($contact_id > 0) {
             $registered_customer = fetch_one(
-                "SELECT contact_id FROM contacts
+                "SELECT contact_id, customer_type FROM contacts
                   WHERE contact_id = ? AND tenant_id = ? AND is_customer = 1 AND is_active = 1",
                 $contact_id,
                 $current_user->tenant_id
@@ -161,12 +163,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 redirect('sale-add.php');
             }
             $contact_id = (int)$registered_customer['contact_id'];
+            $contact_is_wholesale = strtolower((string)($registered_customer['customer_type'] ?? 'retail')) === 'wholesale';
         } else {
             $contact_id = 0;
         }
 
         $discount = (float)($_POST['discount'] ?? 0);
         if ($discount < 0) $discount = 0;
+        $sale_apply_tax = !empty($_POST['apply_tax']) ? 1 : 0;
 
         // The checkout location always comes from the server-side POS session.
         // A posted warehouse_id is intentionally ignored.
@@ -175,7 +179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $line_items = [];
         foreach ($cart as $pid => $item) {
             $line_total = $item['price'] * $item['quantity'];
-            $line_tax = $tax_enabled ? $line_total * ($item['tax_rate'] / 100) : 0;
+            $line_tax = $sale_apply_tax ? $line_total * ($item['tax_rate'] / 100) : 0;
             $subtotal += $line_total;
             $tax_total += $line_tax;
             $line_items[] = [
@@ -206,8 +210,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash_set('danger', 'Amount paid cannot exceed the sale total of ' . money($grand_total, tenant_currency()) . '.');
             redirect('sale-add.php');
         }
-        if ($contact_id === 0 && abs($amount_paid - $grand_total) > 0.005) {
-            flash_set('danger', 'Walk-in customers must pay the full total. Select a registered customer to accept a partial payment.');
+        if (!$contact_is_wholesale && abs($amount_paid - $grand_total) > 0.005) {
+            flash_set('danger', 'Only wholesale customers can pay partially. Retail and walk-in customers must pay the full total.');
             redirect('sale-add.php');
         }
 
@@ -301,7 +305,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $conn->commit();
             unset($_SESSION['pos_cart']);
             audit_log('create', 'pos_order', $order_id, 'Sale ' . $order_number . ' created');
-            flash_set('success', 'Sale completed successfully.');
+
+            $invoice_note = '';
+            try {
+                $pos_invoice = create_invoice_from_pos_sale($current_user->tenant_id, (int)$order_id, (int)$current_user->user_id);
+                $invoice_note = $pos_invoice['existing']
+                    ? ' Invoice ' . $pos_invoice['invoice_number'] . ' already exists.'
+                    : ' Invoice ' . $pos_invoice['invoice_number'] . ' created automatically.';
+                audit_log('create', 'invoice', $pos_invoice['invoice_id'], 'Automatic invoice ' . $pos_invoice['invoice_number'] . ' for sale ' . $order_number);
+            } catch (Throwable $invoice_error) {
+                error_log('Automatic POS invoice failed for sale ' . $order_number . ': ' . $invoice_error->getMessage());
+                $invoice_note = ' The invoice could not be generated automatically; open the sale to retry.';
+            }
+
+            flash_set('success', 'Sale completed successfully.' . $invoice_note);
             redirect('sale-details.php?id=' . $order_id);
         } catch (Throwable $ex) {
             $conn->rollback();
@@ -322,8 +339,9 @@ $products = fetch_all(
     $selected_store_id, $selected_store_id, $current_user->tenant_id
 );
 $customers = fetch_all(
-    "SELECT contact_id, first_name, last_name, company_name FROM contacts
-     WHERE tenant_id = ? AND is_customer = 1 AND is_active = 1 ORDER BY first_name",
+    "SELECT contact_id, first_name, last_name, company_name, customer_type FROM contacts
+     WHERE tenant_id = ? AND is_customer = 1 AND is_active = 1 AND customer_type = 'wholesale'
+     ORDER BY first_name",
     $current_user->tenant_id
 );
 $methods = fetch_all("SELECT * FROM payment_methods WHERE tenant_id = ?", $current_user->tenant_id);
@@ -393,6 +411,11 @@ require_once 'sidebar.php';
                 </div>
             </div>
         </div>
+        <?php if (!$cart): ?>
+            <div class="alert alert-light border small mb-2" id="posCartHint">
+                <i class="fa fa-shopping-cart mr-1"></i> Select a product to open the cart.
+            </div>
+        <?php endif; ?>
         <div class="pos-list" id="posGrid">
             <?php foreach ($products as $p): ?>
                 <div class="pos-row" data-id="<?php echo (int)$p['product_id']; ?>"
@@ -423,7 +446,7 @@ require_once 'sidebar.php';
         </div>
     </div>
 
-    <div class="pos-cart">
+    <div class="pos-cart<?php echo !$cart ? ' is-empty' : ''; ?>">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="card-title">Cart (<?php echo count($cart); ?>)</h5>
@@ -485,12 +508,22 @@ require_once 'sidebar.php';
                     <div class="form-group">
                         <label>Customer</label>
                         <select name="contact_id" id="customerSelect" class="form-control">
-                            <option value="0">Walk-in Customer</option>
+                            <option value="0" data-wholesale="0">Walk-in customer (retail — pays full total)</option>
                             <?php foreach ($customers as $c): ?>
-                                <option value="<?php echo $c['contact_id']; ?>"><?php echo e(trim(($c['first_name'] ?? '') . ' ' . ($c['last_name'] ?? '')) ?: $c['company_name']); ?></option>
+                                <option value="<?php echo $c['contact_id']; ?>" data-wholesale="1">
+                                    <?php echo e(trim(($c['first_name'] ?? '') . ' ' . ($c['last_name'] ?? '')) ?: $c['company_name']); ?>
+                                    — Wholesale
+                                </option>
                             <?php endforeach; ?>
                         </select>
-                        <small class="form-text text-muted" id="customerPaymentHint">Walk-in customers must pay the full total. Select a registered customer to accept a partial payment.</small>
+                        <small class="form-text text-muted" id="customerPaymentHint">Only wholesale customers can pay partially. Retail and walk-in customers must pay the full total.</small>
+                    </div>
+                    <div class="form-group">
+                        <div class="custom-control custom-switch">
+                            <input type="checkbox" class="custom-control-input" id="applyTax" name="apply_tax" value="1"
+                                   <?php echo $tax_enabled ? 'checked' : ''; ?>>
+                            <label class="custom-control-label" for="applyTax">Apply tax (VAT) to this sale</label>
+                        </div>
                     </div>
                     <div class="row">
                         <div class="col-7 form-group">
@@ -531,7 +564,7 @@ require_once 'sidebar.php';
 
 <script>
     var curSymbol = '<?php echo e($cur); ?>';
-    var taxEnabled = <?php echo $tax_enabled ? '1' : '0'; ?>;
+    var taxEnabled = $('#applyTax').is(':checked') ? 1 : 0;
     var warehouseId = <?php echo (int)$selected_store_id; ?>;
     var csrfToken = '<?php echo e(csrf_token()); ?>';
     var searchTimer = null;
@@ -610,8 +643,9 @@ require_once 'sidebar.php';
         syncAmountPaid(grand);
     }
 
-    function isWalkIn() {
-        return String($('#customerSelect').val()) === '0';
+    function isWholesaleCustomer() {
+        var selected = $('#customerSelect').find('option:selected');
+        return String(selected.data('wholesale')) === '1';
     }
 
     function updateBalance() {
@@ -626,7 +660,7 @@ require_once 'sidebar.php';
         lastGrand = Math.max(0, parseFloat(grand) || 0);
         var $amount = $('#amountPaidInput');
         $amount.attr('max', lastGrand.toFixed(2));
-        if (isWalkIn()) {
+        if (!isWholesaleCustomer()) {
             $amount.val(lastGrand.toFixed(2));
             amountEdited = false;
         } else if (!amountEdited) {
@@ -708,18 +742,24 @@ require_once 'sidebar.php';
             recalcTotals();
         });
 
+        $('#applyTax').on('change', function () {
+            taxEnabled = this.checked ? 1 : 0;
+            $('#ttTaxRow').toggle(!!taxEnabled);
+            recalcTotals();
+        });
+
         $('#customerSelect').on('change', function () {
-            var walkin = isWalkIn();
-            $('#amountPaidInput').prop('readonly', walkin);
+            var wholesale = isWholesaleCustomer();
+            $('#amountPaidInput').prop('readonly', !wholesale);
             amountEdited = false;
-            $('#customerPaymentHint').text(walkin
-                ? 'Walk-in customers must pay the full total. Select a registered customer to accept a partial payment.'
-                : 'Registered customer: you can enter a partial amount; the balance remains due on this sale.');
+            $('#customerPaymentHint').text(wholesale
+                ? 'Wholesale customer: you can enter a partial amount; the balance remains due on this sale.'
+                : 'Only wholesale customers can pay partially. Retail and walk-in customers must pay the full total.');
             syncAmountPaid(lastGrand);
         });
 
         $('#amountPaidInput').on('input', function () {
-            if (isWalkIn()) {
+            if (!isWholesaleCustomer()) {
                 $(this).val(lastGrand.toFixed(2));
                 return;
             }
@@ -730,9 +770,9 @@ require_once 'sidebar.php';
         $('#checkoutForm').on('submit', function (e) {
             var paid = parseFloat($('#amountPaidInput').val());
             if (isNaN(paid)) paid = 0;
-            if (isWalkIn() && Math.abs(paid - lastGrand) > 0.009) {
+            if (!isWholesaleCustomer() && Math.abs(paid - lastGrand) > 0.009) {
                 e.preventDefault();
-                showAppAlert('Walk-in customers must pay the full total.', 'Payment Validation');
+                showAppAlert('Only wholesale customers can pay partially. Retail and walk-in customers must pay the full total.', 'Payment Validation');
                 return;
             }
             if (paid < 0 || paid > lastGrand + 0.009) {

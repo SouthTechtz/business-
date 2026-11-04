@@ -39,6 +39,12 @@ $users = fetch_all(
      LEFT JOIN user_roles ur ON ur.user_id = u.user_id
      LEFT JOIN roles r ON r.role_id = ur.role_id
      WHERE u.tenant_id = ?
+       AND NOT EXISTS (
+           SELECT 1 FROM user_roles wur
+           JOIN roles wr ON wr.role_id = wur.role_id
+           WHERE wur.user_id = u.user_id AND wur.tenant_id = u.tenant_id
+             AND LOWER(wr.name) = 'wholesaler'
+       )
      GROUP BY u.user_id ORDER BY u.created_at DESC",
     $current_user->tenant_id
 );
@@ -52,12 +58,20 @@ require_once 'sidebar.php';
         <h1 class="page-title">Users</h1>
         <div class="page-sub">Manage staff accounts and access.</div>
     </div>
-    <a href="user-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Add User</a>
+    <div>
+        <?php if (is_system_administrator()): ?>
+            <a href="customers.php?tab=wholesalers" class="btn btn-outline-primary mr-1"><i class="fa fa-briefcase mr-1"></i> Wholesale Customers</a>
+        <?php endif; ?>
+        <a href="user-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> Add User</a>
+    </div>
 </div>
 
 <ul class="nav page-tabs">
-    <li class="nav-item"><a class="nav-link active" href="users.php"><i class="fa fa-users mr-1"></i> Users</a></li>
+    <li class="nav-item"><a class="nav-link active" href="users.php"><i class="fa fa-users mr-1"></i> Staff Users</a></li>
     <li class="nav-item"><a class="nav-link" href="permissions.php"><i class="fa fa-shield mr-1"></i> Roles &amp; Permissions</a></li>
+    <?php if (is_system_administrator()): ?>
+        <li class="nav-item"><a class="nav-link" href="customers.php?tab=wholesalers"><i class="fa fa-briefcase mr-1"></i> Wholesale Customers</a></li>
+    <?php endif; ?>
 </ul>
 
 <?php if ($f = flash_get()): ?>

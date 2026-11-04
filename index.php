@@ -87,7 +87,7 @@ if ($sf_show_category_home) {
 $sf_page_title_parts = [];
 if ($sf_search_q !== '') $sf_page_title_parts[] = 'Search results';
 if ($sf_category_name !== '') $sf_page_title_parts[] = $sf_category_name;
-$page_title = $sf_page_title_parts ? implode(' - ', $sf_page_title_parts) : 'Shop all products';
+$page_title = $sf_page_title_parts ? implode(' - ', $sf_page_title_parts) : ($sf_show_category_home ? 'Shop online' : 'Shop all products');
 $sf_meta_description = 'Shop ' . (count($sf_categories) > 0 ? 'the ' . $sf_company . ' catalogue' : 'products')
     . '. Add items to the cart and send an order request; the store confirms stock, price and delivery.';
 $sf_canonical_url = storefront_absolute_url('index.php');
@@ -116,6 +116,11 @@ $sf_clear_filter_url = function ($key) use ($sf_query_params) {
 };
 
 $sf_recently_viewed = storefront_recently_viewed($sf_tenant_id, 4);
+$sf_hero_products = storefront_new_arrivals($sf_tenant_id, 3);
+if (!$sf_hero_products) {
+    $sf_hero_products = storefront_catalogue($sf_tenant_id, ['sort' => 'name'], 3, 0);
+}
+$sf_arrivals = $sf_hero_products;
 
 $sf_head_extra = '';
 if ($sf_products) {
@@ -141,12 +146,102 @@ if ($sf_products) {
 require __DIR__ . '/storefront-header.php';
 ?>
 <main class="sf-main" id="sf-main">
+    <?php require __DIR__ . '/storefront-filter-bar.php'; ?>
     <?php if ($sf_show_category_home): ?>
-        <div class="sf-container sf-category-home">
+        <?php
+        $sf_hero_featured = $sf_hero_products[0] ?? null;
+        $sf_hero_secondary = array_slice($sf_hero_products, 1, 2);
+        ?>
+        <section class="sf-home-hero" aria-labelledby="sf-hero-title">
+            <div class="sf-container sf-home-hero-inner">
+                <div class="sf-home-copy">
+                    <span class="sf-home-eyebrow"><i class="fa fa-star" aria-hidden="true"></i> Retail &amp; wholesale supply</span>
+                    <h1 id="sf-hero-title">Everyday products, at prices that work for your business.</h1>
+                    <p>Browse the <?php echo e($sf_company); ?> catalogue, build an order request in minutes and let our team confirm stock, pricing and delivery. No online payment is taken.</p>
+                    <div class="sf-home-actions">
+                        <a class="sf-home-btn sf-home-btn-primary" href="index.php?all=1#catalogue">
+                            <i class="fa fa-shopping-bag" aria-hidden="true"></i> Shop all products
+                        </a>
+                        <a class="sf-home-btn sf-btn" href="wholesale-registration.php">
+                            <i class="fa fa-briefcase" aria-hidden="true"></i> Register for wholesale
+                        </a>
+                    </div>
+                    <div class="sf-home-assurance">
+                        <span><i class="fa fa-check-circle" aria-hidden="true"></i> Live shop stock</span>
+                        <span><i class="fa fa-check-circle" aria-hidden="true"></i> Wholesale pricing on request</span>
+                        <span><i class="fa fa-check-circle" aria-hidden="true"></i> Delivery confirmed by our team</span>
+                    </div>
+                </div>
+
+                <aside class="sf-home-showcase" aria-label="Featured products">
+                    <div class="sf-showcase-heading">
+                        <span>Fresh in the catalogue</span>
+                        <strong>New arrivals</strong>
+                    </div>
+                    <?php if ($sf_hero_featured): ?>
+                        <?php $sf_hero_image = storefront_image_path($sf_hero_featured['image'] ?? ''); ?>
+                        <a class="sf-showcase-featured" href="<?php echo e(storefront_product_url($sf_hero_featured)); ?>">
+                            <span class="sf-showcase-image">
+                                <?php if ($sf_hero_image !== ''): ?>
+                                    <img src="<?php echo e($sf_hero_image); ?>" alt="<?php echo e($sf_hero_featured['name']); ?>" loading="lazy">
+                                <?php else: ?>
+                                    <span class="sf-showcase-placeholder"><i class="fa fa-cube" aria-hidden="true"></i></span>
+                                <?php endif; ?>
+                            </span>
+                            <span class="sf-showcase-details">
+                                <span class="sf-showcase-label">Featured</span>
+                                <strong><?php echo e($sf_hero_featured['name']); ?></strong>
+                                <span class="sf-showcase-price"><?php echo e(money($sf_hero_featured['sale_price'], $sf_currency)); ?></span>
+                            </span>
+                        </a>
+                        <?php foreach ($sf_hero_secondary as $sf_hero_item): ?>
+                            <?php $sf_hero_item_image = storefront_image_path($sf_hero_item['image'] ?? ''); ?>
+                            <a class="sf-showcase-secondary" href="<?php echo e(storefront_product_url($sf_hero_item)); ?>">
+                                <?php if ($sf_hero_item_image !== ''): ?>
+                                    <img src="<?php echo e($sf_hero_item_image); ?>" alt="" loading="lazy">
+                                <?php else: ?>
+                                    <span class="sf-showcase-secondary-placeholder"><i class="fa fa-cube" aria-hidden="true"></i></span>
+                                <?php endif; ?>
+                                <span>
+                                    <small><?php echo e($sf_hero_item['category_name'] ?: 'New arrival'); ?></small>
+                                    <strong><?php echo e($sf_hero_item['name']); ?></strong>
+                                </span>
+                                <i class="fa fa-arrow-right" aria-hidden="true"></i>
+                            </a>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <div class="sf-showcase-empty">
+                            <i class="fa fa-cube" aria-hidden="true"></i>
+                            <strong>Products are on the way</strong>
+                            <span>The catalogue will appear here as soon as items are added.</span>
+                        </div>
+                    <?php endif; ?>
+                </aside>
+            </div>
+        </section>
+
+        <div class="sf-container">
+            <div class="sf-value-strip">
+                <div class="sf-value-card">
+                    <i class="fa fa-truck" aria-hidden="true"></i>
+                    <div><strong>Delivery arranged with you</strong><span>We confirm timing and any fee after your order request.</span></div>
+                </div>
+                <div class="sf-value-card">
+                    <i class="fa fa-warehouse" aria-hidden="true"></i>
+                    <div><strong>Real shop stock</strong><span>Availability shown here comes from live shop inventory.</span></div>
+                </div>
+                <div class="sf-value-card">
+                    <i class="fa fa-handshake-o" aria-hidden="true"></i>
+                    <div><strong>Wholesale accounts welcome</strong><span>Register your business for bulk pricing and repeat orders.</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sf-container sf-category-home" id="catalogue">
             <section aria-labelledby="sf-category-title">
                 <div class="sf-home-section-heading">
                     <span>Categories</span>
-                    <h1 id="sf-category-title">Shop by category</h1>
+                    <h2 id="sf-category-title">Shop by category</h2>
                 </div>
                 <?php if ($sf_category_cards): ?>
                     <div class="sf-category-grid">
@@ -198,6 +293,42 @@ require __DIR__ . '/storefront-header.php';
                 </div>
             <?php endif; ?>
         </div>
+
+        <div class="sf-container">
+            <section class="sf-section sf-arrivals" aria-labelledby="sf-arrivals-title">
+                <div class="sf-section-head">
+                    <div>
+                        <h2 id="sf-arrivals-title">New arrivals</h2>
+                        <p>The latest products added to the catalogue.</p>
+                    </div>
+                    <a class="sf-section-link" href="index.php?all=1&sort=newest#catalogue">See all new stock &rarr;</a>
+                </div>
+                <?php if ($sf_arrivals): ?>
+                    <div class="sf-product-grid">
+                        <?php foreach ($sf_arrivals as $sf_arrival): ?>
+                            <?php storefront_render_product_card($sf_arrival, $sf_currency); ?>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="sf-empty">
+                        <h2>No products yet</h2>
+                        <p>The catalogue will appear here as soon as items are added.</p>
+                    </div>
+                <?php endif; ?>
+            </section>
+
+            <section class="sf-wholesale-band" aria-labelledby="sf-wholesale-band-title">
+                <div class="sf-wholesale-band-copy">
+                    <span><i class="fa fa-briefcase" aria-hidden="true"></i> Buy in bulk</span>
+                    <h2 id="sf-wholesale-band-title">Run a shop, hotel or office? Open a wholesale account.</h2>
+                    <p>Register your business once and our team will contact you about volume pricing, product availability and delivery for repeat orders.</p>
+                </div>
+                <div class="sf-wholesale-band-actions">
+                    <a class="sf-home-btn sf-home-btn-primary" href="wholesale-registration.php">Register for wholesale</a>
+                    <a class="sf-btn-ghost" href="categories.php">Browse categories</a>
+                </div>
+            </section>
+        </div>
     <?php else: ?>
     <div class="sf-container sf-page">
         <nav aria-label="Breadcrumb">
@@ -215,12 +346,13 @@ require __DIR__ . '/storefront-header.php';
         <div class="sf-catalogue-head">
             <div>
                 <h1>
+                    <i class="fa fa-th-large sf-title-icon" aria-hidden="true"></i>
                     <?php if ($sf_search_q !== ''): ?>
                         Results for &ldquo;<?php echo e($sf_search_q); ?>&rdquo;
                     <?php elseif ($sf_category_name !== ''): ?>
                         <?php echo e($sf_category_name); ?>
                     <?php else: ?>
-                        Shop all products
+                        Catalogue
                     <?php endif; ?>
                 </h1>
                 <p>
@@ -228,88 +360,9 @@ require __DIR__ . '/storefront-header.php';
                     the store confirms availability and delivery after your order request.
                 </p>
             </div>
-            <a class="sf-filter-toggle sf-btn sf-btn-small" href="#catalogue" data-sf-open-filters aria-controls="sf-filters" aria-expanded="false">Filters</a>
         </div>
 
         <div class="sf-shop-layout" id="catalogue">
-            <aside class="sf-filters is-hidden-mobile" id="sf-filters" aria-label="Product filters">
-                <div class="sf-filter-head">
-                    <h2>Filters</h2>
-                    <?php if ($sf_has_filters): ?><a class="sf-filter-clear" href="<?php echo $sf_all_products_view ? 'index.php?all=1#catalogue' : 'index.php#catalogue'; ?>">Clear all</a><?php endif; ?>
-                </div>
-                <form method="get" action="index.php#catalogue">
-                    <?php if ($sf_all_products_view): ?><input type="hidden" name="all" value="1"><?php endif; ?>
-                    <?php if ($sf_sort !== 'name'): ?><input type="hidden" name="sort" value="<?php echo e($sf_sort); ?>"><?php endif; ?>
-                    <fieldset class="sf-filter-group">
-                        <legend>Search</legend>
-                        <label class="sr-only" for="filter-q">Search products</label>
-                        <input type="search" id="filter-q" name="q" value="<?php echo e($sf_search_q); ?>" maxlength="100" placeholder="Product name or code">
-                    </fieldset>
-
-                    <fieldset class="sf-filter-group">
-                        <legend>Category</legend>
-                        <label class="sr-only" for="filter-category">Category</label>
-                        <select id="filter-category" name="category">
-                            <option value="0">All categories</option>
-                            <?php foreach ($sf_categories as $sf_category_row): ?>
-                                <option value="<?php echo (int)$sf_category_row['category_id']; ?>" <?php echo $sf_category === (int)$sf_category_row['category_id'] ? 'selected' : ''; ?>>
-                                    <?php echo e($sf_category_row['name']); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </fieldset>
-
-                    <fieldset class="sf-filter-group">
-                        <legend>Price (<?php echo e($sf_currency); ?>)</legend>
-                        <div class="sf-price-range">
-                            <label><span>Min</span><input type="number" name="min_price" min="0" step="0.01" value="<?php echo $sf_filters['min_price'] !== null ? e($sf_filters['min_price']) : ''; ?>" placeholder="<?php echo e(number_format($sf_filter_options['min_price'], 0, '.', '')); ?>"></label>
-                            <label><span>Max</span><input type="number" name="max_price" min="0" step="0.01" value="<?php echo $sf_filters['max_price'] !== null ? e($sf_filters['max_price']) : ''; ?>" placeholder="<?php echo e(number_format($sf_filter_options['max_price'], 0, '.', '')); ?>"></label>
-                        </div>
-                    </fieldset>
-
-                    <?php if ($sf_filter_options['sizes']): ?>
-                        <fieldset class="sf-filter-group">
-                            <legend>Size</legend>
-                            <label class="sr-only" for="filter-size">Size</label>
-                            <select id="filter-size" name="size">
-                                <option value="">All sizes</option>
-                                <?php foreach ($sf_filter_options['sizes'] as $sf_size): ?>
-                                    <option value="<?php echo e($sf_size); ?>" <?php echo $sf_filters['size'] === $sf_size ? 'selected' : ''; ?>><?php echo e($sf_size); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </fieldset>
-                    <?php endif; ?>
-
-                    <?php if ($sf_filter_options['colors']): ?>
-                        <fieldset class="sf-filter-group">
-                            <legend>Colour</legend>
-                            <label class="sr-only" for="filter-color">Colour</label>
-                            <select id="filter-color" name="color">
-                                <option value="">All colours</option>
-                                <?php foreach ($sf_filter_options['colors'] as $sf_color): ?>
-                                    <option value="<?php echo e($sf_color); ?>" <?php echo $sf_filters['color'] === $sf_color ? 'selected' : ''; ?>><?php echo e($sf_color); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </fieldset>
-                    <?php endif; ?>
-
-                    <fieldset class="sf-filter-group">
-                        <legend>Availability</legend>
-                        <label class="sr-only" for="filter-availability">Availability</label>
-                        <select id="filter-availability" name="availability">
-                            <option value="">All products</option>
-                            <option value="in" <?php echo $sf_filters['availability'] === 'in' ? 'selected' : ''; ?>>In stock</option>
-                            <option value="out" <?php echo $sf_filters['availability'] === 'out' ? 'selected' : ''; ?>>Out of stock</option>
-                        </select>
-                    </fieldset>
-
-                    <div class="sf-filter-actions">
-                        <button type="submit" class="sf-btn sf-btn-primary">Apply</button>
-                        <a class="sf-btn" href="index.php#catalogue">Clear</a>
-                    </div>
-                </form>
-            </aside>
-
             <section class="sf-results" aria-label="Products">
                 <div class="sf-results-bar">
                     <p class="sf-result-count">

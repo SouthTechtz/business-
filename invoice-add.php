@@ -332,15 +332,18 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                         }
                     }
 
+                    $order_amount_paid = $linked_order ? min((float)($linked_order['Amount_paid'] ?? 0), $grand_total) : 0.0;
+                    $invoice_amount_due = max(0, round($grand_total - $order_amount_paid, 2));
+                    $invoice_is_paid = $invoice_amount_due <= 0.005 ? 1 : 0;
                     $stmt = $conn->prepare(
                         "INSERT INTO invoices (tenant_id, invoice_number, warehouse_id, contact_id, issue_date, due_date, status_id, reference, notes, terms, subtotal, tax_amount, total, amount_due, amount_paid, is_paid, created_by)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)"
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     );
                     $due_db = $due_date ?: null;
-                    $stmt->bind_param('isiississsddddi',
+                    $stmt->bind_param('isiississsdddddii',
                         $current_user->tenant_id, $invoice_number, $warehouse_id, $contact_id, $issue_date, $due_db,
-                        $status_id, $reference, $notes, $terms, $subtotal, $tax_total, $grand_total, $grand_total,
-                        $current_user->user_id
+                        $status_id, $reference, $notes, $terms, $subtotal, $tax_total, $grand_total, $invoice_amount_due,
+                        $order_amount_paid, $invoice_is_paid, $current_user->user_id
                     );
                     $stmt->execute();
                     $invoice_id = $stmt->insert_id;

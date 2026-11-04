@@ -1,7 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
-require_permission('manage_products');
+require_product_catalogue_access();
 $page_title = 'Products';
 
 $msg = '';
@@ -248,7 +248,7 @@ require_once 'sidebar.php';
                     <table class="table table-hover data-table" id="productsTable">
                         <thead>
                             <tr>
-                                <th>Code</th><th>Name</th><th>Brand</th><th>Main Category</th><th>Subcategory</th><th>Sub-Subcategory</th><th>Purchase</th><th>Sale</th><th>Shop Stock</th><th>Status</th><th class="text-right">Actions</th>
+                                <th>Code</th><th>Name</th><th>Brand</th><th>Category</th><th>Purchase</th><th>Sale</th><th>Shop Stock</th><th>Status</th><th class="text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -265,10 +265,13 @@ require_once 'sidebar.php';
                                 </td>
                                 <td><?php echo e($p['brand'] ?: '—'); ?></td>
                                 <td><?php echo e($chain[0] ?: '—'); ?></td>
-                                <td><?php echo e($chain[1] ?: '—'); ?></td>
-                                <td><?php echo e($chain[2] ?: '—'); ?></td>
                                 <td><?php echo e(money($p['purchase_price'], tenant_currency())); ?></td>
-                                <td><?php echo e(money($p['sale_price'], tenant_currency())); ?></td>
+                                <td>
+                                    <?php echo e(money($p['sale_price'], tenant_currency())); ?>
+                                    <?php if (product_has_wholesale_price($p)): ?>
+                                        <br><small class="text-muted" title="Wholesale price and minimum quantity">WS <?php echo e(money($p['wholesale_price'], tenant_currency())); ?> @ <?php echo e(format_quantity($p['wholesale_min_qty'])); ?>+</small>
+                                    <?php endif; ?>
+                                </td>
                                 <td>
                                     <?php if (!$p['is_service']): ?>
                                         <span class="badge <?php echo (float)$p['total_stock'] <= (float)$p['min_stock_level'] ? 'badge-danger' : 'badge-success'; ?>">
@@ -278,14 +281,34 @@ require_once 'sidebar.php';
                                 </td>
                                 <td><?php echo $p['is_active'] ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-secondary">Inactive</span>'; ?></td>
                                 <td class="text-right">
-                                    <a href="product-view.php?id=<?php echo $p['product_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                                    <a href="product-edit.php?id=<?php echo $p['product_id']; ?>" class="btn btn-action btn-light" title="Edit"><i class="fa fa-pencil"></i></a>
-                                    <a href="products.php?delete=<?php echo $p['product_id']; ?>" class="btn btn-action btn-light text-danger" title="Delete" onclick="return confirm('Delete this product?');"><i class="fa fa-trash"></i></a>
+                                    <div class="product-actions">
+                                        <button type="button" class="btn btn-action btn-light product-actions-toggle"
+                                                data-product-actions aria-haspopup="menu" aria-expanded="false" title="Actions">
+                                            <i class="fa fa-ellipsis-v" aria-hidden="true"></i><span class="sr-only">Actions</span>
+                                        </button>
+                                        <div class="product-actions-menu" role="menu" aria-label="Actions for <?php echo e($p['name']); ?>">
+                                            <a class="product-actions-item" role="menuitem" href="product-view.php?id=<?php echo $p['product_id']; ?>">
+                                                <i class="fa fa-eye" aria-hidden="true"></i> View product
+                                            </a>
+                                            <a class="product-actions-item" role="menuitem" href="product-edit.php?id=<?php echo $p['product_id']; ?>">
+                                                <i class="fa fa-pencil" aria-hidden="true"></i> Edit product
+                                            </a>
+                                            <a class="product-actions-item" role="menuitem" href="product-barcode.php?id=<?php echo $p['product_id']; ?>">
+                                                <i class="fa fa-barcode" aria-hidden="true"></i> Print barcode
+                                            </a>
+                                            <div class="product-actions-divider" role="separator"></div>
+                                            <a class="product-actions-item is-danger" role="menuitem"
+                                               href="products.php?delete=<?php echo $p['product_id']; ?>"
+                                               onclick="return confirm('Delete this product?');">
+                                                <i class="fa fa-trash" aria-hidden="true"></i> Delete product
+                                            </a>
+                                        </div>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                         <?php if (!$products): ?>
-                            <tr><td colspan="11" class="text-center text-muted py-4">No products yet. <a href="#" data-toggle="modal" data-target="#addProductModal">Add your first product</a>.</td></tr>
+                            <tr><td colspan="9" class="text-center text-muted py-4">No products yet. <a href="#" data-toggle="modal" data-target="#addProductModal">Add your first product</a>.</td></tr>
                         <?php endif; ?>
                         </tbody>
                     </table>
@@ -420,6 +443,67 @@ require_once 'sidebar.php';
                 });
             }
         });
+
+        // Three-dot product action menu (works inside the scrollable table).
+        (function () {
+            var openMenu = null;
+            var openToggle = null;
+
+            function closeMenu() {
+                if (!openMenu) return;
+                openMenu.classList.remove('is-open');
+                if (openToggle) openToggle.setAttribute('aria-expanded', 'false');
+                openMenu = null;
+                openToggle = null;
+            }
+
+            function positionMenu(menu, toggle) {
+                var rect = toggle.getBoundingClientRect();
+                var menuWidth = menu.offsetWidth;
+                var menuHeight = menu.offsetHeight;
+                var left = rect.right - menuWidth;
+                var top = rect.bottom + 6;
+
+                if (left < 8) left = 8;
+                if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
+                if (top + menuHeight > window.innerHeight - 8) top = rect.top - menuHeight - 6;
+                if (top < 8) top = 8;
+
+                menu.style.left = left + 'px';
+                menu.style.top = top + 'px';
+            }
+
+            document.addEventListener('click', function (event) {
+                var toggle = event.target.closest('[data-product-actions]');
+                if (toggle) {
+                    event.preventDefault();
+                    var menu = toggle.parentNode.querySelector('.product-actions-menu');
+                    var wasOpen = menu.classList.contains('is-open');
+                    closeMenu();
+                    if (!wasOpen) {
+                        menu.classList.add('is-open');
+                        toggle.setAttribute('aria-expanded', 'true');
+                        positionMenu(menu, toggle);
+                        openMenu = menu;
+                        openToggle = toggle;
+                    }
+                    return;
+                }
+
+                if (openMenu && openMenu.contains(event.target)) {
+                    closeMenu();
+                    return;
+                }
+
+                closeMenu();
+            });
+
+            document.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') closeMenu();
+            });
+            window.addEventListener('resize', closeMenu);
+            window.addEventListener('scroll', closeMenu, true);
+        })();
     });
 </script>
 

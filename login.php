@@ -6,7 +6,7 @@ header('Pragma: no-cache');
 if (!empty($_SESSION['user_id'])) {
     $session_user = User::getUserById((int)$_SESSION['user_id']);
     if ($session_user && $session_user->is_active) {
-        redirect('dashboard.php');
+        redirect(is_wholesaler($session_user) ? 'wholesale-dashboard.php' : 'dashboard.php');
     }
     end_session();
     session_start();
@@ -23,12 +23,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $_SESSION['tenant_id'] = $user->tenant_id;
         $current_user = $user;
         audit_log('login', 'user', $user->user_id, 'User signed in');
-        redirect('dashboard.php');
+        redirect(is_wholesaler($user) ? 'wholesale-dashboard.php' : 'dashboard.php');
     }
     $error = 'Invalid username/email or password.';
 }
 
 $app_title = system_title();
+$login_logo = system_logo_path();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -46,8 +47,8 @@ $app_title = system_title();
     <div class="login-wrap">
         <div class="login-card">
             <div class="login-brand">
-                <?php if (file_exists('assets/images/logo.png')): ?>
-                    <img src="assets/images/logo.png" alt="<?php echo e($app_title); ?>" class="login-logo-img">
+                <?php if ($login_logo !== ''): ?>
+                    <img src="<?php echo e($login_logo); ?>" alt="<?php echo e($app_title); ?>" class="login-logo-img">
                 <?php else: ?>
                     <h1><?php echo e($app_title); ?></h1>
                 <?php endif; ?>
@@ -72,6 +73,10 @@ $app_title = system_title();
                 </div>
                 <button type="submit" class="btn btn-primary btn-block btn-lg">Sign In</button>
             </form>
+            <p class="text-center small mt-3 mb-0">
+                Wholesale customer? Sign in with your registered email above, or
+                <a href="wholesale-registration.php">register your business</a>.
+            </p>
         </div>
     </div>
 </body>

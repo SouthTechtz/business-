@@ -113,10 +113,7 @@ try {
         if ($qty > $remaining + 0.0001) {
             throw new RuntimeException("Return quantity exceeds remaining returnable quantity.");
         }
-        $resale = (float)($resale_qtys[$idx] ?? 0);
-        if ($resale < 0 || $resale > $qty + 0.0001) {
-            throw new RuntimeException("Resellable quantity must be between 0 and the return quantity.");
-        }
+        $resale = 0;
         $unit_price = (float)$orig_map[$pid]["unit_price"];
         $refund = $qty * $unit_price;
         $items_to_return[] = [
@@ -161,32 +158,8 @@ try {
             "resale_quantity" => $it["resale"],
         ]);
 
-        $restore_wh = $it["warehouse_id"] > 0 ? $it["warehouse_id"] : 0;
-        if ($it["resale"] > 0) {
-            if ($restore_wh <= 0 || !store_is_accessible($restore_wh, true)) {
-                throw new RuntimeException("Original selling location cannot be reliably determined or is inaccessible; manual resolution required.");
-            }
-            $exists = fetch_one("SELECT stock_id FROM inventory_stock WHERE tenant_id = ? AND warehouse_id = ? AND product_id = ?", $tenant_id, $restore_wh, $it["product_id"]);
-            if ($exists) {
-                $stmt = $conn->prepare("UPDATE inventory_stock SET quantity = quantity + ? WHERE tenant_id = ? AND warehouse_id = ? AND product_id = ?");
-                $stmt->bind_param("diii", $it["resale"], $tenant_id, $restore_wh, $it["product_id"]);
-                $stmt->execute();
-                $stmt->close();
-            } else {
-                db_insert("inventory_stock", ["tenant_id" => $tenant_id, "warehouse_id" => $restore_wh, "product_id" => $it["product_id"], "quantity" => $it["resale"]]);
-            }
-            db_insert("inventory_movements", [
-                "tenant_id" => $tenant_id,
-                "product_id" => $it["product_id"],
-                "warehouse_id" => $restore_wh,
-                "movement_type" => "sales_return",
-                "quantity" => $it["resale"],
-                "reference_id" => $return_id,
-                "reference_type" => "sales_return",
-                "created_by" => $current_user->user_id,
-                "notes" => "Sales return " . $return_number,
-            ]);
-        }
+        // Returned stock is recorded in sales_return_items only. It is not
+        // added back to sellable inventory_stock.
     }
 
     // Auto-update invoice for invoice-linked returns.

@@ -11,6 +11,10 @@ $is_shop_manager = is_shop_manager();
     ?>
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
+            <?php $sidebar_logo = system_logo_path(); ?>
+            <?php if ($sidebar_logo !== ''): ?>
+                <img src="<?php echo e($sidebar_logo); ?>" alt="" class="sidebar-logo">
+            <?php endif; ?>
             <div class="brand-text"><?php echo e(system_title()); ?><small>Business Suite</small></div>
         </div>
 
@@ -20,6 +24,11 @@ $is_shop_manager = is_shop_manager();
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "godown.php" ? "active" : ""; ?>">
                 <a href="godown.php"><i class="fa fa-archive"></i><span>My Godown</span></a>
             </li>
+            <?php if (can_manage_product_catalogue()): ?>
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["products.php", "product-add.php", "product-edit.php", "product-view.php", "product-barcode.php"]) ? "active" : ""; ?>">
+                <a href="products.php"><i class="fa fa-cube"></i><span>Products</span></a>
+            </li>
+            <?php endif; ?>
             <?php if (can("manage_inventory")): ?>
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "inventory.php" ? "active" : ""; ?>">
                 <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span></a>
@@ -86,8 +95,8 @@ $is_shop_manager = is_shop_manager();
 
         <div class="sidebar-menu-title">Inventory &amp; Supply Chain</div>
         <ul class="sidebar-menu">
-            <?php if (can("manage_products")): ?>
-            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["products.php", "product-add.php", "product-edit.php", "product-view.php"]) ? "active" : ""; ?>">
+            <?php if (can_manage_product_catalogue()): ?>
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["products.php", "product-add.php", "product-edit.php", "product-view.php", "product-barcode.php"]) ? "active" : ""; ?>">
                 <a href="products.php"><i class="fa fa-cube"></i><span>Products</span></a>
             </li>
             <?php endif; ?>
@@ -132,7 +141,7 @@ $is_shop_manager = is_shop_manager();
         <div class="sidebar-menu-title">Customers &amp; CRM</div>
         <ul class="sidebar-menu">
             <?php if (can("manage_contacts")): ?>
-            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["customers.php", "customer-add.php", "customer-edit.php", "customer-view.php"]) ? "active" : ""; ?>">
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["customers.php", "customer-add.php", "customer-edit.php", "customer-view.php", "wholesaler-view.php"]) ? "active" : ""; ?>">
                 <a href="customers.php"><i class="fa fa-address-book"></i><span>Customers</span></a>
             </li>
             <?php endif; ?>
@@ -188,7 +197,7 @@ $is_shop_manager = is_shop_manager();
         <ul class="sidebar-menu">
             <?php if (tenant_admin_scope() && can("manage_shops")): ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["shops.php", "stores.php"]) ? "active" : ""; ?>">
-                <a href="shops.php"><i class="fa fa-building"></i><span>Inventory Locations</span></a>
+                <a href="shops.php"><i class="fa fa-building"></i><span>Shops &amp; Stores</span></a>
             </li>
             <?php endif; ?>
             <?php if (can("manage_users")): ?>

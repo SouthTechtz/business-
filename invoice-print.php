@@ -29,7 +29,7 @@ $items = fetch_all(
 
 $settings = fetch_one("SELECT * FROM system_settings WHERE tenant_id = ?", $current_user->tenant_id);
 $company = $settings ?: ['company_name' => system_title($current_user->tenant_id), 'company_email' => '', 'company_phone' => '', 'company_address' => ''];
-$logo_path = (!empty($settings['logo_path']) && file_exists($settings['logo_path'])) ? $settings['logo_path'] : '';
+$logo_path = system_logo_path($current_user->tenant_id);
 $cur = tenant_currency();
 
 $status_color = match ($invoice['status_name'] ?? '') {

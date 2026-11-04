@@ -157,18 +157,6 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
             <div class="h4 mb-0"><?php echo $out_of_stock; ?></div>
         </div></div>
     </div>
-    <div class="col-md-4 col-sm-6 mb-2">
-        <div class="card"><div class="card-body">
-            <div class="text-muted small">Capital Valuation</div>
-            <div class="h4 mb-0"><?php echo e(money($capital, $cur)); ?></div>
-        </div></div>
-    </div>
-    <div class="col-md-4 col-sm-6 mb-2">
-        <div class="card"><div class="card-body">
-            <div class="text-muted small">Expected Sales Value</div>
-            <div class="h4 mb-0"><?php echo e(money($expected_sales_value, $cur)); ?></div>
-        </div></div>
-    </div>
 </div>
 
 <div class="card mb-3">

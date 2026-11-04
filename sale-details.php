@@ -41,6 +41,14 @@ $payment_summary = fetch_one(
 $amount_paid = (float)($payment_summary['paid'] ?? 0);
 $balance_due = max(0, (float)$order['total'] - $amount_paid);
 
+$sale_invoice = can('manage_invoices')
+    ? fetch_one(
+        "SELECT invoice_id, invoice_number FROM invoices WHERE tenant_id = ? AND reference = ? LIMIT 1",
+        $current_user->tenant_id,
+        $order['order_number']
+    )
+    : null;
+
 require_once 'navbar.php';
 require_once 'sidebar.php';
 $cur = tenant_currency();
@@ -52,6 +60,23 @@ $cur = tenant_currency();
         <div class="page-sub">Order <?php echo e($order['order_number']); ?><?php if (!empty($order['store_name'])): ?> · Store: <strong><?php echo e(trim(($order['shop_name'] ?? '') . ' / ' . $order['store_name'], ' /')); ?></strong><?php endif; ?></div>
     </div>
     <div>
+        <?php if (can('manage_invoices') && $order['status'] === 'completed'): ?>
+            <?php if ($sale_invoice): ?>
+                <a href="invoice-details.php?id=<?php echo (int)$sale_invoice['invoice_id']; ?>" class="btn btn-outline-primary">
+                    <i class="fa fa-file-text mr-1"></i> View Invoice <?php echo e($sale_invoice['invoice_number']); ?>
+                </a>
+            <?php else: ?>
+                <a href="sale-invoice.php?id=<?php echo $id; ?>" class="btn btn-primary"
+                   onclick="return confirm('Generate an invoice from this sale?');">
+                    <i class="fa fa-file-text mr-1"></i> Generate Invoice
+                </a>
+            <?php endif; ?>
+        <?php endif; ?>
+        <?php if ($order['status'] === 'completed'): ?>
+            <a href="sale-receipt.php?id=<?php echo $id; ?>" target="_blank" class="btn btn-light">
+                <i class="fa fa-receipt mr-1"></i> Generate Receipt
+            </a>
+        <?php endif; ?>
         <?php if ($order['status'] !== 'cancelled'): ?>
             <a href="sale-cancel.php?id=<?php echo $id; ?>" class="btn btn-outline-warning" onclick="return confirm('Cancel this sale? Stock will be restored.');"><i class="fa fa-ban mr-1"></i> Cancel Sale</a>
         <?php endif; ?>

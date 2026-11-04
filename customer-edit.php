@@ -13,6 +13,12 @@ if (!$customer) {
 
 $error = '';
 
+$has_wholesale_account = db_table_exists('wholesaler_accounts') && fetch_one(
+    "SELECT 1 FROM wholesaler_accounts WHERE contact_id = ? AND tenant_id = ? LIMIT 1",
+    $id,
+    $current_user->tenant_id
+);
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $fields = ['first_name', 'last_name', 'company_name', 'email', 'phone', 'mobile', 'address', 'city', 'state', 'postal_code', 'country', 'tax_id', 'notes'];
     $set = [];
@@ -21,10 +27,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $set[] = "`$f` = ?";
         $vals[] = trim($_POST[$f] ?? '');
     }
+
+    $customer_channel = strtolower(trim((string)($_POST['customer_channel'] ?? ($customer['customer_channel'] ?? 'walk_in'))));
+    if (!array_key_exists($customer_channel, customer_channel_options())) $customer_channel = 'walk_in';
+    // A contact with a wholesale portal account is always wholesale; manual
+    // customers are always retail (wholesale is created from the Wholesalers tab).
+    $linked_wholesale = db_table_exists('wholesaler_accounts') && fetch_one(
+        "SELECT 1 FROM wholesaler_accounts WHERE contact_id = ? AND tenant_id = ? LIMIT 1",
+        $id,
+        $current_user->tenant_id
+    );
+    $customer_type = $linked_wholesale ? 'wholesale' : 'retail';
+    $set[] = "`customer_type` = ?";
+    $vals[] = $customer_type;
+    $set[] = "`customer_channel` = ?";
+    $vals[] = $customer_channel;
+
     $vals[] = $id;
     $vals[] = $current_user->tenant_id;
     $stmt = $conn->prepare("UPDATE contacts SET " . implode(', ', $set) . " WHERE contact_id = ? AND tenant_id = ?");
-    $types = str_repeat('s', count($fields)) . 'ii';
+    $types = str_repeat('s', count($fields) + 2) . 'ii';
     $stmt->bind_param($types, ...$vals);
     if ($stmt->execute()) {
         audit_log('update', 'contact', $id, 'Customer updated');
@@ -60,6 +82,23 @@ require_once 'sidebar.php';
                         <div class="col-md-6 form-group"><label>Phone</label><input type="text" name="phone" class="form-control" value="<?php echo e($customer['phone']); ?>"></div>
                         <div class="col-md-6 form-group"><label>Mobile</label><input type="text" name="mobile" class="form-control" value="<?php echo e($customer['mobile']); ?>"></div>
                         <div class="col-md-12 form-group"><label>Address</label><input type="text" name="address" class="form-control" value="<?php echo e($customer['address']); ?>"></div>
+                        <div class="col-md-6 form-group">
+                            <label>Customer Channel</label>
+                            <select name="customer_channel" class="form-control">
+                                <?php foreach (customer_channel_options() as $channel_key => $channel_label): ?>
+                                    <option value="<?php echo e($channel_key); ?>" <?php echo ($customer['customer_channel'] ?? 'walk_in') === $channel_key ? 'selected' : ''; ?>><?php echo e($channel_label); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6 form-group">
+                            <label>Customer Type</label>
+                            <input type="text" class="form-control" readonly value="<?php echo $has_wholesale_account ? 'Wholesale customer' : 'Retail customer'; ?>">
+                            <small class="form-text text-muted">
+                                <?php echo $has_wholesale_account
+                                    ? 'This contact is linked to a wholesale portal account.'
+                                    : 'Manual customers are retail. Wholesale customers are registered from Customers → Wholesalers.'; ?>
+                            </small>
+                        </div>
                         <div class="col-md-4 form-group"><label>City</label><input type="text" name="city" class="form-control" value="<?php echo e($customer['city']); ?>"></div>
                         <div class="col-md-4 form-group"><label>State / Region</label><input type="text" name="state" class="form-control" value="<?php echo e($customer['state']); ?>"></div>
                         <div class="col-md-2 form-group"><label>Postal Code</label><input type="text" name="postal_code" class="form-control" value="<?php echo e($customer['postal_code']); ?>"></div>

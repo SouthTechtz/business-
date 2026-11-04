@@ -131,7 +131,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sf_last_name = $sf_name_parts[1] ?? null;
                 $stmt = $conn->prepare(
                     "UPDATE contacts
-                        SET first_name = ?, last_name = ?, address = ?
+                        SET first_name = ?, last_name = ?, address = ?,
+                            customer_channel = 'online'
                       WHERE contact_id = ? AND tenant_id = ?"
                 );
                 if (!$stmt) throw new RuntimeException($conn->error);
@@ -152,8 +153,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sf_last_name = $sf_name_parts[1] ?? null;
                 $stmt = $conn->prepare(
                     "INSERT INTO contacts
-                        (tenant_id, contact_type_id, customer_number, first_name, last_name, phone, address, is_customer, is_active)
-                     VALUES (?, 1, ?, ?, ?, ?, ?, 1, 1)"
+                        (tenant_id, contact_type_id, customer_type, customer_channel, customer_number, first_name, last_name, phone, address, is_customer, is_active)
+                     VALUES (?, 1, 'retail', 'online', ?, ?, ?, ?, ?, 1, 1)"
                 );
                 if (!$stmt) throw new RuntimeException($conn->error);
                 $stmt->bind_param(

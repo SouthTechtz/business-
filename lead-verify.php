@@ -20,8 +20,8 @@ $request = $lead ? fetch_one(
      WHERE r.lead_id = ? AND r.tenant_id = ?",
     $id, (int)$current_user->tenant_id
 ) : null;
-if (!$lead || !$request || $lead['source'] !== 'storefront' || $lead['status'] === 'cancelled') {
-    flash_set('danger', 'That lead does not have an active storefront order request to verify.');
+if (!$lead || !$request || !in_array((string)$lead['source'], ['storefront', 'wholesale'], true) || $lead['status'] === 'cancelled') {
+    flash_set('danger', 'That lead does not have an active online or wholesale order request to verify.');
     redirect('leads.php');
 }
 

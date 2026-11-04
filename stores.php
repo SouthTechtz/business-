@@ -198,7 +198,7 @@ require_once 'sidebar.php';
 
 <div class="page-head">
     <div>
-        <h1 class="page-title">Stores</h1>
+        <h1 class="page-title">Shops &amp; Stores</h1>
         <div class="page-sub">Stores hold stock and belong to a shop. A store can be designated as the tenant's single central Godown.</div>
     </div>
     <div>

@@ -218,8 +218,8 @@ try {
                 http_response_code(403);
                 die('Only an authorized system administrator or assigned Shop Manager can verify order requests.');
             }
-            if ($lead['source'] !== 'storefront' || $lead['status'] === 'cancelled') {
-                lead_action_redirect($back, 'danger', 'Only an active storefront order request can be verified.');
+            if (!in_array($lead['source'], ['storefront', 'wholesale'], true) || $lead['status'] === 'cancelled') {
+                lead_action_redirect($back, 'danger', 'Only an active online or wholesale order request can be verified.');
             }
             $shop_id = (int)($_POST['shop_id'] ?? 0);
             $warehouse_id = (int)($_POST['warehouse_id'] ?? 0);
@@ -365,16 +365,17 @@ try {
                         );
                         if ($contact) $contact_id = (int)$contact['contact_id'];
                     }
+                    $order_source = $lead['source'] === 'wholesale' ? 'wholesale' : 'storefront';
                     $stmt = $conn->prepare(
                         "INSERT INTO orders (tenant_id, order_number, contact_id, lead_id, customer_name,
                             customer_phone, customer_location, customer_email, source, status, currency_code,
                             subtotal, total, shop_id, warehouse_id, created_by)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'storefront', 'under_review', ?, ?, ?, ?, ?, ?)"
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'under_review', ?, ?, ?, ?, ?, ?)"
                     );
                     $order_warehouse_id = $warehouse_id > 0 ? $warehouse_id : null;
-                    $stmt->bind_param('isiisssssddiii', $current_user->tenant_id, $order_number, $contact_id, $id,
+                    $stmt->bind_param('isiissssssddiii', $current_user->tenant_id, $order_number, $contact_id, $id,
                         $locked_lead['contact_name'], $locked_lead['phone'], $locked_lead['location'], $locked_lead['email'],
-                        $request['currency_code'], $request['subtotal'], $request['subtotal'], $shop_id,
+                        $order_source, $request['currency_code'], $request['subtotal'], $request['subtotal'], $shop_id,
                         $order_warehouse_id, $current_user->user_id);
                     if (!$stmt->execute()) throw new RuntimeException($stmt->error);
                     $order_id = (int)$stmt->insert_id;

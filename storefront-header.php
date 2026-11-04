@@ -14,6 +14,13 @@ $sf_nav_categories = $sf_nav_categories ?? storefront_categories($sf_tenant_id);
 $sf_meta_description = $sf_meta_description ?? ('Browse the ' . $sf_company . ' catalogue and send an order request. No online payment is taken.');
 $sf_canonical_url = $sf_canonical_url ?? storefront_absolute_url('index.php');
 $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.php';
+
+// Which tab should be highlighted on this request?
+$sf_current_script = basename((string)($_SERVER['SCRIPT_NAME'] ?? 'index.php'));
+$sf_is_shop_all = $sf_is_catalogue && !empty($_GET['all']);
+$sf_is_category_filter = $sf_is_catalogue && !empty($sf_category) && !$sf_is_shop_all;
+$sf_tab_home = $sf_is_catalogue && !$sf_is_shop_all && !$sf_is_category_filter && $sf_search_q === '';
+$sf_tab_catalogue = $sf_is_catalogue && !$sf_tab_home;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -60,33 +67,6 @@ $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.
             </span>
         </a>
 
-        <nav class="sf-nav" aria-label="Shop navigation">
-            <a href="index.php" <?php echo empty($sf_category) && empty($sf_search_q) && empty($_GET['all']) ? 'aria-current="page"' : ''; ?>>Home</a>
-            <a href="index.php?all=1#catalogue" <?php echo !empty($_GET['all']) ? 'aria-current="page"' : ''; ?>>Shop All</a>
-            <?php foreach ($sf_nav_categories as $sf_nav_category): ?>
-                <a href="index.php?category=<?php echo (int)$sf_nav_category['category_id']; ?>#catalogue"
-                   <?php echo isset($sf_category) && (int)$sf_category === (int)$sf_nav_category['category_id'] ? 'aria-current="page"' : ''; ?>>
-                    <?php echo e($sf_nav_category['name']); ?>
-                </a>
-            <?php endforeach; ?>
-            <a href="index.php#about-us">About us</a>
-            <a href="index.php#contact">Contact</a>
-        </nav>
-
-        <div class="sf-search-wrap">
-            <form class="sf-search" action="index.php" method="get" role="search" data-suggest-url="storefront-suggest.php">
-                <label class="sr-only" for="sf-search-input">Search products</label>
-                <input type="search" id="sf-search-input" name="q" value="<?php echo e($sf_search_q); ?>" maxlength="100"
-                       placeholder="Search products, codes or SKU" autocomplete="off" role="combobox"
-                       aria-autocomplete="list" aria-controls="sf-search-suggest" aria-expanded="false">
-                <button type="submit">
-                    <i class="fa fa-search" aria-hidden="true"></i>
-                    <span class="sr-only">Search</span>
-                </button>
-            </form>
-            <div class="sf-suggest" id="sf-search-suggest" role="listbox" aria-label="Search suggestions" hidden></div>
-        </div>
-
         <div class="sf-actions">
             <a class="sf-header-link" href="login.php" aria-label="Log in" title="Log in">
                 <i class="fa fa-user" aria-hidden="true"></i>
@@ -99,6 +79,31 @@ $sf_is_catalogue = basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'index.
                     <strong class="sf-cart-count"><?php echo (int)$sf_cart_count; ?></strong>
                 <?php endif; ?>
             </a>
+        </div>
+    </div>
+
+    <div class="sf-tabbar">
+        <div class="sf-container">
+            <nav class="sf-tabs" aria-label="Shop navigation">
+                <a class="sf-tab" href="index.php" <?php echo $sf_tab_home ? 'aria-current="page"' : ''; ?>>
+                    <i class="fa fa-home" aria-hidden="true"></i><span>Home</span>
+                </a>
+                <a class="sf-tab" href="index.php?all=1#catalogue" <?php echo $sf_tab_catalogue ? 'aria-current="page"' : ''; ?>>
+                    <i class="fa fa-th-large" aria-hidden="true"></i><span>Catalogue</span>
+                </a>
+                <a class="sf-tab" href="categories.php" <?php echo $sf_current_script === 'categories.php' ? 'aria-current="page"' : ''; ?>>
+                    <i class="fa fa-tags" aria-hidden="true"></i><span>Categories</span>
+                </a>
+                <a class="sf-tab" href="wholesale-registration.php" <?php echo $sf_current_script === 'wholesale-registration.php' ? 'aria-current="page"' : ''; ?>>
+                    <i class="fa fa-briefcase" aria-hidden="true"></i><span>Wholesales</span>
+                </a>
+                <a class="sf-tab" href="about.php" <?php echo $sf_current_script === 'about.php' ? 'aria-current="page"' : ''; ?>>
+                    <i class="fa fa-building" aria-hidden="true"></i><span>About Us</span>
+                </a>
+                <a class="sf-tab" href="help.php" <?php echo $sf_current_script === 'help.php' ? 'aria-current="page"' : ''; ?>>
+                    <i class="fa fa-question-circle" aria-hidden="true"></i><span>Help</span>
+                </a>
+            </nav>
         </div>
     </div>
 </header>

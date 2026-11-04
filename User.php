@@ -36,27 +36,62 @@ class User
         return $user;
     }
 
-    /** Authenticate with username/email + password. Returns User or null. */
+    /** Authenticate with username/email/phone/name + password. Returns User or null. */
     public static function authenticate($identifier, $password)
     {
         global $conn;
-        $stmt = $conn->prepare("SELECT * FROM users WHERE (username = ? OR email = ?) AND is_active = 1 LIMIT 1");
+        $identifier = trim((string)$identifier);
+        if ($identifier === '' || $password === '') return null;
+
+        $candidates = [];
+        $stmt = $conn->prepare("SELECT * FROM users WHERE (username = ? OR email = ?) AND is_active = 1 LIMIT 5");
         $stmt->bind_param('ss', $identifier, $identifier);
         $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) $candidates[] = $row;
         $stmt->close();
-        if (!$row || !password_verify($password, $row['password_hash'])) {
-            return null;
+
+        // Wholesale customers may sign in with their registered name or phone.
+        if (!$candidates) {
+            $normalized = preg_replace('/[^a-z0-9]/i', '', mb_strtolower($identifier));
+            $digits = preg_replace('/\D+/', '', $identifier);
+            $rows = fetch_all("SELECT * FROM users WHERE is_active = 1 ORDER BY user_id");
+            foreach ($rows as $row) {
+                $phone_digits = preg_replace('/\D+/', '', (string)($row['phone'] ?? ''));
+                $username_norm = preg_replace('/[^a-z0-9]/i', '', mb_strtolower((string)$row['username']));
+                $full_name = trim((string)($row['first_name'] ?? '') . ' ' . (string)($row['last_name'] ?? ''));
+                $name_norm = preg_replace('/[^a-z0-9]/i', '', mb_strtolower($full_name));
+
+                $phone_match = false;
+                if ($digits !== '' && strlen($digits) >= 7 && strlen($phone_digits) >= 7) {
+                    $phone_match = substr($digits, -9) === substr($phone_digits, -9);
+                }
+                $name_match = $normalized !== '' && ($normalized === $username_norm || $normalized === $name_norm);
+
+                if ($phone_match || $name_match) $candidates[] = $row;
+            }
         }
+
+        foreach ($candidates as $row) {
+            if (!password_verify($password, (string)$row['password_hash'])) continue;
+            $user = self::hydrate($row);
+            $upd = $conn->prepare("UPDATE users SET last_login = NOW() WHERE user_id = ?");
+            $upd->bind_param('i', $user->user_id);
+            $upd->execute();
+            $upd->close();
+            return $user;
+        }
+        return null;
+    }
+
+    /** Build a User object from a database row. */
+    private static function hydrate($row)
+    {
         $user = new self();
         foreach ($row as $key => $value) {
             if (property_exists($user, $key)) $user->$key = $value;
         }
         $user->loadRoles();
-        $upd = $conn->prepare("UPDATE users SET last_login = NOW() WHERE user_id = ?");
-        $upd->bind_param('i', $user->user_id);
-        $upd->execute();
-        $upd->close();
         return $user;
     }
 

@@ -113,6 +113,16 @@ $cur = tenant_currency();
                 <table class="table">
                     <tbody>
                         <tr><th>Customer number</th><td><?php echo e($customer['customer_number'] ?: '—'); ?></td></tr>
+                        <tr><th>Customer type</th><td>
+                            <span class="badge <?php echo strtolower((string)($customer['customer_type'] ?? 'retail')) === 'wholesale' ? 'badge-purple' : 'badge-secondary'; ?>">
+                                <?php echo strtolower((string)($customer['customer_type'] ?? 'retail')) === 'wholesale' ? 'Wholesale' : 'Retail'; ?>
+                            </span>
+                        </td></tr>
+                        <tr><th>Channel</th><td>
+                            <span class="badge <?php echo strtolower((string)($customer['customer_channel'] ?? 'walk_in')) === 'online' ? 'badge-info' : 'badge-light border'; ?>">
+                                <?php echo strtolower((string)($customer['customer_channel'] ?? 'walk_in')) === 'online' ? 'Online' : 'Walk-in'; ?>
+                            </span>
+                        </td></tr>
                         <tr><th>Company</th><td><?php echo e($customer['company_name'] ?: '—'); ?></td></tr>
                         <tr><th>Email</th><td><?php echo e($customer['email'] ?: '—'); ?></td></tr>
                         <tr><th>Phone</th><td><?php echo e($customer['phone'] ?: '—'); ?></td></tr>

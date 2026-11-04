@@ -279,15 +279,6 @@ $qty_card_icon = $tab === 'godown' ? 'fa-archive' : ($tab === 'stores' ? 'fa-hom
     </div>
     <div class="col-md-6 col-xl-3 mb-3">
         <div class="widget">
-            <div class="widget-icon wi-green"><i class="fa fa-money"></i></div>
-            <div class="widget-info">
-                <div class="widget-value"><?php echo e(money($summary['expected_sales_value'], tenant_currency())); ?></div>
-                <div class="widget-label">Expected Sales Value</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-6 col-xl-3 mb-3">
-        <div class="widget">
             <div class="widget-icon wi-amber"><i class="fa fa-exclamation-triangle"></i></div>
             <div class="widget-info">
                 <div class="widget-value"><?php echo $summary['low']; ?></div>

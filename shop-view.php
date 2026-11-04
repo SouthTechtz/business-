@@ -177,20 +177,8 @@ $cur = tenant_currency();
     </div>
     <div class="col-md-3 col-sm-6 mb-2">
         <div class="card"><div class="card-body">
-            <div class="text-muted small">Capital Valuation</div>
-            <div class="h4 mb-0"><?php echo e(money($capital, $cur)); ?></div>
-        </div></div>
-    </div>
-    <div class="col-md-3 col-sm-6 mb-2">
-        <div class="card"><div class="card-body">
             <div class="text-muted small">Active Transfers</div>
             <div class="h4 mb-0"><?php echo $active_transfers; ?></div>
-        </div></div>
-    </div>
-    <div class="col-md-3 col-sm-6 mb-2">
-        <div class="card"><div class="card-body">
-            <div class="text-muted small">Expected Sales Value</div>
-            <div class="h4 mb-0"><?php echo e(money($expected_sales_value, $cur)); ?></div>
         </div></div>
     </div>
 </div>

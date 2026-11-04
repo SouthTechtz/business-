@@ -16,7 +16,7 @@ $company = $settings['company_name'] ?? 'Business';
 $company_email = $settings['company_email'] ?? '';
 $company_phone = $settings['company_phone'] ?? '';
 $company_address = $settings['company_address'] ?? '';
-$logo_path = (!empty($settings['logo_path']) && file_exists($settings['logo_path'])) ? $settings['logo_path'] : '';
+$logo_path = system_logo_path($current_user->tenant_id);
 $range_label = ($from && $to) ? "$from to $to" : ($from ? "from $from" : ($to ? "up to $to" : 'All time'));
 $today = date('F d, Y H:i');
 

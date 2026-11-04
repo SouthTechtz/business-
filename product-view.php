@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_product_catalogue_access();
 $page_title = 'Product Details';
 
 $id = (int)($_GET['id'] ?? 0);
@@ -58,7 +59,8 @@ $chain = category_chain($product['category_id']);
         <div class="page-sub"><?php echo e($product['name']); ?></div>
     </div>
     <div>
-        <?php if (can('manage_products')): ?>
+        <a href="product-barcode.php?id=<?php echo $id; ?>" class="btn btn-outline-primary"><i class="fa fa-barcode mr-1"></i> Print barcode</a>
+        <?php if (can_manage_product_catalogue()): ?>
             <a href="product-edit.php?id=<?php echo $id; ?>" class="btn btn-outline-primary"><i class="fa fa-pencil mr-1"></i> Edit</a>
         <?php endif; ?>
         <a href="products.php" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back</a>
@@ -92,6 +94,13 @@ $chain = category_chain($product['category_id']);
                         <tr><th>Unit</th><td><?php echo e($product['unit_name'] ?: '—'); ?></td></tr>
                         <tr><th>Barcode</th><td><?php echo e($product['barcode'] ?: '—'); ?></td></tr>
                         <tr><th>SKU</th><td><?php echo e($product['sku'] ?: '—'); ?></td></tr>
+                        <tr><th>Wholesale Price</th><td>
+                            <?php if (product_has_wholesale_price($product)): ?>
+                                <strong><?php echo e(money($product['wholesale_price'], $cur)); ?></strong>
+                                <span class="text-muted">at <?php echo e(format_quantity($product['wholesale_min_qty'])); ?>+ units</span>
+                            <?php else: ?>—<?php endif; ?>
+                        </td></tr>
+                        <tr><th>Wholesale Minimum Qty</th><td><?php echo product_has_wholesale_price($product) ? e(format_quantity($product['wholesale_min_qty'])) : '—'; ?></td></tr>
                         <tr><th>Tax Rate</th><td><?php echo e((float)$product['tax_rate']); ?>%</td></tr>
                         <tr><th>Min Stock Level</th><td><?php echo e((float)$product['min_stock_level']); ?></td></tr>
                         <tr><th>Date Added</th><td><?php echo $product['date_added'] ? e(date('M d, Y', strtotime($product['date_added']))) : '—'; ?></td></tr>

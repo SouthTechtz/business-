@@ -2,7 +2,8 @@
 /** Stage 2 read-only Sales and Invoice reporting calculations. */
 
 function report_invoice_eligibility_sql($invoiceAlias = 'i', $statusAlias = 'ds') {
-    return "({$statusAlias}.name IS NULL OR {$statusAlias}.name <> 'Cancelled' OR ({$invoiceAlias}.total > 0 AND {$invoiceAlias}.returned_amount >= {$invoiceAlias}.total - 0.01))";
+    return "({$statusAlias}.name IS NULL OR {$statusAlias}.name <> 'Cancelled' OR ({$invoiceAlias}.total > 0 AND {$invoiceAlias}.returned_amount >= {$invoiceAlias}.total - 0.01))
+            AND ({$invoiceAlias}.reference IS NULL OR {$invoiceAlias}.reference NOT LIKE 'POS-%')";
 }
 
 function report_pos_sales_summary($from = '', $to = '') {

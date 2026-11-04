@@ -1,26 +1,12 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
-require_permission('manage_products');
+require_product_catalogue_access();
+require_once 'barcode-lib.php';
 $page_title = 'Add Product';
 
 // Opening stock is always received into the active Central Godown.
 ensure_central_godown($current_user->tenant_id);
-
-/** Generate the next product code in the form PRD-### */
-function generateProductCode($conn, $tenantId) {
-    $stmt = $conn->prepare("SELECT code FROM products WHERE tenant_id = ? AND code LIKE 'PRD-%' ORDER BY code DESC LIMIT 1");
-    $stmt->bind_param('i', $tenantId);
-    $stmt->execute();
-    $row = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-    $next = 1;
-    if ($row) {
-        $suffix = (int)substr($row['code'], 4);
-        $next = $suffix + 1;
-    }
-    return 'PRD-' . str_pad($next, 3, '0', STR_PAD_LEFT);
-}
 
 $error = '';
 
@@ -43,6 +29,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'unit_id'          => !empty($_POST['unit_id']) ? (int)$_POST['unit_id'] : null,
         'purchase_price'   => (float)($_POST['purchase_price'] ?? 0),
         'sale_price'       => (float)($_POST['sale_price'] ?? 0),
+        'wholesale_price'  => ($_POST['wholesale_price'] ?? '') !== '' ? max(0, (float)$_POST['wholesale_price']) : null,
+        'wholesale_min_qty'=> ($_POST['wholesale_min_qty'] ?? '') !== '' ? max(0, (float)$_POST['wholesale_min_qty']) : null,
         'tax_rate'         => (float)($_POST['tax_rate'] ?? 0),
         'min_stock_level'  => (float)($_POST['min_stock_level'] ?? 0),
         'date_added'       => !empty($_POST['date_added']) ? $_POST['date_added'] : null,
@@ -52,10 +40,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'variant_color'    => trim($_POST['variant_color'] ?? '') ?: null,
         'created_by'       => $current_user->user_id,
     ];
-    if ($data['code'] === '') $data['code'] = generateProductCode($conn, $current_user->tenant_id);
+    // The barcode is always generated from the manually entered product code.
+    $data['barcode'] = $data['code'];
     $initial_stock = (float)($_POST['initial_stock'] ?? 0);
 
-    if ($data['name'] === '') {
+    $duplicate_code = $data['code'] !== ''
+        ? fetch_one(
+            "SELECT product_id FROM products WHERE tenant_id = ? AND code = ? LIMIT 1",
+            $current_user->tenant_id,
+            $data['code']
+        )
+        : null;
+
+    // Normalise optional wholesale pricing.
+    if (($data['wholesale_price'] ?? 0) <= 0 && ($data['wholesale_min_qty'] ?? 0) <= 0) {
+        $data['wholesale_price'] = null;
+        $data['wholesale_min_qty'] = null;
+    }
+
+    if ($data['code'] === '') {
+        $error = 'Enter a product code. The barcode is generated from this code.';
+    } elseif (mb_strlen($data['code']) > 100) {
+        $error = 'The product code must be 100 characters or fewer.';
+    } elseif (!barcode_is_encodable($data['code'])) {
+        $error = 'The product code can only contain printable letters, numbers and symbols so it can be encoded as a barcode.';
+    } elseif ($duplicate_code) {
+        $error = 'That product code is already used by another product.';
+    } elseif (($data['wholesale_price'] === null) !== ($data['wholesale_min_qty'] === null)) {
+        $error = 'Enter both a wholesale price and the minimum quantity that qualifies for it.';
+    } elseif ($data['name'] === '') {
         $error = 'Product name is required.';
     } elseif ($data['brand'] !== null && !in_array($data['brand'], product_brand_options(), true)) {
         $error = 'Select a valid product brand.';
@@ -144,8 +157,10 @@ require_once 'sidebar.php';
                     <?php echo form_token_field(); ?>
                     <div class="row">
                         <div class="col-md-4 form-group">
-                            <label>Code</label>
-                            <input type="text" name="code" class="form-control" placeholder="Auto-generated (PRD-###)" value="<?php echo e($_POST['code'] ?? ''); ?>">
+                            <label>Code <span class="text-danger">*</span></label>
+                            <input type="text" name="code" id="product-code" class="form-control" required maxlength="100"
+                                   placeholder="e.g. PRD-010" value="<?php echo e($_POST['code'] ?? ''); ?>">
+                            <small class="text-muted">Entered manually. The barcode is generated from this code.</small>
                         </div>
                         <div class="col-md-8 form-group">
                             <label>Product Name <span class="text-danger">*</span></label>
@@ -193,7 +208,10 @@ require_once 'sidebar.php';
                         </div>
                         <div class="col-md-4 form-group">
                             <label>Barcode</label>
-                            <input type="text" name="barcode" class="form-control" value="<?php echo e($_POST['barcode'] ?? ''); ?>">
+                            <input type="text" name="barcode" id="product-barcode" class="form-control" readonly
+                                   value="<?php echo e($_POST['code'] ?? ''); ?>" placeholder="Generated from the code">
+                            <small class="text-muted">Filled automatically from the product code.</small>
+                            <div id="barcode-preview" class="mt-2"></div>
                         </div>
                         <div class="col-md-4 form-group">
                             <label>SKU</label>
@@ -206,6 +224,18 @@ require_once 'sidebar.php';
                         <div class="col-md-4 form-group">
                             <label>Sale Price</label>
                             <input type="number" name="sale_price" class="form-control" step="1" min="0" value="<?php echo e($_POST['sale_price'] ?? '0'); ?>">
+                        </div>
+                        <div class="col-md-4 form-group">
+                            <label>Wholesale Price</label>
+                            <input type="number" name="wholesale_price" class="form-control" step="1" min="0"
+                                   value="<?php echo e($_POST['wholesale_price'] ?? ''); ?>" placeholder="Optional">
+                            <small class="text-muted">Price per unit for wholesale orders.</small>
+                        </div>
+                        <div class="col-md-4 form-group">
+                            <label>Wholesale Minimum Qty</label>
+                            <input type="number" name="wholesale_min_qty" class="form-control" step="1" min="0"
+                                   value="<?php echo e($_POST['wholesale_min_qty'] ?? ''); ?>" placeholder="Optional">
+                            <small class="text-muted">Quantity that qualifies for the wholesale price.</small>
                         </div>
                         <div class="col-md-4 form-group">
                             <label>Tax Rate (%)</label>
@@ -296,6 +326,34 @@ require_once 'sidebar.php';
         });
         $('#catSubSub').on('change', syncLeaf);
     });
+
+    // Manual product code drives the barcode value and live preview.
+    (function () {
+        var codeInput = document.getElementById('product-code');
+        var barcodeInput = document.getElementById('product-barcode');
+        var preview = document.getElementById('barcode-preview');
+        if (!codeInput || !barcodeInput) return;
+
+        function syncBarcode() {
+            var value = codeInput.value.trim();
+            barcodeInput.value = value;
+            if (!preview) return;
+            if (value === '') {
+                preview.innerHTML = '<span class="text-muted small">Barcode preview appears here.</span>';
+                return;
+            }
+            var img = document.createElement('img');
+            img.alt = 'Barcode preview';
+            img.src = 'barcode-image.php?code=' + encodeURIComponent(value);
+            img.style.maxWidth = '100%';
+            img.style.height = 'auto';
+            preview.innerHTML = '';
+            preview.appendChild(img);
+        }
+
+        codeInput.addEventListener('input', syncBarcode);
+        syncBarcode();
+    })();
 </script>
 
 <?php require_once 'footer.php'; ?>

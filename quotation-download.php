@@ -84,6 +84,12 @@ function pdf_line($x1, $top, $x2, $gray = 0.82): string
         . pdf_num($x2) . ' ' . pdf_num($y) . ' l S' . "\n";
 }
 
+function pdf_image($x, $top, $w, $h): string
+{
+    $y = 842 - $top - $h;
+    return 'q ' . pdf_num($w) . ' 0 0 ' . pdf_num($h) . ' ' . pdf_num($x) . ' ' . pdf_num($y) . " cm /Logo Do Q\n";
+}
+
 function pdf_wrap(string $text, int $max_chars = 92): array
 {
     $text = str_replace(["\r\n", "\r"], "\n", $text);
@@ -110,7 +116,7 @@ function pdf_wrap(string $text, int $max_chars = 92): array
     return $out;
 }
 
-function pdf_document(array $pages, string $title, string $producer): string
+function pdf_document(array $pages, string $title, string $producer, ?string $logoData = null, int $logoW = 0, int $logoH = 0): string
 {
     $count = count($pages);
     $objects = [];
@@ -123,16 +129,28 @@ function pdf_document(array $pages, string $title, string $producer): string
     $objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
     $objects[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
 
+    $image_obj = $logoData !== null ? (5 + $count * 2) : null;
+    $info_obj = 5 + $count * 2 + ($logoData !== null ? 1 : 0);
+
     for ($i = 0; $i < $count; $i++) {
         $page_obj = 5 + $i * 2;
         $content_obj = 6 + $i * 2;
+        $resources = '/Font << /F1 3 0 R /F2 4 0 R >>';
+        if ($image_obj !== null) {
+            $resources .= ' /XObject << /Logo ' . $image_obj . ' 0 R >>';
+        }
         $objects[$page_obj] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] '
-            . '/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ' . $content_obj . ' 0 R >>';
+            . '/Resources << ' . $resources . ' >> /Contents ' . $content_obj . ' 0 R >>';
         $stream = $pages[$i];
         $objects[$content_obj] = '<< /Length ' . strlen($stream) . " >>\nstream\n" . $stream . 'endstream';
     }
 
-    $info_obj = 5 + $count * 2;
+    if ($logoData !== null) {
+        $objects[$image_obj] = '<< /Type /XObject /Subtype /Image /Width ' . $logoW . ' /Height ' . $logoH
+            . ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen($logoData)
+            . " >>\nstream\n" . $logoData . "\nendstream";
+    }
+
     $objects[$info_obj] = '<< /Title (' . pdf_escape($title) . ') /Producer (' . pdf_escape($producer) . ') >>';
     ksort($objects);
 
@@ -163,14 +181,51 @@ if (!$chunks) {
 $last_page_index = count($chunks) - 1;
 $pages = [];
 
+// Prepare the logo for PDF embedding (converted to JPEG bytes).
+$logo_data = null;
+$logo_w = 0;
+$logo_h = 0;
+$logo_draw_w = 0;
+$logo_draw_h = 0;
+$logo_file = system_logo_path($tenant_id);
+if ($logo_file !== '') {
+    $logo_abs = __DIR__ . '/' . ltrim($logo_file, '/');
+    $image_info = @getimagesize($logo_abs);
+    if ($image_info) {
+        $raw = (string)file_get_contents($logo_abs);
+        if ($image_info[2] === IMAGETYPE_JPEG) {
+            $logo_data = $raw;
+        } elseif (function_exists('imagecreatefromstring')) {
+            $im = @imagecreatefromstring($raw);
+            if ($im) {
+                ob_start();
+                imagejpeg($im, null, 88);
+                $logo_data = ob_get_clean();
+                imagedestroy($im);
+            }
+        }
+        if ($logo_data !== null) {
+            $logo_w = (int)$image_info[0];
+            $logo_h = (int)$image_info[1];
+            $scale = min(72 / max(1, $logo_w), 52 / max(1, $logo_h));
+            $logo_draw_w = $logo_w * $scale;
+            $logo_draw_h = $logo_h * $scale;
+        }
+    }
+}
+$header_x = $logo_data !== null ? 140 : 50;
+
 foreach ($chunks as $page_index => $chunk) {
     $c = '';
 
     if ($page_index === 0) {
-        $c .= pdf_text(50, 55, $company_name, 16, true);
-        if ($company_address !== '') $c .= pdf_text(50, 72, $company_address, 9);
+        if ($logo_data !== null) {
+            $c .= pdf_image(50, 28, $logo_draw_w, $logo_draw_h);
+        }
+        $c .= pdf_text($header_x, 55, $company_name, 16, true);
+        if ($company_address !== '') $c .= pdf_text($header_x, 72, $company_address, 9);
         $contact_line = trim($company_email . '  ' . $company_phone);
-        if ($contact_line !== '') $c .= pdf_text(50, 86, $contact_line, 9);
+        if ($contact_line !== '') $c .= pdf_text($header_x, 86, $contact_line, 9);
         $c .= pdf_text(545, 55, 'QUOTATION', 18, true, 'right');
         $c .= pdf_text(545, 78, $quotation['quotation_number'], 12, true, 'right');
         $c .= pdf_text(545, 94, 'Issue Date: ' . date('M d, Y', strtotime($quotation['issue_date'])), 9, false, 'right');
@@ -258,7 +313,7 @@ foreach ($chunks as $page_index => $chunk) {
     $pages[] = $c;
 }
 
-$pdf = pdf_document($pages, 'Quotation ' . $quotation['quotation_number'], $company_name);
+$pdf = pdf_document($pages, 'Quotation ' . $quotation['quotation_number'], $company_name, $logo_data, $logo_w, $logo_h);
 
 while (ob_get_level() > 0) {
     ob_end_clean();

@@ -36,7 +36,6 @@ if (!tenant_admin_scope() || !can('view_dashboard')) {
         'manage_invoices' => 'invoices.php',
         'manage_receipts' => 'receipts.php',
         'manage_contacts' => 'customers.php',
-        'manage_products' => 'products.php',
     ] as $perm => $page) {
         if (can($perm)) {
             redirect($page);
@@ -53,26 +52,82 @@ $order_wh_scope = $scope_ids === null ? '' : ($scope_ids ? " AND o.warehouse_id 
 $stock_wh_scope = $scope_ids === null ? '' : ($scope_ids ? " AND s.warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . ")" : " AND 1 = 0");
 
 $counts = [
-    'users'     => 0,
-    'customers' => 0,
-    'products'  => 0,
-    'invoices'  => 0,
+    'users'             => 0,
+    'retail_customers'  => 0,
+    'wholesale_customers'=> 0,
+    'products'          => 0,
+    'invoices'          => 0,
+    'orders'            => 0,
+    'leads'             => 0,
+    'pending_requests'  => 0,
 ];
 $queries = [
-    'users'     => "SELECT COUNT(*) c FROM users WHERE tenant_id = ?",
-    'customers' => "SELECT COUNT(*) c FROM contacts WHERE tenant_id = ? AND is_customer = 1",
-    'products'  => "SELECT COUNT(*) c FROM products WHERE tenant_id = ?",
-    'invoices'  => "SELECT COUNT(*) c FROM invoices WHERE tenant_id = ?{$wh_scope}",
+    'users'              => "SELECT COUNT(*) c FROM users u
+                              WHERE u.tenant_id = ? AND u.is_active = 1
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM user_roles wur
+                                    JOIN roles wr ON wr.role_id = wur.role_id
+                                    WHERE wur.user_id = u.user_id AND wur.tenant_id = u.tenant_id
+                                      AND LOWER(wr.name) = 'wholesaler'
+                                )",
+    'retail_customers'   => "SELECT COUNT(*) c FROM contacts WHERE tenant_id = ? AND is_customer = 1 AND customer_type = 'retail'",
+    'wholesale_customers'=> "SELECT COUNT(*) c FROM wholesaler_accounts WHERE tenant_id = ? AND status = 'active'",
+    'products'           => "SELECT COUNT(*) c FROM products WHERE tenant_id = ? AND is_active = 1",
+    'invoices'           => "SELECT COUNT(*) c FROM invoices WHERE tenant_id = ?{$wh_scope}",
+    'orders'             => "SELECT COUNT(*) c FROM orders WHERE tenant_id = ?",
+    'leads'              => "SELECT COUNT(*) c FROM leads WHERE tenant_id = ? AND status NOT IN ('lost')",
+    'pending_requests'   => "SELECT COUNT(*) c FROM storefront_lead_requests r
+                              JOIN leads l ON l.lead_id = r.lead_id AND l.tenant_id = r.tenant_id
+                             WHERE r.tenant_id = ? AND r.converted_order_id IS NULL
+                               AND l.status NOT IN ('converted', 'lost')",
 ];
 foreach ($queries as $key => $sql) {
     $row = fetch_one($sql, $current_user->tenant_id);
     $counts[$key] = $row ? (int)$row['c'] : 0;
 }
 
-// Total sales this month
+// Inventory valuation across all tenant locations.
+$valuation = fetch_one(
+    "SELECT COALESCE(SUM(s.quantity), 0) units,
+            COALESCE(SUM(s.quantity * p.purchase_price), 0) capital,
+            COALESCE(SUM(s.quantity * p.sale_price), 0) expected_sales
+       FROM inventory_stock s
+       JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
+      WHERE s.tenant_id = ?",
+    $current_user->tenant_id
+) ?: [];
+$stock_units = (float)($valuation['units'] ?? 0);
+$capital_valuation = (float)($valuation['capital'] ?? 0);
+$expected_sales_value = (float)($valuation['expected_sales'] ?? 0);
+
+// Low-stock count across shop stock (all pages use the same definition).
+$low_stock_total_row = fetch_one(
+    "SELECT COUNT(*) c FROM (
+        SELECT p.product_id,
+               COALESCE((SELECT SUM(s.quantity)
+                           FROM inventory_stock s
+                           JOIN warehouses sw ON sw.warehouse_id = s.warehouse_id AND sw.tenant_id = s.tenant_id
+                          WHERE s.product_id = p.product_id AND s.tenant_id = p.tenant_id
+                            AND sw.is_godown = 0), 0) total_stock,
+               p.min_stock_level
+          FROM products p
+         WHERE p.tenant_id = ? AND p.is_service = 0
+     ) x WHERE x.total_stock <= x.min_stock_level",
+    $current_user->tenant_id
+);
+$low_stock_total = (int)($low_stock_total_row['c'] ?? 0);
+
+// Total sales this month: POS sales + money paid on online/wholesale orders.
 $row = fetch_one(
-    "SELECT COALESCE(SUM(total), 0) t FROM pos_orders
-     WHERE tenant_id = ? AND status = 'completed' AND MONTH(order_date) = MONTH(NOW()) AND YEAR(order_date) = YEAR(NOW()){$wh_scope}",
+    "SELECT (
+        COALESCE((SELECT SUM(total) FROM pos_orders
+                   WHERE tenant_id = ? AND status = 'completed'
+                     AND MONTH(order_date) = MONTH(NOW()) AND YEAR(order_date) = YEAR(NOW()){$wh_scope}), 0)
+      + COALESCE((SELECT SUM(Amount_paid) FROM orders
+                   WHERE tenant_id = ? AND status NOT IN ('cancelled', 'rejected')
+                     AND MONTH(created_at) = MONTH(NOW()) AND YEAR(created_at) = YEAR(NOW())), 0)
+     ) AS t",
+    $current_user->tenant_id,
     $current_user->tenant_id
 );
 $month_sales = $row ? (float)$row['t'] : 0;
@@ -136,11 +191,31 @@ $recent_sales = fetch_all(
 
 // Recent customers
 $recent_customers = fetch_all(
-    "SELECT contact_id, first_name, last_name, email
+    "SELECT contact_id, first_name, last_name, email, customer_type, customer_channel
      FROM contacts WHERE tenant_id = ? AND is_customer = 1
      ORDER BY created_at DESC LIMIT 5",
     $current_user->tenant_id
 );
+
+// Recent storefront/order records
+$recent_orders = fetch_all(
+    "SELECT order_id, order_number, customer_name, status, total, currency_code, created_at
+       FROM orders WHERE tenant_id = ?
+      ORDER BY created_at DESC, order_id DESC LIMIT 5",
+    $current_user->tenant_id
+);
+
+// Recent wholesale accounts
+$recent_wholesalers = db_table_exists('wholesaler_accounts')
+    ? fetch_all(
+        "SELECT w.business_name, w.contact_name, w.status, w.created_at, c.customer_channel
+           FROM wholesaler_accounts w
+           LEFT JOIN contacts c ON c.contact_id = w.contact_id AND c.tenant_id = w.tenant_id
+          WHERE w.tenant_id = ?
+          ORDER BY w.created_at DESC, w.wholesaler_id DESC LIMIT 5",
+        $current_user->tenant_id
+    )
+    : [];
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
@@ -179,28 +254,71 @@ require_once 'sidebar.php';
         <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
             <div class="widget-icon wi-green"><i class="fa fa-address-book"></i></div>
             <div class="widget-info">
-                <div class="widget-value"><?php echo $counts['customers']; ?></div>
-                <div class="widget-label">Customers</div>
+                <div class="widget-value"><?php echo (int)$counts['retail_customers']; ?></div>
+                <div class="widget-label">Retail Customers</div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
     </div>
-    <?php $card_link = can('manage_products') ? 'products.php' : ''; ?>
+    <?php $card_link = 'customers.php?tab=wholesalers'; ?>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <a href="<?php echo e($card_link); ?>" class="widget widget-link">
+            <div class="widget-icon wi-purple"><i class="fa fa-briefcase"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo (int)$counts['wholesale_customers']; ?></div>
+                <div class="widget-label">Wholesale Customers</div>
+            </div>
+        </a>
+    </div>
+    <?php $card_link = can_manage_product_catalogue() ? 'products.php' : ''; ?>
     <div class="col-md-6 col-xl-3 mb-3">
         <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
             <div class="widget-icon wi-amber"><i class="fa fa-cube"></i></div>
             <div class="widget-info">
-                <div class="widget-value"><?php echo $counts['products']; ?></div>
-                <div class="widget-label">Products</div>
+                <div class="widget-value"><?php echo (int)$counts['products']; ?></div>
+                <div class="widget-label">Active Products</div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
     </div>
+</div>
+
+<div class="row">
     <?php $card_link = can('manage_invoices') ? 'invoices.php' : ''; ?>
     <div class="col-md-6 col-xl-3 mb-3">
         <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
             <div class="widget-icon wi-red"><i class="fa fa-file-text"></i></div>
             <div class="widget-info">
-                <div class="widget-value"><?php echo $counts['invoices']; ?></div>
+                <div class="widget-value"><?php echo (int)$counts['invoices']; ?></div>
                 <div class="widget-label">Invoices</div>
+            </div>
+        <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
+    </div>
+    <?php $card_link = can('manage_orders') ? 'orders.php' : ''; ?>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
+            <div class="widget-icon wi-blue"><i class="fa fa-list-alt"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo (int)$counts['orders']; ?></div>
+                <div class="widget-label">Total Orders</div>
+            </div>
+        <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
+    </div>
+    <?php $card_link = can('manage_leads') ? 'leads.php' : ''; ?>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
+            <div class="widget-icon wi-cyan"><i class="fa fa-bullseye"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo (int)$counts['leads']; ?></div>
+                <div class="widget-label">Leads</div>
+            </div>
+        <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
+    </div>
+    <?php $card_link = can('manage_leads') ? 'leads.php' : ''; ?>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
+            <div class="widget-icon wi-amber"><i class="fa fa-inbox"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo (int)$counts['pending_requests']; ?></div>
+                <div class="widget-label">Pending Order Requests</div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
     </div>
@@ -210,20 +328,38 @@ require_once 'sidebar.php';
     <?php $card_link = can('manage_pos') ? 'sales.php' : ''; ?>
     <div class="col-md-6 col-xl-3 mb-3">
         <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
-            <div class="widget-icon wi-purple"><i class="fa fa-money"></i></div>
+            <div class="widget-icon wi-green"><i class="fa fa-money"></i></div>
             <div class="widget-info">
                 <div class="widget-value" style="font-size:18px;"><?php echo e(money($month_sales, $cur)); ?></div>
                 <div class="widget-label">Sales this month</div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
     </div>
-    <?php $card_link = can('manage_inventory') ? 'inventory.php' : ''; ?>
     <div class="col-md-6 col-xl-3 mb-3">
-        <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
-            <div class="widget-icon wi-cyan"><i class="fa fa-exclamation-triangle"></i></div>
+        <div class="widget">
+            <div class="widget-icon wi-purple"><i class="fa fa-bank"></i></div>
             <div class="widget-info">
-                <div class="widget-value"><?php echo count($low_stock); ?></div>
-                <div class="widget-label">Low stock items</div>
+                <div class="widget-value" style="font-size:18px;"><?php echo e(money($capital_valuation, $cur)); ?></div>
+                <div class="widget-label">Capital Valuation</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <div class="widget">
+            <div class="widget-icon wi-cyan"><i class="fa fa-line-chart"></i></div>
+            <div class="widget-info">
+                <div class="widget-value" style="font-size:18px;"><?php echo e(money($expected_sales_value, $cur)); ?></div>
+                <div class="widget-label">Expected Sales Value</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3 mb-3">
+        <?php $card_link = can('manage_inventory') ? 'inventory.php' : ''; ?>
+        <?php if ($card_link): ?><a href="<?php echo e($card_link); ?>" class="widget widget-link"><?php else: ?><div class="widget"><?php endif; ?>
+            <div class="widget-icon wi-red"><i class="fa fa-exclamation-triangle"></i></div>
+            <div class="widget-info">
+                <div class="widget-value"><?php echo (int)$low_stock_total; ?></div>
+                <div class="widget-label">Low Stock Items</div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
     </div>
@@ -297,6 +433,64 @@ require_once 'sidebar.php';
     </div>
 </div>
 
+<div class="row">
+    <div class="col-lg-8 mb-3">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title">Recent Orders</h5>
+                <?php if (can('manage_orders')): ?><a href="orders.php" class="btn btn-sm btn-outline-primary">View all</a><?php endif; ?>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr><th>Order #</th><th>Customer</th><th>Status</th><th>Date</th><th class="text-right">Total</th></tr>
+                        </thead>
+                        <tbody>
+                        <?php if (!$recent_orders): ?>
+                            <tr><td colspan="5" class="text-center text-muted py-4">No orders yet.</td></tr>
+                        <?php else: foreach ($recent_orders as $row): ?>
+                            <tr>
+                                <td><?php echo e($row['order_number']); ?></td>
+                                <td><?php echo e($row['customer_name']); ?></td>
+                                <td><span class="badge badge-secondary"><?php echo e(ucfirst((string)$row['status'])); ?></span></td>
+                                <td><?php echo e(date('M d, Y', strtotime($row['created_at']))); ?></td>
+                                <td class="text-right font-weight-semibold"><?php echo e(money($row['total'], $row['currency_code'] ?: $cur)); ?></td>
+                            </tr>
+                        <?php endforeach; endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4 mb-3">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title">Recent Wholesale Accounts</h5>
+                <a href="customers.php?tab=wholesalers" class="btn btn-sm btn-outline-primary">View all</a>
+            </div>
+            <div class="card-body p-3">
+                <?php if (!$recent_wholesalers): ?>
+                    <div class="text-center text-muted py-4">No wholesale accounts yet.</div>
+                <?php else: foreach ($recent_wholesalers as $row): ?>
+                    <div class="d-flex align-items-start mb-3">
+                        <span class="avatar mr-3" style="background:var(--purple)"><?php echo e(strtoupper(substr($row['business_name'] ?? '?', 0, 1))); ?></span>
+                        <div class="min-w-0">
+                            <div class="font-weight-semibold"><?php echo e($row['business_name']); ?></div>
+                            <small class="text-muted">
+                                <?php echo e(date('M d, Y', strtotime($row['created_at']))); ?> &middot;
+                                <?php echo e(strtolower((string)$row['status']) === 'active' ? 'Active' : 'Suspended'); ?>
+                                &middot; <?php echo e(strtolower((string)($row['customer_channel'] ?? '')) === 'online' ? 'Online' : 'Walk-in'); ?>
+                            </small>
+                        </div>
+                    </div>
+                <?php endforeach; endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
+
 <?php if ($low_stock && can('manage_inventory')): ?>
 <div class="row">
     <div class="col-lg-6">
@@ -325,12 +519,12 @@ const salesChart = new Chart(document.getElementById('salesChart'), {
         datasets: [{
             label: 'Sales (<?php echo e($cur); ?>)',
             data: <?php echo json_encode($sales_data); ?>,
-            borderColor: '#4f46e5',
-            backgroundColor: 'rgba(79, 70, 229, .12)',
+            borderColor: '#BE2430',
+            backgroundColor: 'rgba(190, 36, 48, .12)',
             fill: true,
             tension: .4,
             pointRadius: 4,
-            pointBackgroundColor: '#4f46e5'
+            pointBackgroundColor: '#BE2430'
         }]
     },
     options: {
@@ -351,7 +545,7 @@ new Chart(document.getElementById('statusChart'), {
         labels: <?php echo json_encode($status_labels); ?>,
         datasets: [{
             data: <?php echo json_encode($status_data); ?>,
-            backgroundColor: ['#4f46e5', '#0ea5e9', '#f59e0b', '#10b981', '#ef4444', '#94a3b8'],
+            backgroundColor: ['#BE2430', '#0ea5e9', '#f59e0b', '#10b981', '#ef4444', '#94a3b8'],
             hoverOffset: 10
         }]
     },

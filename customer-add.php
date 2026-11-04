@@ -11,6 +11,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone       = trim($_POST['phone'] ?? '');
     $location    = trim($_POST['location'] ?? '');
     $description = trim($_POST['description'] ?? '');
+    $customer_type = 'retail';
+    $customer_channel = strtolower(trim((string)($_POST['customer_channel'] ?? 'walk_in')));
+    if (!array_key_exists($customer_channel, customer_channel_options())) $customer_channel = 'walk_in';
 
     if ($name === '') {
         $error = 'Name is required.';
@@ -20,14 +23,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Location is required.';
     } else {
         $data = [
-            'tenant_id'       => $current_user->tenant_id,
-            'contact_type_id' => 1,
-            'first_name'      => $name,
-            'phone'           => $phone,
-            'address'         => $location,
-            'notes'           => $description,
-            'is_customer'     => 1,
-            'is_active'       => 1,
+            'tenant_id'        => $current_user->tenant_id,
+            'contact_type_id'  => 1,
+            'customer_type'    => $customer_type,
+            'customer_channel' => $customer_channel,
+            'first_name'       => $name,
+            'phone'            => $phone,
+            'address'          => $location,
+            'notes'            => $description,
+            'is_customer'      => 1,
+            'is_active'        => 1,
         ];
         $id = db_insert('contacts', $data);
         if (!$id) {
@@ -70,6 +75,18 @@ require_once 'sidebar.php';
                         <div class="col-md-12 form-group">
                             <label>Location <span class="text-danger">*</span></label>
                             <input type="text" name="location" class="form-control" value="<?php echo e($_POST['location'] ?? ''); ?>" required>
+                        </div>
+                        <div class="col-md-12 form-group">
+                            <label>Customer Channel <span class="text-danger">*</span></label>
+                            <select name="customer_channel" class="form-control" required>
+                                <?php foreach (customer_channel_options() as $channel_key => $channel_label): ?>
+                                    <option value="<?php echo e($channel_key); ?>" <?php echo ($_POST['customer_channel'] ?? 'walk_in') === $channel_key ? 'selected' : ''; ?>><?php echo e($channel_label); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="form-text text-muted">
+                                New customers are saved as <strong>Retail</strong>. Register wholesale customers from
+                                <strong>Customers &rarr; Wholesalers</strong>.
+                            </small>
                         </div>
                         <div class="col-md-12 form-group">
                             <label>Description <small class="text-muted">(optional)</small></label>

@@ -90,7 +90,7 @@ $return_token = bin2hex(random_bytes(16));
             <input type="hidden" name="source_id" value="<?php echo (int)($sale_type === "pos" ? $sale["order_id"] : $sale["invoice_id"]); ?>">
             <input type="hidden" name="submission_token" value="<?php echo e($return_token); ?>">
             <table class="table table-sm">
-                <thead><tr><th>Product</th><th>Qty Sold</th><th>Already Returned</th><th>Returnable</th><th>Unit Price</th><th>Return Qty</th><th>Resellable Qty</th></tr></thead>
+                <thead><tr><th>Product</th><th>Qty Sold</th><th>Already Returned</th><th>Returnable</th><th>Unit Price</th><th>Return Qty</th></tr></thead>
                 <tbody>
                 <?php foreach ($sale_items as $it): ?>
                     <?php
@@ -116,12 +116,11 @@ $return_token = bin2hex(random_bytes(16));
                         <td><?php echo e($rem); ?></td>
                         <td><?php echo e(money($price, tenant_currency())); ?></td>
                         <td><input type="number" name="quantity[]" class="form-control form-control-sm" min="0" max="<?php echo e($rem); ?>" step="0.01" value="0"><input type="hidden" name="product_id[]" value="<?php echo $pid; ?>"></td>
-                        <td><input type="number" name="resale_qty[]" class="form-control form-control-sm" min="0" max="<?php echo e($rem); ?>" step="0.01" value="0"></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
-            <small class="text-muted d-block mb-2">Resellable quantity is the portion physically returned and accepted for resale. It may not exceed the return quantity.</small>
+            <small class="text-muted d-block mb-2">Returned quantities are recorded as returned stock. They are not added back to sellable inventory, and the refund amount reduces sales.</small>
             <button type="submit" class="btn btn-primary"><i class="fa fa-undo mr-1"></i> Process Return</button>
         </form>
     </div>

@@ -72,6 +72,52 @@ function system_title($tenant_id = null) {
     return $title;
 }
 
+/** Path to the uploaded system logo, or the bundled fallback. Empty if none. */
+function system_logo_path($tenant_id = null) {
+    global $current_user;
+    static $logos = [];
+
+    if ($tenant_id === null) {
+        if (isset($current_user->tenant_id)) {
+            $tenant_id = (int)$current_user->tenant_id;
+        } elseif (!empty($_SESSION['tenant_id'])) {
+            $tenant_id = (int)$_SESSION['tenant_id'];
+        }
+    }
+
+    $cache_key = $tenant_id !== null ? (int)$tenant_id : 0;
+    if (array_key_exists($cache_key, $logos)) return $logos[$cache_key];
+
+    $candidates = [];
+    if ($cache_key > 0) {
+        $row = fetch_one("SELECT logo_path FROM system_settings WHERE tenant_id = ? LIMIT 1", $cache_key);
+        if ($row && !empty($row['logo_path'])) $candidates[] = (string)$row['logo_path'];
+    } else {
+        $row = fetch_one(
+            "SELECT ss.logo_path FROM tenants t
+               LEFT JOIN system_settings ss ON ss.tenant_id = t.tenant_id
+              ORDER BY (ss.logo_path IS NULL OR TRIM(ss.logo_path) = '') ASC, t.tenant_id ASC
+              LIMIT 1"
+        );
+        if ($row && !empty($row['logo_path'])) $candidates[] = (string)$row['logo_path'];
+    }
+    $candidates[] = 'assets/images/logo.png';
+
+    $logo = '';
+    foreach ($candidates as $candidate) {
+        $candidate = str_replace('\\', '/', trim($candidate));
+        if ($candidate === '' || strpos($candidate, '..') !== false || preg_match('#^https?://#i', $candidate)) {
+            continue;
+        }
+        if (file_exists(__DIR__ . '/' . ltrim($candidate, '/'))) {
+            $logo = ltrim($candidate, '/');
+            break;
+        }
+    }
+    $logos[$cache_key] = $logo;
+    return $logo;
+}
+
 /** Whether the business charges tax (VAT) on sales and invoices (cached per request). */
 function tax_enabled() {
     global $conn, $current_user;
@@ -219,6 +265,12 @@ function godown_manager_page_allowed($page) {
         'dashboard.php',
         'godown.php',
         'ajax-godown-product-search.php',
+        'products.php',
+        'product-add.php',
+        'product-edit.php',
+        'product-view.php',
+        'product-barcode.php',
+        'barcode-image.php',
         'inventory.php',
         'expenses.php',
         'export-expenses.php',
@@ -364,6 +416,197 @@ function is_godown_manager() {
         if (strtolower(trim((string)$role)) === 'godown manager') return true;
     }
     return false;
+}
+
+/** True when the current account is the system administrator role. */
+function is_system_administrator() {
+    global $current_user;
+    if (!$current_user) return false;
+    if (is_godown_manager()) return false;
+    if (is_array($current_user->roles)) {
+        foreach ($current_user->roles as $role) {
+            if (strtolower(trim((string)$role)) === 'administrator') return true;
+        }
+    }
+    // Fall back to a tenant-wide account when the administrator role is renamed.
+    return tenant_admin_scope();
+}
+
+/**
+ * Product catalogue (Products tab) is limited to the system administrator
+ * and the Godown Manager. Shop and store managers must not see or use it.
+ */
+function can_manage_product_catalogue() {
+    return is_system_administrator() || is_godown_manager();
+}
+
+/** Guard helper: 403 unless the current user may manage the product catalogue. */
+function require_product_catalogue_access() {
+    if (!can_manage_product_catalogue()) {
+        http_response_code(403);
+        die('Only the system administrator and the Godown Manager can access products.');
+    }
+}
+
+/** True when the account is a wholesale customer (portal role). */
+function is_wholesaler($user = null) {
+    global $current_user;
+    if ($user === null) $user = $current_user;
+    if (!$user || !is_array($user->roles)) return false;
+    foreach ($user->roles as $role) {
+        if (strtolower(trim((string)$role)) === 'wholesaler') return true;
+    }
+    return false;
+}
+
+/** Guard helper for system-administrator-only management screens. */
+function require_system_administrator() {
+    if (!is_system_administrator()) {
+        http_response_code(403);
+        die('Only the system administrator can access this page.');
+    }
+}
+
+/** Return the tenant's Wholesaler role id, creating the role when missing. */
+function ensure_wholesaler_role($tenant_id) {
+    global $conn;
+    $tenant_id = (int)$tenant_id;
+    $existing = fetch_one(
+        "SELECT role_id FROM roles WHERE tenant_id = ? AND LOWER(name) = 'wholesaler' LIMIT 1",
+        $tenant_id
+    );
+    if ($existing) return (int)$existing['role_id'];
+
+    $stmt = $conn->prepare("INSERT INTO roles (tenant_id, name, description) VALUES (?, 'Wholesaler', 'Wholesale customer portal access')");
+    if (!$stmt) throw new RuntimeException($conn->error);
+    $stmt->bind_param('i', $tenant_id);
+    if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+    $role_id = (int)$stmt->insert_id;
+    $stmt->close();
+    return $role_id;
+}
+
+/** The wholesaler profile attached to a user account, or null. */
+function wholesaler_account_for_user($user_id, $tenant_id = null) {
+    global $current_user;
+    $user_id = (int)$user_id;
+    if ($tenant_id === null && $current_user) $tenant_id = (int)$current_user->tenant_id;
+    $sql = "SELECT w.*, u.username, u.is_active AS user_active, u.last_login
+              FROM wholesaler_accounts w
+              JOIN users u ON u.user_id = w.user_id
+             WHERE w.user_id = ?";
+    $params = [$user_id];
+    if ($tenant_id !== null) {
+        $sql .= " AND w.tenant_id = ?";
+        $params[] = (int)$tenant_id;
+    }
+    return fetch_one($sql . " LIMIT 1", ...$params);
+}
+
+/** One wholesaler profile by id, scoped to a tenant. */
+function wholesaler_account_by_id($wholesaler_id, $tenant_id) {
+    return fetch_one(
+        "SELECT w.*, u.username, u.is_active AS user_active, u.last_login, u.email AS user_email, u.phone AS user_phone,
+                c.customer_channel, c.customer_number
+           FROM wholesaler_accounts w
+           JOIN users u ON u.user_id = w.user_id
+           LEFT JOIN contacts c ON c.contact_id = w.contact_id AND c.tenant_id = w.tenant_id
+          WHERE w.wholesaler_id = ? AND w.tenant_id = ?
+          LIMIT 1",
+        (int)$wholesaler_id,
+        (int)$tenant_id
+    );
+}
+
+/** Build a unique username for a new wholesale account from their name. */
+function wholesaler_unique_username($tenant_id, $name, $email = '') {
+    $base = strtolower(preg_replace('/[^a-z0-9]+/i', '', (string)$name));
+    if ($base === '') {
+        $email = trim((string)$email);
+        if ($email !== '' && strpos($email, '@') !== false) {
+            $base = strtolower(preg_replace('/[^a-z0-9]+/i', '', (string)substr($email, 0, strpos($email, '@'))));
+        }
+    }
+    if ($base === '') $base = 'wholesaler';
+
+    $candidate = $base;
+    $suffix = 1;
+    while (fetch_one("SELECT user_id FROM users WHERE tenant_id = ? AND username = ? LIMIT 1", (int)$tenant_id, $candidate)) {
+        $suffix++;
+        $candidate = $base . $suffix;
+    }
+    return $candidate;
+}
+
+/** Customer segmentation options. */
+function customer_type_options() {
+    return ['retail' => 'Retail customer', 'wholesale' => 'Wholesale customer'];
+}
+
+/** Whether a table exists in the current database. */
+function db_table_exists($table) {
+    return (bool)fetch_one(
+        "SELECT 1 FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1",
+        (string)$table
+    );
+}
+
+/** Retail channel options. Channel applies to both retail and wholesale customers. */
+function customer_channel_options() {
+    return ['walk_in' => 'Walk-in customer', 'online' => 'Online customer'];
+}
+
+/** Human label for a stored customer type. */
+function customer_type_label($type) {
+    $options = customer_type_options();
+    $type = strtolower(trim((string)$type));
+    return $options[$type] ?? 'Retail customer';
+}
+
+/** Human label for a stored retail channel. */
+function customer_channel_label($channel) {
+    $options = customer_channel_options();
+    $channel = strtolower(trim((string)$channel));
+    return $options[$channel] ?? 'Walk-in customer';
+}
+
+/** Fetch the segmentation fields for one customer. */
+function customer_segment($contact_id, $tenant_id) {
+    return fetch_one(
+        "SELECT contact_id, customer_type, customer_channel
+           FROM contacts
+          WHERE contact_id = ? AND tenant_id = ?
+          LIMIT 1",
+        (int)$contact_id,
+        (int)$tenant_id
+    );
+}
+
+/** Whether a contact is a wholesale customer. */
+function contact_is_wholesale($contact_id, $tenant_id) {
+    $row = customer_segment($contact_id, $tenant_id);
+    return $row && strtolower((string)$row['customer_type']) === 'wholesale';
+}
+
+/** Whether a product has a usable wholesale price and threshold. */
+function product_has_wholesale_price($product) {
+    return !empty($product)
+        && (float)($product['wholesale_price'] ?? 0) > 0
+        && (float)($product['wholesale_min_qty'] ?? 0) > 0;
+}
+
+/**
+ * Price for a product line. The wholesale price applies only when the
+ * quantity meets the product's wholesale minimum; otherwise sale_price.
+ */
+function product_line_price($product, $quantity = null) {
+    $sale = (float)($product['sale_price'] ?? 0);
+    if (!product_has_wholesale_price($product)) return $sale;
+    if ($quantity === null) return (float)$product['wholesale_price'];
+    return (float)$quantity >= (float)$product['wholesale_min_qty']
+        ? (float)$product['wholesale_price']
+        : $sale;
 }
 
 /** Active or historical Godowns explicitly assigned to the current manager. */

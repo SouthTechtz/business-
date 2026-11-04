@@ -13,6 +13,11 @@ if (!$current_user || !$current_user->is_active) {
     redirect('login.php');
 }
 
+// Wholesale customers use their own portal, never the staff application.
+if (is_wholesaler($current_user)) {
+    redirect('wholesale-dashboard.php');
+}
+
 // Never let browsers cache protected pages (back button after logout must not work)
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');

@@ -820,22 +820,6 @@ require_once 'sidebar.php';
             </div>
 
             <div class="col-sm-6 col-xl mb-3">
-                <div class="card border-left-info shadow-sm h-100 py-2">
-                    <div class="card-body">
-                        <div class="row no-gutters align-items-center">
-                            <div class="col mr-2">
-                                <div class="text-xs font-weight-bold text-info text-uppercase mb-1">Expected Sales Value</div>
-                                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($metrics['expected_sales_value'], tenant_currency())); ?></div>
-                            </div>
-                            <div class="col-auto">
-                                <i class="fa fa-money fa-2x text-gray-300"></i>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-sm-6 col-xl mb-3">
                 <div class="card border-left-warning shadow-sm h-100 py-2">
                     <div class="card-body">
                         <div class="row no-gutters align-items-center">
@@ -1140,10 +1124,6 @@ require_once 'sidebar.php';
                             <div class="col-sm-6 mb-2">
                                 <div class="text-muted small">Total quantity</div>
                                 <div class="font-weight-semibold"><?php echo e(format_quantity($stock_summary['qty'])); ?></div>
-                            </div>
-                            <div class="col-sm-6 mb-2">
-                                <div class="text-muted small">Expected sales value</div>
-                                <div class="font-weight-semibold"><?php echo e(money($stock_summary['expected_sales_value'], tenant_currency())); ?></div>
                             </div>
                         </div>
                         <div class="mt-2">
