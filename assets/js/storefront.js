@@ -10,6 +10,24 @@
     }
 
     ready(function () {
+        // Category cards rotate through product images when a category has more
+        // than one product photo.
+        var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!reduceMotion) {
+            document.querySelectorAll('[data-sf-category-slides]').forEach(function (tile) {
+                var slides = Array.prototype.slice.call(tile.querySelectorAll('img.sf-category-slide'));
+                if (slides.length < 2) return;
+                var index = 0;
+                window.setInterval(function () {
+                    slides[index].classList.remove('is-active');
+                    index = (index + 1) % slides.length;
+                    slides[index].classList.add('is-active');
+                }, 3800);
+            });
+        }
+    });
+
+    ready(function () {
         var searchForm = document.querySelector('.sf-search');
         var input = document.getElementById('sf-search-input');
         var panel = document.getElementById('sf-search-suggest');

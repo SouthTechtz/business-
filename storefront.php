@@ -314,6 +314,39 @@ function storefront_categories($tenant_id) {
     );
 }
 
+/**
+ * Product images grouped by category, used to rotate photos on category cards.
+ * Returns [category_id => [image paths...]] capped per category.
+ */
+function storefront_category_images($tenant_id, array $category_ids, $limit = 6) {
+    $tenant_id = (int)$tenant_id;
+    $limit = max(1, min(12, (int)$limit));
+    $category_ids = array_values(array_filter(array_map('intval', $category_ids)));
+    if (!$tenant_id || !$category_ids) return [];
+
+    $placeholders = implode(',', array_fill(0, count($category_ids), '?'));
+    $rows = fetch_all(
+        "SELECT category_id, image
+           FROM products
+          WHERE tenant_id = ? AND is_active = 1
+            AND image IS NOT NULL AND image <> ''
+            AND category_id IN ({$placeholders})
+          ORDER BY product_id DESC",
+        $tenant_id,
+        ...$category_ids
+    );
+
+    $images = [];
+    foreach ($rows as $row) {
+        $category_id = (int)$row['category_id'];
+        if (!isset($images[$category_id])) $images[$category_id] = [];
+        if (count($images[$category_id]) >= $limit) continue;
+        $image = storefront_image_path((string)$row['image']);
+        if ($image !== '') $images[$category_id][] = $image;
+    }
+    return $images;
+}
+
 /** Price and variant options available to catalogue filters. */
 function storefront_filter_options($tenant_id) {
     $tenant_id = (int)$tenant_id;

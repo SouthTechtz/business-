@@ -156,6 +156,16 @@
 .ws-btn-soft:hover { background: #e5e0ff; color: var(--ws-primary-deep); }
 .ws-btn-danger { border-color: #f1c6c0; color: #c0392b; background: #fff; }
 .ws-btn-danger:hover { background: #fdf2f1; color: #a4281c; }
+
+/* Link buttons must keep their own colours; the generic .ws-body a rule is more specific. */
+.ws-body a.ws-btn { color: var(--ws-text); }
+.ws-body a.ws-btn:hover { color: var(--ws-text); }
+.ws-body a.ws-btn-primary,
+.ws-body a.ws-btn-primary:hover { color: #fff; }
+.ws-body a.ws-btn-soft { color: var(--ws-primary-dark); }
+.ws-body a.ws-btn-soft:hover { color: var(--ws-primary-deep); }
+.ws-body a.ws-btn-danger { color: #c0392b; }
+.ws-body a.ws-btn-danger:hover { color: #a4281c; }
 .ws-btn-sm { min-height: 32px; padding: 4px 10px; font-size: 12px; border-radius: 8px; }
 
 /* Stat cards */

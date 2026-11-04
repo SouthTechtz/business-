@@ -42,6 +42,7 @@ $sf_category_cards = fetch_all(
       ORDER BY c.name ASC",
     $sf_tenant_id
 );
+$sf_category_images = storefront_category_images($sf_tenant_id, array_column($sf_category_cards, 'category_id'));
 $sf_filter_options = storefront_filter_options($sf_tenant_id);
 
 $sf_category_name = '';
@@ -246,11 +247,17 @@ require __DIR__ . '/storefront-header.php';
                 <?php if ($sf_category_cards): ?>
                     <div class="sf-category-grid">
                         <?php foreach ($sf_category_cards as $sf_category_card): ?>
-                            <?php $sf_category_image = storefront_image_path($sf_category_card['image'] ?? ''); ?>
-                            <a class="sf-category-tile" href="index.php?category=<?php echo (int)$sf_category_card['category_id']; ?>#catalogue">
-                                <?php if ($sf_category_image !== ''): ?>
-                                    <img src="<?php echo e($sf_category_image); ?>" alt="" loading="lazy">
-                                <?php endif; ?>
+                            <?php
+                            $sf_card_images = $sf_category_images[(int)$sf_category_card['category_id']] ?? [];
+                            if (!$sf_card_images) {
+                                $sf_fallback_image = storefront_image_path($sf_category_card['image'] ?? '');
+                                if ($sf_fallback_image !== '') $sf_card_images = [$sf_fallback_image];
+                            }
+                            ?>
+                            <a class="sf-category-tile" data-sf-category-slides href="index.php?category=<?php echo (int)$sf_category_card['category_id']; ?>#catalogue">
+                                <?php foreach ($sf_card_images as $sf_image_index => $sf_category_image): ?>
+                                    <img class="sf-category-slide<?php echo $sf_image_index === 0 ? ' is-active' : ''; ?>" src="<?php echo e($sf_category_image); ?>" alt="" loading="lazy">
+                                <?php endforeach; ?>
                                 <span class="sf-category-tile-shade"></span>
                                 <span class="sf-category-tile-copy">
                                     <strong><?php echo e($sf_category_card['name']); ?></strong>

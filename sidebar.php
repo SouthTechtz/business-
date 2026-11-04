@@ -152,23 +152,17 @@ $is_shop_manager = is_shop_manager();
                 "SELECT COUNT(*) AS total
                    FROM leads l
                    JOIN storefront_lead_requests r ON r.lead_id = l.lead_id AND r.tenant_id = l.tenant_id
-                  WHERE l.tenant_id = ? AND l.source = \"storefront\"
-                    AND l.status NOT IN (\"converted\", \"lost\")
-                    AND r.converted_order_id IS NULL
-                    AND l.lead_id > COALESCE((
-                        SELECT n.last_seen_lead_id
-                          FROM storefront_request_notification_reads n
-                         WHERE n.tenant_id = l.tenant_id AND n.user_id = ?
-                    ), 0)",
-                (int)$current_user->tenant_id,
-                (int)$current_user->user_id
+                  WHERE l.tenant_id = ?
+                    AND l.status NOT IN (\"converted\", \"lost\", \"cancelled\")
+                    AND r.converted_order_id IS NULL",
+                (int)$current_user->tenant_id
             );
             $new_storefront_request_count = (int)($new_storefront_requests["total"] ?? 0);
             ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["leads.php", "lead-add.php", "lead-edit.php", "lead-view.php"]) ? "active" : ""; ?>">
                 <a href="leads.php"><i class="fa fa-bullseye"></i><span>Leads</span>
                     <?php if ($new_storefront_request_count > 0): ?>
-                        <span class="badge badge-danger ml-auto" aria-label="<?php echo $new_storefront_request_count; ?> new storefront requests"><?php echo $new_storefront_request_count; ?></span>
+                        <span class="badge badge-danger ml-auto" aria-label="<?php echo $new_storefront_request_count; ?> pending order requests"><?php echo $new_storefront_request_count; ?></span>
                     <?php endif; ?>
                 </a>
             </li>

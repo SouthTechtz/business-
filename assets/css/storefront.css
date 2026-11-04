@@ -825,8 +825,10 @@ html { scroll-behavior: auto; }
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transition: transform .25s ease;
+    transition: transform .25s ease, opacity .6s ease;
 }
+.sf-category-tile img.sf-category-slide { opacity: 0; }
+.sf-category-tile img.sf-category-slide.is-active { opacity: 1; }
 .sf-category-tile:hover img { transform: scale(1.04); }
 .sf-category-tile-shade {
     position: absolute;

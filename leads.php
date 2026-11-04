@@ -13,28 +13,6 @@ $assigned = (string)($_GET['assigned'] ?? '');
 $q = trim((string)($_GET['q'] ?? ''));
 $follow = (string)($_GET['follow'] ?? '');
 
-$latest_storefront_request = fetch_one(
-    "SELECT COALESCE(MAX(l.lead_id), 0) AS last_seen_lead_id
-       FROM leads l
-       JOIN storefront_lead_requests r ON r.lead_id = l.lead_id AND r.tenant_id = l.tenant_id
-      WHERE l.tenant_id = ? AND l.source = 'storefront'",
-    (int)$current_user->tenant_id
-);
-$last_seen_lead_id = (int)($latest_storefront_request['last_seen_lead_id'] ?? 0);
-$stmt = $conn->prepare(
-    "INSERT INTO storefront_request_notification_reads (tenant_id, user_id, last_seen_lead_id)
-     VALUES (?, ?, ?)
-     ON DUPLICATE KEY UPDATE last_seen_lead_id = GREATEST(last_seen_lead_id, VALUES(last_seen_lead_id))"
-);
-if (!$stmt) throw new RuntimeException($conn->error);
-$stmt->bind_param('iii', $current_user->tenant_id, $current_user->user_id, $last_seen_lead_id);
-if (!$stmt->execute()) {
-    $error = $stmt->error;
-    $stmt->close();
-    throw new RuntimeException($error);
-}
-$stmt->close();
-
 $sql = "SELECT l.*,
                (SELECT GROUP_CONCAT(DISTINCT sli.product_name_snapshot SEPARATOR ', ')
                   FROM storefront_lead_request_items sli
