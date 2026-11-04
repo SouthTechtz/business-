@@ -1126,10 +1126,6 @@ require_once 'sidebar.php';
                                 <div class="font-weight-semibold"><?php echo e(format_quantity($stock_summary['qty'])); ?></div>
                             </div>
                         </div>
-                        <div class="mt-2">
-                            <a href="godown.php?tab=products" class="btn btn-light btn-sm"><i class="fa fa-cubes mr-1"></i> View Products</a>
-                            <a href="godown.php?tab=transfers" class="btn btn-light btn-sm"><i class="fa fa-exchange mr-1"></i> Transfer History</a>
-                        </div>
                     </div>
                 </div>
             </div>

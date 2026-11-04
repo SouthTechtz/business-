@@ -29,6 +29,15 @@ $subtotal = 0.0;
 foreach ($items as $item) $subtotal += (float)$item['line_total'];
 if ($subtotal <= 0) $subtotal = (float)$request_row['subtotal'];
 
+$has_order = !empty($request_row['order_id']);
+$order_stage_meta = $has_order ? wholesale_order_stage_meta($request_row['order_stage'] ?? 'shop') : null;
+$order_received = $has_order && !empty($request_row['order_customer_confirmed_at']);
+$can_confirm_receipt = $has_order && wholesale_order_can_confirm_receipt([
+    'status' => $request_row['order_status'] ?? '',
+    'stage' => $request_row['order_stage'] ?? 'shop',
+    'customer_confirmed_at' => $request_row['order_customer_confirmed_at'] ?? null,
+]);
+
 $page_title = 'Request ' . $request_row['lead_number'];
 require __DIR__ . '/wholesale-portal-header.php';
 ?>
@@ -92,13 +101,49 @@ require __DIR__ . '/wholesale-portal-header.php';
                     <div><dt>Submitted</dt><dd><?php echo e(date('d M Y, H:i', strtotime($request_row['created_at']))); ?></dd></div>
                     <div><dt>Delivery area</dt><dd><?php echo e($request_row['location'] ?: ($wholesaler['location'] ?: '—')); ?></dd></div>
                     <div><dt>Confirmed order</dt><dd><?php echo e($request_row['order_number'] ?: 'Not yet'); ?></dd></div>
-                    <?php if (!empty($request_row['order_number'])): ?>
-                        <div><dt>Order total</dt><dd><?php echo e(money($request_row['order_total'], $currency)); ?></dd></div>
+                    <?php if ($has_order): ?>
+                        <div><dt>Order total</dt><dd><?php echo e(money($request_row['order_total'], $request_row['order_currency_code'] ?: $currency)); ?></dd></div>
                         <div><dt>Order status</dt><dd><?php echo e(ucfirst((string)$request_row['order_status'])); ?></dd></div>
+                        <div>
+                            <dt>Order stage</dt>
+                            <dd><span class="ws-badge <?php echo e($order_stage_meta['class']); ?>"><?php echo e($order_stage_meta['label']); ?></span></dd>
+                        </div>
+                        <div>
+                            <dt>Delivery confirmation</dt>
+                            <dd>
+                                <?php if ($order_received): ?>
+                                    <span class="ws-badge is-success">Received</span>
+                                    <br><small class="text-muted"><?php echo e(date('d M Y, H:i', strtotime($request_row['order_customer_confirmed_at']))); ?></small>
+                                <?php elseif ($can_confirm_receipt): ?>
+                                    Awaiting your confirmation
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </dd>
+                        </div>
                     <?php endif; ?>
                 </dl>
             </div>
         </section>
+
+        <?php if ($can_confirm_receipt): ?>
+            <section class="ws-panel" aria-labelledby="ws-confirm-receipt">
+                <div class="ws-panel-head">
+                    <div>
+                        <h2 id="ws-confirm-receipt">Delivery confirmation</h2>
+                        <p>Confirm once the order has arrived. This marks it as received and completed for your account.</p>
+                    </div>
+                </div>
+                <div class="ws-panel-body">
+                    <form method="POST" action="wholesale-order-confirm.php" onsubmit="return confirm('Confirm that you have received this order?');">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="order_id" value="<?php echo (int)$request_row['order_id']; ?>">
+                        <input type="hidden" name="request_id" value="<?php echo (int)$request_row['request_id']; ?>">
+                        <button type="submit" class="ws-btn ws-btn-primary"><i class="fa fa-check" aria-hidden="true"></i> Confirm order received</button>
+                    </form>
+                </div>
+            </section>
+        <?php endif; ?>
 
         <?php if (!empty($request_row['notes'])): ?>
             <section class="ws-panel" aria-labelledby="ws-request-notes">

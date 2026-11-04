@@ -70,6 +70,7 @@ require __DIR__ . '/wholesale-portal-header.php';
                             <td>
                                 <?php if (!empty($request_row['order_number'])): ?>
                                     <strong><?php echo e($request_row['order_number']); ?></strong>
+                                    <br><small class="text-muted"><?php echo e(wholesale_order_stage_meta($request_row['order_stage'] ?? 'shop')['label']); ?></small>
                                 <?php else: ?>
                                     <span class="text-muted">Not yet</span>
                                 <?php endif; ?>
@@ -101,15 +102,41 @@ require __DIR__ . '/wholesale-portal-header.php';
         <div class="ws-table-wrap">
             <table class="ws-table">
                 <thead>
-                    <tr><th>Order</th><th>Date</th><th class="text-right">Total</th><th>Status</th></tr>
+                    <tr><th>Order</th><th>Date</th><th class="text-right">Total</th><th>Stage</th><th>Status</th><th class="text-right">Delivery</th></tr>
                 </thead>
                 <tbody>
                     <?php foreach ($orders as $order_row): ?>
+                        <?php
+                        $stage_meta = wholesale_order_stage_meta($order_row['stage'] ?? 'shop');
+                        $received = wholesale_order_is_received($order_row);
+                        $can_confirm = wholesale_order_can_confirm_receipt($order_row);
+                        ?>
                         <tr>
-                            <td><strong><?php echo e($order_row['order_number']); ?></strong></td>
+                            <td>
+                                <strong><?php echo e($order_row['order_number']); ?></strong>
+                                <?php if (!empty($order_row['request_id'])): ?>
+                                    <br><a class="ws-btn ws-btn-sm mt-1" href="wholesale-order-view.php?id=<?php echo (int)$order_row['request_id']; ?>">View request</a>
+                                <?php endif; ?>
+                            </td>
                             <td><?php echo e(date('d M Y, H:i', strtotime($order_row['created_at']))); ?></td>
                             <td class="text-right"><?php echo e(money($order_row['total'], $order_row['currency_code'] ?: $currency)); ?></td>
+                            <td><span class="ws-badge <?php echo e($stage_meta['class']); ?>"><?php echo e($stage_meta['label']); ?></span></td>
                             <td><span class="ws-badge is-neutral"><?php echo e(ucfirst((string)$order_row['status'])); ?></span></td>
+                            <td class="text-right">
+                                <?php if ($received): ?>
+                                    <span class="ws-badge is-success">Received</span>
+                                    <br><small class="text-muted"><?php echo e(date('d M Y', strtotime($order_row['customer_confirmed_at']))); ?></small>
+                                <?php elseif ($can_confirm): ?>
+                                    <form method="POST" action="wholesale-order-confirm.php" onsubmit="return confirm('Confirm that you have received this order?');">
+                                        <?php echo csrf_field(); ?>
+                                        <input type="hidden" name="order_id" value="<?php echo (int)$order_row['order_id']; ?>">
+                                        <input type="hidden" name="request_id" value="<?php echo (int)$order_row['request_id']; ?>">
+                                        <button type="submit" class="ws-btn ws-btn-sm ws-btn-primary"><i class="fa fa-check" aria-hidden="true"></i> Confirm received</button>
+                                    </form>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>

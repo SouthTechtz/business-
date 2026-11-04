@@ -68,7 +68,7 @@ if ($is_location_request) {
         ensure_central_godown($tenant_id);
     }
     $godown = is_godown_manager() ? find_active_godown($tenant_id) : find_tenant_godown($tenant_id);
-    if (!$godown) {
+    if (!$godown && ($can_manage_godown || is_godown_manager())) {
         flash_set('danger', 'Configure an active default Godown before creating a transfer request.');
         redirect($can_manage_godown ? 'godown.php' : 'godown-transfers.php');
     }
@@ -76,20 +76,18 @@ if ($is_location_request) {
 }
 
 $stores = accessible_locations(false);
-if ($can_request && !$can_manage_godown && !$is_location_request) {
-    // Requesters may choose tenant locations for transfer requests without
-    // receiving broader inventory visibility or management permissions.
-    $stores = fetch_all(
-        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
-           FROM warehouses w
-           LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-          WHERE w.tenant_id = ? AND w.is_active = 1
-            AND w.location_type IN ('godown', 'store', 'shop')
-            AND (w.location_type = 'godown' OR s.is_active = 1)
-          ORDER BY CASE w.location_type WHEN 'godown' THEN 0 WHEN 'store' THEN 1 ELSE 2 END,
-                   s.name, w.name",
-        $tenant_id
-    );
+if (!$is_location_request
+    && !can('manage_godown')
+    && !can('view_godown')
+    && !can('dispatch_godown_transfers')
+    && !can('approve_godown_transfers')
+    && !tenant_admin_scope()) {
+    // Store/Shop staff dispatch from their own locations only. Godown stock is
+    // dispatched by the Godown team, not by requesting locations.
+    $stores = array_values(array_filter(
+        $stores,
+        fn($location) => (string)($location['location_type'] ?? '') !== 'godown'
+    ));
 }
 
 if ($is_location_request) {
@@ -119,9 +117,23 @@ $source_id = (int)($_GET['source'] ?? $_POST['source_warehouse_id'] ?? 0);
 if ($is_location_request) {
     if (!in_array($source_id, $source_ids, true)) $source_id = 0;
 } elseif (!in_array($source_id, $source_ids, true)) {
-    $source_id = in_array((int)$godown['warehouse_id'], $source_ids, true)
-        ? (int)$godown['warehouse_id']
-        : (int)($source_ids[0] ?? 0);
+    $preferred_source = 0;
+    if ($godown
+        && (is_godown_manager() || tenant_admin_scope())
+        && in_array((int)$godown['warehouse_id'], $source_ids, true)) {
+        $preferred_source = (int)$godown['warehouse_id'];
+    } else {
+        foreach ($source_options as $option) {
+            if ((string)($option['location_type'] ?? '') === 'store') {
+                $preferred_source = (int)$option['warehouse_id'];
+                break;
+            }
+        }
+        if ($preferred_source <= 0) {
+            $preferred_source = (int)($source_ids[0] ?? 0);
+        }
+    }
+    $source_id = $preferred_source;
 }
 $source = null;
 foreach ($source_options as $option) {
@@ -138,18 +150,9 @@ $source_type = (string)($source['location_type'] ?? '');
 $source_label = $source
     ? trim(($source['shop_name'] ?? '') . ' / ' . $source['name'], ' /')
     : 'Choose a supplying location';
-$accessible_dests = $is_location_request ? [] : $stores;
-if (!$is_location_request && is_godown_manager()) {
-    $accessible_dests = fetch_all(
-        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
-           FROM warehouses w
-           JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-          WHERE w.tenant_id = ? AND w.location_type = 'store'
-            AND w.is_active = 1 AND s.is_active = 1
-          ORDER BY s.name, w.name",
-        $tenant_id
-    );
-}
+$accessible_dests = $is_location_request
+    ? []
+    : stock_transfer_destination_locations($source_type, $tenant_id, $source_id);
 $eligible_destinations = [];
 foreach ($accessible_dests as $loc) {
     if ((int)$loc['warehouse_id'] === $source_id) continue;
@@ -511,7 +514,7 @@ require_once 'sidebar.php';
 
 <div class="page-head">
     <div>
-        <h1 class="page-title"><?php echo $is_location_request ? 'Request Stock' : ($can_manage_godown ? 'New Stock Transfer' : 'Request Stock'); ?></h1>
+        <h1 class="page-title"><?php echo $is_location_request ? 'Request Stock' : ($can_manage_godown ? 'New Stock Transfer' : 'Send Stock'); ?></h1>
         <div class="page-sub">
             <?php if ($is_location_request): ?>
                 Request stock for <?php echo e(trim(($request_destination['shop_name'] ?? '') . ' / ' . $request_destination['name'], ' /')); ?>. Inventory will not change until dispatch.
@@ -528,7 +531,7 @@ require_once 'sidebar.php';
     <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
     <?php endif; ?>
     <li class="nav-item"><a class="nav-link" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
-    <li class="nav-item"><a class="nav-link active" href="<?php echo e($transfer_add_url); ?>"><i class="fa fa-plus mr-1"></i> <?php echo $is_location_request || !$can_manage_godown ? 'Request Stock' : 'New Transfer'; ?></a></li>
+    <li class="nav-item"><a class="nav-link active" href="<?php echo e($transfer_add_url); ?>"><i class="fa fa-plus mr-1"></i> <?php echo $is_location_request ? 'Request Stock' : ($can_manage_godown ? 'New Transfer' : 'Send Stock'); ?></a></li>
 </ul>
 
 <?php if ($f = flash_get()): ?>
@@ -612,7 +615,7 @@ require_once 'sidebar.php';
                 </div>
                 <div class="card-footer d-flex justify-content-between align-items-center">
                     <small class="text-muted"><?php echo $is_location_request ? 'No stock is reserved or deducted when you submit. Inventory checks availability at dispatch.' : 'Quantities are checked again at dispatch. A request or approval never changes physical stock.'; ?></small>
-                    <button type="submit" class="btn btn-primary" <?php echo ($is_location_request ? (bool)$source_options : (bool)$eligible_destinations) ? '' : 'disabled'; ?>><i class="fa fa-paper-plane mr-1"></i> <?php echo $is_location_request ? 'Submit Request' : 'Create Request'; ?></button>
+                    <button type="submit" class="btn btn-primary" <?php echo ($is_location_request ? (bool)$source_options : (bool)$eligible_destinations) ? '' : 'disabled'; ?>><i class="fa fa-paper-plane mr-1"></i> <?php echo $is_location_request ? 'Submit Request' : 'Create Transfer'; ?></button>
                 </div>
             </div>
         </div>

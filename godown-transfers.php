@@ -252,6 +252,17 @@ if (can('manage_godown') && !is_godown_manager()) {
 }
 $godown = find_active_godown();
 
+// Store staff can dispatch stock from their own Store to other Stores and Shops.
+$send_stock_source = null;
+if (!can('manage_godown') && (can('manage_inventory') || can('dispatch_godown_transfers'))) {
+    foreach (accessible_locations(false) as $location) {
+        if ((string)($location['location_type'] ?? '') === 'store') {
+            $send_stock_source = $location;
+            break;
+        }
+    }
+}
+
 $has_filter = $status !== '' || $issue || $shop_id > 0 || $date_from !== '' || $date_to !== '' || $q !== '';
 
 require_once 'navbar.php';
@@ -270,6 +281,8 @@ require_once 'sidebar.php';
     <?php endif; ?>
     <?php if ($godown && can('manage_godown')): ?>
         <a href="godown-transfer-add.php" class="btn btn-outline-primary"><i class="fa fa-exchange mr-1"></i> New Transfer</a>
+    <?php elseif ($send_stock_source): ?>
+        <a href="godown-transfer-add.php?source=<?php echo (int)$send_stock_source['warehouse_id']; ?>" class="btn btn-outline-primary"><i class="fa fa-paper-plane mr-1"></i> Send Stock</a>
     <?php endif; ?>
 </div>
 
@@ -278,12 +291,6 @@ require_once 'sidebar.php';
     <li class="nav-item"><a class="nav-link" href="godown.php"><i class="fa fa-archive mr-1"></i> Godown</a></li>
     <?php endif; ?>
     <li class="nav-item"><a class="nav-link active" href="godown-transfers.php"><i class="fa fa-exchange mr-1"></i> Transfers</a></li>
-    <?php if ($can_request_stock && $request_destination): ?>
-    <li class="nav-item"><button type="button" class="nav-link btn btn-link" data-toggle="modal" data-target="#requestStockModal"><i class="fa fa-plus mr-1"></i> Request Stock</button></li>
-    <?php endif; ?>
-    <?php if ($godown && can('manage_godown')): ?>
-    <li class="nav-item"><a class="nav-link" href="godown-transfer-add.php"><i class="fa fa-plus mr-1"></i> New Transfer</a></li>
-    <?php endif; ?>
 </ul>
 
 <?php if ($f = flash_get()): ?>

@@ -215,9 +215,6 @@ require_once 'sidebar.php';
         <h1 class="page-title">Shops &amp; Stores</h1>
         <div class="page-sub">A shop is a business location. Each shop can contain one or more stores.</div>
     </div>
-    <div>
-        <a href="stores.php" class="btn btn-light"><i class="fa fa-building mr-1"></i> Stores</a>
-    </div>
 </div>
 
 <ul class="nav page-tabs">

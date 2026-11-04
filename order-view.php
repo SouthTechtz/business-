@@ -75,6 +75,8 @@ $has_active_reservation = (bool)$active_reservation_rows;
 
 $statuses = order_statuses();
 $status = $order['status'];
+$order_stages = ['shop' => 'At the shop', 'transport' => 'In transport', 'completed' => 'Completed', 'returned' => 'Returned'];
+$order_stage = (string)($order['stage'] ?? 'shop');
 $can_edit = in_array($status, ['new', 'under_review'], true);
 $shops = accessible_shops(null, false);
 $stores = accessible_stores(null, false);
@@ -130,6 +132,7 @@ $cur = $order['currency_code'] ?: tenant_currency();
         <h1 class="page-title">Order <?php echo e($order['order_number']); ?></h1>
         <div class="page-sub">
             <span class="badge badge-<?php echo e(order_status_class($status)); ?>"><?php echo e($statuses[$status] ?? $status); ?></span>
+            &middot; Stage: <strong><?php echo e($order_stages[$order_stage] ?? ucfirst($order_stage)); ?></strong>
             &middot; <?php echo e(source_label($order['source'])); ?>
             &middot; created <?php echo e(date('M d, Y H:i', strtotime($order['created_at']))); ?>
         </div>
@@ -275,7 +278,8 @@ $cur = $order['currency_code'] ?: tenant_currency();
                         <tr><th>Store</th><td><?php echo e($order['store_name'] ?: '—'); ?></td></tr>
                         <tr><th>Responsible</th><td><?php echo e(trim(($order['assignee_first'] ?? '') . ' ' . ($order['assignee_last'] ?? '')) ?: '—'); ?></td></tr>
                         <tr><th>Recorded by</th><td><?php echo e(trim(($order['creator_first'] ?? '') . ' ' . ($order['creator_last'] ?? '')) ?: '—'); ?></td></tr>
-                        <tr><th>Confirmed</th><td><?php echo $order['confirmed_at'] ? e(date('M d, Y H:i', strtotime($order['confirmed_at']))) : '—'; ?></td></tr>
+                        <tr><th>Confirmed</th><td><?php echo $order['confirmed_at'] ? e(date('M d, Y H:i', strtotime($order['confirmed_at']))) : '-'; ?></td></tr>
+                        <tr><th>Customer received</th><td><?php echo $order['customer_confirmed_at'] ? e(date('M d, Y H:i', strtotime($order['customer_confirmed_at']))) : '-'; ?></td></tr>
                         <tr><th>Closed</th><td><?php echo $order['rejected_at'] ? 'Rejected: ' . e($order['rejection_reason']) : ($order['cancelled_at'] ? 'Cancelled: ' . e($order['cancel_reason']) : ($order['fulfilled_at'] ? 'Fulfilled ' . e(date('M d, Y', strtotime($order['fulfilled_at']))) : '—')); ?></td></tr>
                         <tr>
                             <th>Invoice</th>

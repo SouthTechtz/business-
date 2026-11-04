@@ -124,7 +124,11 @@ require __DIR__ . '/wholesale-portal-header.php';
                             <?php foreach ($recent_orders as $order_row): ?>
                                 <tr>
                                     <td><strong><?php echo e($order_row['order_number']); ?></strong><br><small class="text-muted"><?php echo e(date('d M Y', strtotime($order_row['created_at']))); ?></small></td>
-                                    <td class="text-right"><?php echo e(money($order_row['total'], $order_row['currency_code'] ?: $currency)); ?><br><small class="text-muted"><?php echo e(ucfirst((string)$order_row['status'])); ?></small></td>
+                                    <td class="text-right">
+                                        <?php echo e(money($order_row['total'], $order_row['currency_code'] ?: $currency)); ?>
+                                        <br><span class="ws-badge <?php echo e(wholesale_order_stage_meta($order_row['stage'] ?? 'shop')['class']); ?>"><?php echo e(wholesale_order_stage_meta($order_row['stage'] ?? 'shop')['label']); ?></span>
+                                        <?php if (!empty($order_row['customer_confirmed_at'])): ?><br><small class="text-muted">Received <?php echo e(date('d M Y', strtotime($order_row['customer_confirmed_at']))); ?></small><?php endif; ?>
+                                    </td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>

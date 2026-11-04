@@ -353,6 +353,9 @@
 .ws-badge.is-active { background: #e7f6ee; color: #146c43; }
 .ws-badge.is-suspended { background: #fdecea; color: #b42318; }
 .ws-badge.is-neutral { background: #eef0f6; color: #4b5563; }
+.ws-badge.is-info { background: #e8f1fd; color: #1d4ed8; }
+.ws-badge.is-success { background: #e7f6ee; color: #146c43; }
+.ws-badge.is-danger { background: #fdecea; color: #b42318; }
 
 /* Activity timeline */
 .ws-timeline { list-style: none; margin: 0; padding: 0; }

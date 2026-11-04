@@ -116,6 +116,15 @@ $shop = fetch_one("SELECT name, code FROM shops WHERE shop_id = ? AND tenant_id 
             <i class="fa fa-plus mr-1"></i> Request Stock
         </button>
     <?php endif; ?>
+    <?php if (
+        (int)$store['is_active'] === 1
+        && (int)($store['shop_is_active'] ?? 1) === 1
+        && (can('manage_inventory') || can('dispatch_godown_transfers') || can('manage_godown'))
+    ): ?>
+        <a href="godown-transfer-add.php?source=<?php echo (int)$warehouse_id; ?>" class="btn btn-outline-primary">
+            <i class="fa fa-paper-plane mr-1"></i> Send Stock
+        </a>
+    <?php endif; ?>
     <?php if (can('manage_inventory') || can('manage_shops') || can('request_godown_transfers') || can('approve_godown_transfers') || can('dispatch_godown_transfers') || can('receive_godown_transfers')): ?>
         <a href="godown-transfers.php" class="btn btn-outline-primary"><i class="fa fa-exchange mr-1"></i> Stock Transfers</a>
     <?php endif; ?>

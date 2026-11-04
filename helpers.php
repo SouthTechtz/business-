@@ -83,6 +83,126 @@ function row_action_menu(array $items, $label = 'Actions') {
     return $html . '</div></div>';
 }
 
+/** Render a sidebar notification badge, or an empty string when there is nothing to show. */
+function sidebar_count_badge($count, $label, $class = 'badge-danger') {
+    $count = (int)$count;
+    if ($count <= 0) {
+        return '';
+    }
+    return '<span class="badge ' . e($class) . ' ml-auto" aria-label="' . e($count . ' ' . $label) . '">' . $count . '</span>';
+}
+
+/**
+ * Role/location scoped notification counts for sidebar navigation.
+ * Counts only items the signed-in user can act on or see in their locations.
+ */
+function sidebar_notification_counts($tenant_id = null) {
+    global $current_user;
+    static $cache = [];
+    if (!$current_user) {
+        return ['orders' => 0, 'invoices' => 0, 'transfers' => 0, 'low_stock' => 0];
+    }
+
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $cache_key = (int)$current_user->user_id . ':' . $tenant_id;
+    if (isset($cache[$cache_key])) {
+        return $cache[$cache_key];
+    }
+
+    $counts = ['orders' => 0, 'invoices' => 0, 'transfers' => 0, 'low_stock' => 0];
+
+    // Orders waiting for review/assignment.
+    if (can('manage_orders')) {
+        [$visibility_sql, $visibility_params] = order_visibility_clause('o');
+        $row = fetch_one(
+            "SELECT COUNT(*) AS c FROM orders o
+              WHERE o.tenant_id = ? AND o.status IN ('new', 'under_review')" . $visibility_sql,
+            $tenant_id,
+            ...$visibility_params
+        );
+        $counts['orders'] = (int)($row['c'] ?? 0);
+    }
+
+    // Inventory locations that match the page scope of each role. Null means tenant-wide.
+    if (tenant_admin_scope()) {
+        $warehouse_ids = null;
+    } elseif (is_godown_manager()) {
+        $warehouse_ids = godown_manager_location_ids($tenant_id, false);
+    } elseif (is_shop_manager()) {
+        $warehouse_ids = [];
+        foreach (accessible_shops(null, false) as $sidebar_shop) {
+            $shop_warehouse = shop_inventory_warehouse_id((int)$sidebar_shop['shop_id'], $tenant_id);
+            if ($shop_warehouse) $warehouse_ids[] = $shop_warehouse;
+        }
+        $warehouse_ids = array_values(array_unique($warehouse_ids));
+    } else {
+        $warehouse_ids = accessible_warehouse_ids($tenant_id, false, false);
+        if ($warehouse_ids === null) $warehouse_ids = [];
+    }
+    $shop_ids = accessible_shop_ids($tenant_id, true);
+    $has_warehouse_scope = $warehouse_ids === null || !empty($warehouse_ids);
+
+    // Invoices with an outstanding balance, excluding cancelled documents.
+    if (can('manage_invoices') && $has_warehouse_scope) {
+        $sql = "SELECT COUNT(*) AS c FROM invoices i
+                 LEFT JOIN document_statuses ds ON ds.status_id = i.status_id AND ds.tenant_id = i.tenant_id
+                WHERE i.tenant_id = ? AND i.amount_due > 0.005
+                  AND (ds.name IS NULL OR ds.name <> 'Cancelled')";
+        $params = [$tenant_id];
+        if ($warehouse_ids !== null) {
+            $sql .= ' AND i.warehouse_id IN (' . implode(',', array_map('intval', $warehouse_ids)) . ')';
+        }
+        $row = fetch_one($sql, ...$params);
+        $counts['invoices'] = (int)($row['c'] ?? 0);
+    }
+
+    // Active transfers at any of the user's source/destination locations.
+    if (can('manage_inventory') || can('manage_godown') || can('request_godown_transfers') || can('receive_godown_transfers') || can('approve_godown_transfers') || can('dispatch_godown_transfers')) {
+        $sql = "SELECT COUNT(*) AS c FROM stock_transfers t
+                 WHERE t.tenant_id = ? AND t.status IN ('draft', 'approved', 'dispatched', 'discrepancy')";
+        if (!tenant_admin_scope()) {
+            $scope_parts = [];
+            if (!empty($warehouse_ids)) {
+                $id_list = implode(',', array_map('intval', $warehouse_ids));
+                $scope_parts[] = 't.source_warehouse_id IN (' . $id_list . ')';
+                $scope_parts[] = 't.destination_warehouse_id IN (' . $id_list . ')';
+            }
+            if (!empty($shop_ids)) {
+                $scope_parts[] = 't.destination_shop_id IN (' . implode(',', array_map('intval', $shop_ids)) . ')';
+            }
+            if (!$scope_parts) {
+                $sql = '';
+            } else {
+                $sql .= ' AND (' . implode(' OR ', $scope_parts) . ')';
+            }
+        }
+        if ($sql !== '') {
+            $row = fetch_one($sql, $tenant_id);
+            $counts['transfers'] = (int)($row['c'] ?? 0);
+        }
+    }
+
+    // Products at or below their minimum level in the user's locations.
+    if (can('manage_inventory') && $has_warehouse_scope) {
+        $sql = "SELECT COUNT(*) AS c FROM (
+                    SELECT s.product_id
+                      FROM inventory_stock s
+                      JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
+                     WHERE s.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0";
+        if ($warehouse_ids !== null) {
+            $sql .= ' AND s.warehouse_id IN (' . implode(',', array_map('intval', $warehouse_ids)) . ')';
+        }
+        $sql .= "     GROUP BY s.product_id
+                    HAVING SUM(s.quantity) <= MAX(COALESCE(p.min_stock_level, 0))
+                ) low_stock";
+        $row = fetch_one($sql, $tenant_id);
+        $counts['low_stock'] = (int)($row['c'] ?? 0);
+    }
+
+    $cache[$cache_key] = $counts;
+    return $counts;
+}
+
 /** Get current tenant's currency code (cached per request). */
 function tenant_currency() {
     global $conn, $current_user;
@@ -1204,6 +1324,31 @@ function stock_transfer_destination_allowed($source_type, $destination_type) {
         'shop' => ['shop'],
     ];
     return in_array((string)$destination_type, $allowed[(string)$source_type] ?? [], true);
+}
+
+/**
+ * Active tenant Stores and Shops that may receive stock from the given source type.
+ * Destinations are not limited to the user's own locations: a Store may send to
+ * other Stores and Shops, and a Godown may supply any active Store or Shop.
+ */
+function stock_transfer_destination_locations($source_type, $tenant_id = null, $exclude_warehouse_id = 0) {
+    global $current_user;
+    if (!$current_user) return [];
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $rows = fetch_all(
+        "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
+           FROM warehouses w
+           JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE w.tenant_id = ? AND w.is_active = 1 AND s.is_active = 1
+            AND w.location_type IN ('store', 'shop')
+          ORDER BY CASE w.location_type WHEN 'store' THEN 0 ELSE 1 END, s.name, w.name",
+        $tenant_id
+    );
+    return array_values(array_filter(
+        $rows,
+        fn($location) => (int)$location['warehouse_id'] !== (int)$exclude_warehouse_id
+            && stock_transfer_destination_allowed((string)$source_type, (string)$location['location_type'])
+    ));
 }
 
 /** The independent inventory location (warehouse) for a shop, or null. */

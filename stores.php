@@ -205,7 +205,6 @@ require_once 'sidebar.php';
         <?php if ($can_godown): ?>
             <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> Central Godown</a>
         <?php endif; ?>
-        <a href="shops.php" class="btn btn-light"><i class="fa fa-building mr-1"></i> Shops</a>
         <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#addStoreModal">
             <i class="fa fa-plus mr-1"></i> Add Store
         </button>

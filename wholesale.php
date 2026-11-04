@@ -25,6 +25,64 @@ function wholesale_status_meta($status) {
     }
 }
 
+/** Fulfilment stages shown to wholesale customers. */
+function wholesale_order_stages() {
+    return [
+        'shop'      => 'Preparing at shop',
+        'transport' => 'In transit',
+        'completed' => 'Completed',
+        'returned'  => 'Returned',
+    ];
+}
+
+/** Label and badge class for a wholesale order fulfilment stage. */
+function wholesale_order_stage_meta($stage) {
+    $stage = strtolower(trim((string)$stage));
+    $labels = wholesale_order_stages();
+    $classes = [
+        'shop'      => 'is-neutral',
+        'transport' => 'is-info',
+        'completed' => 'is-success',
+        'returned'  => 'is-danger',
+    ];
+    return [
+        'label' => $labels[$stage] ?? ($stage !== '' ? ucfirst($stage) : 'Unknown'),
+        'class' => $classes[$stage] ?? 'is-neutral',
+    ];
+}
+
+/** Whether a wholesale order has been confirmed as received by the customer. */
+function wholesale_order_is_received($order) {
+    return $order && !empty($order['customer_confirmed_at']);
+}
+
+/**
+ * Whether the wholesale customer may confirm this order as received.
+ * Only confirmed/fulfilled orders that have not been returned or already confirmed.
+ */
+function wholesale_order_can_confirm_receipt($order) {
+    if (!$order || wholesale_order_is_received($order)) return false;
+    $status = strtolower((string)($order['status'] ?? ''));
+    if (!in_array($status, ['confirmed', 'fulfilled'], true)) return false;
+    $stage = strtolower((string)($order['stage'] ?? 'shop'));
+    return $stage !== 'returned';
+}
+
+/** One order belonging to a wholesale contact, or null. */
+function wholesale_order($tenant_id, $order_id, $contact_id) {
+    return fetch_one(
+        "SELECT o.*, w.name store_name, s.name shop_name
+           FROM orders o
+           LEFT JOIN warehouses w ON w.warehouse_id = o.warehouse_id AND w.tenant_id = o.tenant_id
+           LEFT JOIN shops s ON s.shop_id = o.shop_id AND s.tenant_id = o.tenant_id
+          WHERE o.order_id = ? AND o.tenant_id = ? AND o.contact_id = ?
+          LIMIT 1",
+        (int)$order_id,
+        (int)$tenant_id,
+        (int)$contact_id
+    );
+}
+
 /** Order-request list for one wholesale contact. */
 function wholesale_requests($tenant_id, $contact_id, $limit = 50, $offset = 0) {
     $limit = max(1, min(200, (int)$limit));
@@ -32,7 +90,10 @@ function wholesale_requests($tenant_id, $contact_id, $limit = 50, $offset = 0) {
     return fetch_all(
         "SELECT r.request_id, r.currency_code, r.subtotal, r.created_at, r.converted_order_id,
                 l.lead_id, l.lead_number, l.status, l.notes,
-                o.order_number, o.status AS order_status, o.total AS order_total, o.created_at AS order_created_at
+                o.order_id, o.order_number, o.status AS order_status, o.stage AS order_stage,
+                o.customer_confirmed_at AS order_customer_confirmed_at,
+                o.total AS order_total, o.currency_code AS order_currency_code,
+                o.created_at AS order_created_at
            FROM storefront_lead_requests r
            JOIN leads l ON l.lead_id = r.lead_id AND l.tenant_id = r.tenant_id
            LEFT JOIN orders o ON o.order_id = r.converted_order_id AND o.tenant_id = r.tenant_id
@@ -63,7 +124,11 @@ function wholesale_request_count($tenant_id, $contact_id) {
 function wholesale_request($tenant_id, $request_id, $contact_id) {
     return fetch_one(
         "SELECT r.*, l.lead_number, l.status, l.notes, l.contact_name, l.company_name, l.phone, l.email, l.location,
-                o.order_number, o.status AS order_status, o.total AS order_total, o.created_at AS order_created_at
+                o.order_id, o.order_number, o.status AS order_status, o.stage AS order_stage,
+                o.customer_confirmed_at AS order_customer_confirmed_at,
+                o.customer_confirmation_note AS order_customer_confirmation_note,
+                o.total AS order_total, o.currency_code AS order_currency_code,
+                o.created_at AS order_created_at
            FROM storefront_lead_requests r
            JOIN leads l ON l.lead_id = r.lead_id AND l.tenant_id = r.tenant_id
            LEFT JOIN orders o ON o.order_id = r.converted_order_id AND o.tenant_id = r.tenant_id
@@ -90,9 +155,13 @@ function wholesale_request_items($tenant_id, $request_id) {
 function wholesale_orders($tenant_id, $contact_id, $limit = 50) {
     $limit = max(1, min(200, (int)$limit));
     return fetch_all(
-        "SELECT order_id, order_number, status, currency_code, subtotal, total, created_at, notes
-           FROM orders
-          WHERE tenant_id = ? AND contact_id = ?
+        "SELECT o.order_id, o.order_number, o.status, o.stage, o.customer_confirmed_at,
+                o.currency_code, o.subtotal, o.total, o.created_at, o.notes,
+                (SELECT r.request_id FROM storefront_lead_requests r
+                  WHERE r.converted_order_id = o.order_id AND r.tenant_id = o.tenant_id
+                  ORDER BY r.request_id LIMIT 1) AS request_id
+           FROM orders o
+          WHERE o.tenant_id = ? AND o.contact_id = ?
           ORDER BY created_at DESC, order_id DESC
           LIMIT {$limit}",
         (int)$tenant_id,

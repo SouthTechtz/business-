@@ -239,9 +239,6 @@ require_once 'sidebar.php';
         <?php if (!$shop_manager_inventory && $can_godown_page): ?>
             <a href="godown.php" class="btn btn-outline-primary"><i class="fa fa-archive mr-1"></i> <?php echo $godown_manager_inventory ? 'My Godown' : 'Central Godown'; ?></a>
         <?php endif; ?>
-        <?php if (!$shop_manager_inventory && $can_request_stock): ?>
-            <a href="godown-transfer-add.php" class="btn btn-primary"><i class="fa fa-exchange mr-1"></i> Request Stock</a>
-        <?php endif; ?>
     </div>
 </div>
 

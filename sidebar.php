@@ -8,6 +8,7 @@ $is_shop_manager = is_shop_manager();
         : [];
     $sidebar_shop = $sidebar_shop_access ? $sidebar_shop_access[0] : null;
     $sidebar_store = $sidebar_store_access ? $sidebar_store_access[0] : null;
+    $sidebar_notifications = sidebar_notification_counts();
     ?>
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
@@ -31,11 +32,11 @@ $is_shop_manager = is_shop_manager();
             <?php endif; ?>
             <?php if (can("manage_inventory")): ?>
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "inventory.php" ? "active" : ""; ?>">
-                <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span></a>
+                <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span><?php echo sidebar_count_badge($sidebar_notifications['low_stock'], 'low-stock products', 'badge-warning'); ?></a>
             </li>
             <?php endif; ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["godown-transfers.php", "godown-transfer-add.php", "godown-transfer-view.php"]) ? "active" : ""; ?>">
-                <a href="godown-transfers.php"><i class="fa fa-exchange"></i><span>Stock Transfers</span></a>
+                <a href="godown-transfers.php"><i class="fa fa-exchange"></i><span>Stock Transfers</span><?php echo sidebar_count_badge($sidebar_notifications['transfers'], 'active stock transfers', 'badge-info'); ?></a>
             </li>
             <?php if (can("manage_expenses")): ?>
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) === "expenses.php" ? "active" : ""; ?>">
@@ -54,7 +55,7 @@ $is_shop_manager = is_shop_manager();
             <?php endif; ?>
             <?php if (can("manage_invoices")): ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["invoices.php", "invoice-add.php", "invoice-details.php", "invoice-edit.php", "invoice-cancel.php", "invoice-print.php"]) ? "active" : ""; ?>">
-                <a href="invoices.php"><i class="fa fa-file-text"></i><span>Invoices</span></a>
+                <a href="invoices.php"><i class="fa fa-file-text"></i><span>Invoices</span><?php echo sidebar_count_badge($sidebar_notifications['invoices'], 'unpaid invoices', 'badge-warning'); ?></a>
             </li>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["quotations.php", "quotation-add.php", "quotation-details.php", "quotation-print.php", "quotation-download.php"]) ? "active" : ""; ?>">
                 <a href="quotations.php"><i class="fa fa-file-signature"></i><span>Quotations</span></a>
@@ -75,7 +76,7 @@ $is_shop_manager = is_shop_manager();
         <ul class="sidebar-menu">
             <?php if (can("manage_orders")): ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["orders.php", "order-add.php", "order-edit.php", "order-view.php"]) ? "active" : ""; ?>">
-                <a href="orders.php"><i class="fa fa-list-alt"></i><span>Orders</span></a>
+                <a href="orders.php"><i class="fa fa-list-alt"></i><span>Orders</span><?php echo sidebar_count_badge($sidebar_notifications['orders'], 'orders awaiting review'); ?></a>
             </li>
             <?php endif; ?>
             <?php if (can("manage_pos")): ?>
@@ -88,7 +89,7 @@ $is_shop_manager = is_shop_manager();
             <?php endif; ?>
             <?php if (can("manage_invoices")): ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["invoices.php", "invoice-add.php", "invoice-details.php", "invoice-edit.php", "invoice-print.php", "quotations.php", "quotation-add.php", "quotation-details.php", "quotation-print.php", "quotation-download.php"]) ? "active" : ""; ?>">
-                <a href="invoices.php"><i class="fa fa-file-text"></i><span>Invoices &amp; Quotations</span></a>
+                <a href="invoices.php"><i class="fa fa-file-text"></i><span>Invoices &amp; Quotations</span><?php echo sidebar_count_badge($sidebar_notifications['invoices'], 'unpaid invoices', 'badge-warning'); ?></a>
             </li>
             <?php endif; ?>
         </ul>
@@ -102,12 +103,12 @@ $is_shop_manager = is_shop_manager();
             <?php endif; ?>
             <?php if (can("manage_inventory")): ?>
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "inventory.php" ? "active" : ""; ?>">
-                <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span></a>
+                <a href="inventory.php"><i class="fa fa-cubes"></i><span>Inventory</span><?php echo sidebar_count_badge($sidebar_notifications['low_stock'], 'low-stock products', 'badge-warning'); ?></a>
             </li>
             <?php endif; ?>
             <?php if (can("manage_godown") || can("view_godown") || can("approve_godown_transfers") || can("dispatch_godown_transfers") || can("receive_godown_transfers") || can("request_godown_transfers") || can("manage_inventory") || can("manage_shops")): ?>
             <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["godown.php", "godown-transfers.php", "godown-transfer-add.php", "godown-transfer-view.php", "inventory-adjust.php"]) ? "active" : ""; ?>">
-                <a href="<?php echo can("manage_godown") ? "godown.php" : "godown-transfers.php"; ?>"><i class="fa fa-archive"></i><span><?php echo can("manage_godown") ? "Central Godown" : "Stock Transfers"; ?></span></a>
+                <a href="<?php echo can("manage_godown") ? "godown.php" : "godown-transfers.php"; ?>"><i class="fa fa-archive"></i><span><?php echo can("manage_godown") ? "Central Godown" : "Stock Transfers"; ?></span><?php echo sidebar_count_badge($sidebar_notifications['transfers'], 'active stock transfers', 'badge-info'); ?></a>
             </li>
             <?php endif; ?>
             <?php if (can("manage_shops") || $is_shop_manager || $sidebar_store): ?>
