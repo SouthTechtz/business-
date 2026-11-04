@@ -326,11 +326,23 @@ require_once 'sidebar.php';
                         <td><span class="badge badge-primary"><?php echo (int)$row['invoice_count']; ?></span></td>
                         <td><?php echo e(money($row['total_spent'], $cur = tenant_currency())); ?></td>
                         <td class="text-right">
-                            <a href="customer-view.php?id=<?php echo $row['contact_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                            <a href="customer-edit.php?id=<?php echo $row['contact_id']; ?>" class="btn btn-action btn-light" title="Edit"><i class="fa fa-pencil"></i></a>
-                            <?php if (tenant_admin_scope()): ?>
-                                <a href="customers.php?delete=<?php echo $row['contact_id']; ?>" class="btn btn-action btn-light text-danger" title="Delete" onclick="return confirm('Delete this customer and their invoices?');"><i class="fa fa-trash"></i></a>
-                            <?php endif; ?>
+                            <?php
+                            $customer_actions = [
+                                ['label' => 'View customer', 'icon' => 'fa-eye', 'href' => 'customer-view.php?id=' . (int)$row['contact_id']],
+                                ['label' => 'Edit customer', 'icon' => 'fa-pencil', 'href' => 'customer-edit.php?id=' . (int)$row['contact_id']],
+                            ];
+                            if (tenant_admin_scope()) {
+                                $customer_actions[] = ['type' => 'divider'];
+                                $customer_actions[] = [
+                                    'label' => 'Delete customer',
+                                    'icon' => 'fa-trash',
+                                    'danger' => true,
+                                    'href' => 'customers.php?delete=' . (int)$row['contact_id'],
+                                    'attrs' => ['onclick' => "return confirm('Delete this customer and their invoices?');"],
+                                ];
+                            }
+                            echo row_action_menu($customer_actions, 'Customer actions');
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -415,15 +427,26 @@ require_once 'sidebar.php';
                             </td>
                             <td><?php echo e(date('d M Y', strtotime($account['created_at']))); ?></td>
                             <td class="text-right">
-                                <a href="wholesaler-view.php?id=<?php echo (int)$account['wholesaler_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                                <form method="post" action="customers.php?tab=wholesalers" class="d-inline" onsubmit="return confirm('<?php echo strtolower((string)$account['status']) === 'active' ? 'Suspend this wholesale account?' : 'Activate this wholesale account?'; ?>');">
-                                    <?php echo csrf_field(); ?>
-                                    <input type="hidden" name="wholesaler_id" value="<?php echo (int)$account['wholesaler_id']; ?>">
-                                    <input type="hidden" name="action" value="<?php echo strtolower((string)$account['status']) === 'active' ? 'suspend' : 'activate'; ?>">
-                                    <button type="submit" class="btn btn-action btn-light <?php echo strtolower((string)$account['status']) === 'active' ? 'text-danger' : 'text-success'; ?>" title="<?php echo strtolower((string)$account['status']) === 'active' ? 'Suspend' : 'Activate'; ?>">
-                                        <i class="fa <?php echo strtolower((string)$account['status']) === 'active' ? 'fa-ban' : 'fa-check'; ?>"></i>
-                                    </button>
-                                </form>
+                                <?php
+                                $account_active = strtolower((string)$account['status']) === 'active';
+                                $wholesale_actions = [
+                                    ['label' => 'View account', 'icon' => 'fa-eye', 'href' => 'wholesaler-view.php?id=' . (int)$account['wholesaler_id']],
+                                    [
+                                        'label' => $account_active ? 'Suspend account' : 'Activate account',
+                                        'icon' => $account_active ? 'fa-ban' : 'fa-check',
+                                        'danger' => $account_active,
+                                        'form' => [
+                                            'action' => 'customers.php?tab=wholesalers',
+                                            'confirm' => $account_active ? 'Suspend this wholesale account?' : 'Activate this wholesale account?',
+                                            'fields' => [
+                                                'wholesaler_id' => (int)$account['wholesaler_id'],
+                                                'action' => $account_active ? 'suspend' : 'activate',
+                                            ],
+                                        ],
+                                    ],
+                                ];
+                                echo row_action_menu($wholesale_actions, 'Wholesaler actions');
+                                ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

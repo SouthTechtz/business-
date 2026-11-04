@@ -35,6 +35,72 @@
         };
     }
 
+    // Three-dot list-row action menus. Fixed positioning keeps them visible
+    // even when they are inside a scrollable table.
+    (function () {
+        var openMenu = null;
+        var openToggle = null;
+
+        function closeMenu() {
+            if (!openMenu) return;
+            openMenu.classList.remove('is-open');
+            if (openToggle) openToggle.setAttribute('aria-expanded', 'false');
+            openMenu = null;
+            openToggle = null;
+        }
+
+        function positionMenu(menu, toggle) {
+            var rect = toggle.getBoundingClientRect();
+            var menuWidth = menu.offsetWidth;
+            var menuHeight = menu.offsetHeight;
+            var left = rect.right - menuWidth;
+            var top = rect.bottom + 6;
+
+            if (left < 8) left = 8;
+            if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
+            if (top + menuHeight > window.innerHeight - 8) top = rect.top - menuHeight - 6;
+            if (top < 8) top = 8;
+
+            menu.style.left = left + 'px';
+            menu.style.top = top + 'px';
+        }
+
+        document.addEventListener('click', function (event) {
+            var toggle = event.target.closest('[data-row-actions]');
+            if (toggle) {
+                event.preventDefault();
+                var menu = toggle.parentNode.querySelector('.row-actions-menu');
+                if (!menu) return;
+                var wasOpen = menu.classList.contains('is-open');
+                closeMenu();
+                if (!wasOpen) {
+                    menu.classList.add('is-open');
+                    toggle.setAttribute('aria-expanded', 'true');
+                    positionMenu(menu, toggle);
+                    openMenu = menu;
+                    openToggle = toggle;
+                }
+                return;
+            }
+
+            if (openMenu && openMenu.contains(event.target)) {
+                // Let links, submit buttons and modal launchers behave normally.
+                if (!event.target.closest('button[type="submit"]')) {
+                    closeMenu();
+                }
+                return;
+            }
+
+            closeMenu();
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') closeMenu();
+        });
+        window.addEventListener('resize', closeMenu);
+        window.addEventListener('scroll', closeMenu, true);
+    })();
+
     $(function () {
         $('table.data-table').each(function () {
             var configuredPageLength = parseInt($(this).attr('data-page-length'), 10);

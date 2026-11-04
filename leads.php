@@ -190,22 +190,27 @@ require_once 'sidebar.php';
                         </td>
                         <td><?php echo e(date('M d, Y', strtotime($l['created_at']))); ?></td>
                         <td class="text-right">
-                            <div class="dropdown d-inline-block">
-                                <button type="button" class="btn btn-action btn-light" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Lead actions" aria-label="Lead actions for <?php echo e($l['lead_number']); ?>">
-                                    <i class="fa fa-ellipsis-v"></i>
-                                </button>
-                                <div class="dropdown-menu dropdown-menu-right">
-                                    <a class="dropdown-item" href="lead-view.php?id=<?php echo (int)$l['lead_id']; ?>"><i class="fa fa-eye mr-2"></i>View</a>
-                                    <a class="dropdown-item" href="lead-edit.php?id=<?php echo (int)$l['lead_id']; ?>"><i class="fa fa-pencil mr-2"></i>Edit</a>
-                                    <?php if ($can_delete_lead): ?>
-                                        <button type="button" class="dropdown-item text-danger" data-toggle="modal" data-target="#deleteLeadModal"
-                                                data-lead-id="<?php echo (int)$l['lead_id']; ?>"
-                                                data-lead-number="<?php echo e($l['lead_number']); ?>">
-                                            <i class="fa fa-trash mr-2"></i>Delete
-                                        </button>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
+                            <?php
+                            $lead_actions = [
+                                ['label' => 'View lead', 'icon' => 'fa-eye', 'href' => 'lead-view.php?id=' . (int)$l['lead_id']],
+                                ['label' => 'Edit lead', 'icon' => 'fa-pencil', 'href' => 'lead-edit.php?id=' . (int)$l['lead_id']],
+                            ];
+                            if ($can_delete_lead) {
+                                $lead_actions[] = ['type' => 'divider'];
+                                $lead_actions[] = [
+                                    'label' => 'Delete lead',
+                                    'icon' => 'fa-trash',
+                                    'danger' => true,
+                                    'attrs' => [
+                                        'data-toggle' => 'modal',
+                                        'data-target' => '#deleteLeadModal',
+                                        'data-lead-id' => (int)$l['lead_id'],
+                                        'data-lead-number' => $l['lead_number'],
+                                    ],
+                                ];
+                            }
+                            echo row_action_menu($lead_actions, 'Lead actions for ' . $l['lead_number']);
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

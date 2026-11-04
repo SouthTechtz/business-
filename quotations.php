@@ -166,12 +166,24 @@ $cur = tenant_currency();
                         </td>
                         <td class="text-right"><?php echo e(money($q['total'], $cur)); ?></td>
                         <td class="text-right">
-                            <a href="quotation-details.php?id=<?php echo (int)$q['quotation_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                            <a href="quotation-print.php?id=<?php echo (int)$q['quotation_id']; ?>" class="btn btn-action btn-light" title="Print"><i class="fa fa-print"></i></a>
-                            <a href="quotation-download.php?id=<?php echo (int)$q['quotation_id']; ?>" class="btn btn-action btn-light" title="Download PDF"><i class="fa fa-download"></i></a>
-                            <?php if (empty($q['converted_invoice_id'])): ?>
-                                <a href="quotations.php?delete=<?php echo (int)$q['quotation_id']; ?>" class="btn btn-action btn-light text-danger" title="Delete" onclick="return confirm('Delete this quotation?');"><i class="fa fa-trash"></i></a>
-                            <?php endif; ?>
+                            <?php
+                            $quotation_actions = [
+                                ['label' => 'View quotation', 'icon' => 'fa-eye', 'href' => 'quotation-details.php?id=' . (int)$q['quotation_id']],
+                                ['label' => 'Print quotation', 'icon' => 'fa-print', 'href' => 'quotation-print.php?id=' . (int)$q['quotation_id']],
+                                ['label' => 'Download PDF', 'icon' => 'fa-download', 'href' => 'quotation-download.php?id=' . (int)$q['quotation_id']],
+                            ];
+                            if (empty($q['converted_invoice_id'])) {
+                                $quotation_actions[] = ['type' => 'divider'];
+                                $quotation_actions[] = [
+                                    'label' => 'Delete quotation',
+                                    'icon' => 'fa-trash',
+                                    'danger' => true,
+                                    'href' => 'quotations.php?delete=' . (int)$q['quotation_id'],
+                                    'attrs' => ['onclick' => "return confirm('Delete this quotation?');"],
+                                ];
+                            }
+                            echo row_action_menu($quotation_actions, 'Quotation actions');
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

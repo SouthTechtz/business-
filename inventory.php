@@ -434,23 +434,25 @@ $location_empty_message = $tab === 'godown'
                             <td><?php echo $status; ?></td>
                             <?php if ($can_request_stock || ($tab === 'godown' && $can_godown_page)): ?>
                             <td class="text-right">
-                                <?php if ($tab === 'godown'): ?>
-                                    <?php if ($can_godown_page): ?>
-                                        <a href="godown.php?tab=products" class="btn btn-action btn-light" title="Receive or transfer Godown stock"><i class="fa fa-archive"></i></a>
-                                    <?php else: ?>
-                                        <span class="text-muted">—</span>
-                                    <?php endif; ?>
-                                <?php elseif ($can_request_stock): ?>
-                                    <?php
+                                <?php
+                                $inventory_actions = [];
+                                if ($tab === 'godown') {
+                                    if ($can_godown_page) {
+                                        $inventory_actions[] = ['label' => 'Receive or transfer Godown stock', 'icon' => 'fa-archive', 'href' => 'godown.php?tab=products'];
+                                    }
+                                } elseif ($can_request_stock) {
                                     $request_params = $tab === 'stores'
                                         ? ['request_store_id' => (int)$store_id]
                                         : ['request_shop_id' => (int)$shop_id];
                                     $request_params = array_filter($request_params, fn($value) => (int)$value > 0);
-                                    ?>
-                                    <a href="godown-transfer-add.php?<?php echo e(http_build_query($request_params)); ?>" class="btn btn-action btn-light" title="Request stock"><i class="fa fa-exchange"></i></a>
-                                <?php else: ?>
-                                    <span class="text-muted">—</span>
-                                <?php endif; ?>
+                                    $inventory_actions[] = [
+                                        'label' => 'Request stock',
+                                        'icon' => 'fa-exchange',
+                                        'href' => 'godown-transfer-add.php?' . http_build_query($request_params),
+                                    ];
+                                }
+                                echo row_action_menu($inventory_actions, 'Stock actions');
+                                ?>
                             </td>
                             <?php endif; ?>
                         </tr>

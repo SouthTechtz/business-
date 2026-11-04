@@ -227,9 +227,20 @@ $cur = tenant_currency();
                             <td class="text-right text-danger"><?php echo e(money($remained, $cur)); ?></td>
                             <td class="text-right font-weight-semibold"><?php echo e(money($total, $cur)); ?></td>
                             <td class="text-right">
-                                <a href="purchase-view.php?id=<?php echo (int)$row['purchase_id']; ?>" class="btn btn-sm btn-light" title="View"><i class="fa fa-eye"></i></a>
-                                <a href="purchase-edit.php?id=<?php echo (int)$row['purchase_id']; ?>" class="btn btn-sm btn-primary" title="Edit"><i class="fa fa-pencil"></i></a>
-                                <a href="purchase-delete.php?id=<?php echo (int)$row['purchase_id']; ?>" class="btn btn-sm btn-danger" title="Delete" onclick="return confirm('Delete this purchase?');"><i class="fa fa-trash"></i></a>
+                                <?php
+                                echo row_action_menu([
+                                    ['label' => 'View purchase', 'icon' => 'fa-eye', 'href' => 'purchase-view.php?id=' . (int)$row['purchase_id']],
+                                    ['label' => 'Edit purchase', 'icon' => 'fa-pencil', 'href' => 'purchase-edit.php?id=' . (int)$row['purchase_id']],
+                                    ['type' => 'divider'],
+                                    [
+                                        'label' => 'Delete purchase',
+                                        'icon' => 'fa-trash',
+                                        'danger' => true,
+                                        'href' => 'purchase-delete.php?id=' . (int)$row['purchase_id'],
+                                        'attrs' => ['onclick' => "return confirm('Delete this purchase?');"],
+                                    ],
+                                ], 'Purchase actions');
+                                ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

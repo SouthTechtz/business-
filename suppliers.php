@@ -108,12 +108,22 @@ require_once 'sidebar.php';
                                 <td><?php echo e($s['phone'] ?: '—'); ?></td>
                                 <td><?php echo e($s['tax_id'] ?: '—'); ?></td>
                                 <td class="text-right">
-                                    <button class="btn btn-action btn-light" data-toggle="modal" data-target="#editModal<?php echo $s['supplier_id']; ?>"><i class="fa fa-pencil"></i></button>
-                                    <form method="POST" action="suppliers.php" class="d-inline" onsubmit="return confirm('Delete this supplier?');">
-                                        <input type="hidden" name="action" value="delete">
-                                        <input type="hidden" name="supplier_id" value="<?php echo $s['supplier_id']; ?>">
-                                        <button type="submit" class="btn btn-action btn-light text-danger"><i class="fa fa-trash"></i></button>
-                                    </form>
+                                    <?php
+                                    echo row_action_menu([
+                                        ['label' => 'Edit supplier', 'icon' => 'fa-pencil', 'attrs' => ['data-toggle' => 'modal', 'data-target' => '#editModal' . (int)$s['supplier_id']]],
+                                        ['type' => 'divider'],
+                                        [
+                                            'label' => 'Delete supplier',
+                                            'icon' => 'fa-trash',
+                                            'danger' => true,
+                                            'form' => [
+                                                'action' => 'suppliers.php',
+                                                'confirm' => 'Delete this supplier?',
+                                                'fields' => ['action' => 'delete', 'supplier_id' => (int)$s['supplier_id']],
+                                            ],
+                                        ],
+                                    ], 'Supplier actions');
+                                    ?>
                                 </td>
                             </tr>
                         <?php endforeach; ?>

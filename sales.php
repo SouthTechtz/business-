@@ -222,10 +222,22 @@ $cur = tenant_currency();
                         </td>
                         <td class="text-right font-weight-semibold"><?php echo e(money($o['total'], $cur)); ?></td>
                         <td class="text-right">
-                            <a href="sale-details.php?id=<?php echo $o['order_id']; ?>" class="btn btn-action btn-light"><i class="fa fa-eye"></i></a>
-                            <?php if ($o['status'] !== 'cancelled'): ?>
-                                <a href="sale-cancel.php?id=<?php echo $o['order_id']; ?>" class="btn btn-action btn-light text-warning" title="Cancel" onclick="return confirm('Cancel this sale? Stock will be restored.');"><i class="fa fa-ban"></i></a>
-                            <?php endif; ?>
+                            <?php
+                            $sale_actions = [
+                                ['label' => 'View sale', 'icon' => 'fa-eye', 'href' => 'sale-details.php?id=' . (int)$o['order_id']],
+                            ];
+                            if ($o['status'] !== 'cancelled') {
+                                $sale_actions[] = ['type' => 'divider'];
+                                $sale_actions[] = [
+                                    'label' => 'Cancel sale',
+                                    'icon' => 'fa-ban',
+                                    'danger' => true,
+                                    'href' => 'sale-cancel.php?id=' . (int)$o['order_id'],
+                                    'attrs' => ['onclick' => "return confirm('Cancel this sale? Stock will be restored.');"],
+                                ];
+                            }
+                            echo row_action_menu($sale_actions, 'Sale actions');
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

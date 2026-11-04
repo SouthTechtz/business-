@@ -1286,7 +1286,11 @@ require_once 'sidebar.php';
                                 </td>
                                 <td><span class="badge badge-<?php echo e(godown_transfer_status_class($transfer['status'])); ?>"><?php echo e(godown_transfer_status_label($transfer['status'])); ?></span></td>
                                 <td><?php echo e(date('M d, Y H:i', strtotime($transfer['requested_at']))); ?></td>
-                                <td class="text-right"><a href="godown-transfer-view.php?id=<?php echo (int)$transfer['transfer_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a></td>
+                                <td class="text-right">
+                                    <?php echo row_action_menu([
+                                        ['label' => 'View transfer', 'icon' => 'fa-eye', 'href' => 'godown-transfer-view.php?id=' . (int)$transfer['transfer_id']],
+                                    ], 'Transfer actions'); ?>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                         <?php if (!$godown_transfers): ?>
@@ -1346,9 +1350,15 @@ require_once 'sidebar.php';
                                     <td><?php echo (int)$stock['lines']; ?></td>
                                     <td><?php echo e(format_quantity($stock['qty'])); ?></td>
                                     <td class="text-right">
-                                        <?php if ($godown && $can_manage): ?>
-                                           <a href="godown-transfer-add.php?shop=<?php echo (int)$store['shop_id']; ?>" class="btn btn-action btn-light" title="New transfer to this shop"><i class="fa fa-exchange"></i></a>
-                                        <?php endif; ?>
+                                        <?php
+                                        if ($godown && $can_manage) {
+                                            echo row_action_menu([
+                                                ['label' => 'New transfer to this shop', 'icon' => 'fa-exchange', 'href' => 'godown-transfer-add.php?shop=' . (int)$store['shop_id']],
+                                            ], 'Shop transfer actions');
+                                        } else {
+                                            echo '<span class="text-muted">—</span>';
+                                        }
+                                        ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>

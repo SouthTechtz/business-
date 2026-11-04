@@ -342,16 +342,24 @@ function order_stage_class($stage) {
                             </td>
                             <td><?php echo e(date('M d, Y H:i', strtotime($o['created_at']))); ?></td>
                             <td class="text-right">
-                                <a href="order-view.php?id=<?php echo (int)$o['order_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                                <button type="button" class="btn btn-action btn-light btn-quick-edit" title="Update Total, Amount & Stage"
-                                    data-order-id="<?php echo (int)$o['order_id']; ?>"
-                                    data-order-number="<?php echo e($o['order_number']); ?>"
-                                    data-amount-paid="<?php echo e($paid_amount); ?>"
-                                    data-total="<?php echo e(money($o['total'], $o['currency_code'] ?: $cur)); ?>"
-                                    data-order-total="<?php echo e($o['total']); ?>"
-                                    data-stage="<?php echo e($current_stage); ?>">
-                                    <i class="fa fa-pencil"></i>
-                                </button>
+                                <?php
+                                echo row_action_menu([
+                                    ['label' => 'View order', 'icon' => 'fa-eye', 'href' => 'order-view.php?id=' . (int)$o['order_id']],
+                                    [
+                                        'label' => 'Update total, amount & stage',
+                                        'icon' => 'fa-pencil',
+                                        'class' => 'btn-quick-edit',
+                                        'attrs' => [
+                                            'data-order-id' => (int)$o['order_id'],
+                                            'data-order-number' => $o['order_number'],
+                                            'data-amount-paid' => $paid_amount,
+                                            'data-total' => money($o['total'], $o['currency_code'] ?: $cur),
+                                            'data-order-total' => $o['total'],
+                                            'data-stage' => $current_stage,
+                                        ],
+                                    ],
+                                ], 'Order actions');
+                                ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

@@ -530,14 +530,16 @@ html { scroll-behavior: auto; }
     font-weight: 600;
 }
 .sf-product-tag.is-sale { background: var(--sf-danger); }
-.sf-product-body { display: flex; flex-direction: column; flex: 1; padding: 14px; border-top: 3px solid var(--sf-accent); }
+.sf-product-body { display: flex; flex-direction: column; flex: 1; padding: 14px; background: #171141; color: #fff; }
+.sf-product-body h3 { color: #fff; }
+.sf-product-body h3 a { color: #fff; }
 .sf-product-card:hover { border-color: var(--sf-accent); }
-.sf-product-category { color: var(--sf-muted); font-size: 12px; margin-bottom: 4px; }
+.sf-product-category { color: rgba(255, 255, 255, .82); font-size: 12px; margin-bottom: 4px; }
 .sf-product-body h3 { font-size: 15px; line-height: 1.35; margin: 0 0 4px; }
-.sf-product-body h3 a:hover { color: var(--sf-accent); text-decoration: none; }
-.sf-product-code { color: var(--sf-muted); font-size: 12px; margin-bottom: 8px; }
+.sf-product-body h3 a:hover { color: #fff; text-decoration: underline; }
+.sf-product-code { color: rgba(255, 255, 255, .78); font-size: 12px; margin-bottom: 8px; }
 .sf-product-desc {
-    color: var(--sf-muted);
+    color: rgba(255, 255, 255, .9);
     font-size: 13px;
     line-height: 1.5;
     margin: 0 0 10px;
@@ -547,10 +549,13 @@ html { scroll-behavior: auto; }
     overflow: hidden;
     min-height: 39px;
 }
-.sf-product-meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; border-top: 1px solid #f0c9cd; }
-.sf-price { font-size: 17px; font-weight: 650; color: var(--sf-accent); }
+.sf-product-meta { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
+.sf-price { font-size: 17px; font-weight: 650; color: var(--sf-text); }
+.sf-product-body .sf-price { color: #fff; }
 .sf-price-compare { font-size: 13px; color: var(--sf-muted); text-decoration: line-through; }
+.sf-product-body .sf-price-compare { color: rgba(255, 255, 255, .78); }
 .sf-unit { font-size: 12px; color: var(--sf-muted); }
+.sf-product-body .sf-unit { color: rgba(255, 255, 255, .85); }
 .sf-product-variant { color: var(--sf-muted); font-size: 12px; margin-top: 4px; }
 .sf-rating { display: flex; align-items: center; gap: 4px; margin: 6px 0 0; font-size: 12px; color: var(--sf-muted); }
 .sf-rating strong { color: var(--sf-text); font-weight: 600; }

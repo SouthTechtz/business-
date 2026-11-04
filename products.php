@@ -354,11 +354,20 @@ require_once 'sidebar.php';
                                 <?php if ($c['depth'] > 0): ?><i class="fa fa-angle-right text-muted mr-1" style="font-size:10px;"></i><?php endif; ?>
                                 <?php echo e($c['name']); ?>
                             </span>
-                            <form method="POST" action="products.php" class="d-inline" onsubmit="return confirm('Delete category?');">
-                                <input type="hidden" name="action" value="delete_category">
-                                <input type="hidden" name="category_id" value="<?php echo $c['category_id']; ?>">
-                                <button type="submit" class="btn btn-action btn-light text-danger"><i class="fa fa-trash"></i></button>
-                            </form>
+                            <?php
+                            echo row_action_menu([
+                                [
+                                    'label' => 'Delete category',
+                                    'icon' => 'fa-trash',
+                                    'danger' => true,
+                                    'form' => [
+                                        'action' => 'products.php',
+                                        'confirm' => 'Delete category?',
+                                        'fields' => ['action' => 'delete_category', 'category_id' => (int)$c['category_id']],
+                                    ],
+                                ],
+                            ], 'Category actions');
+                            ?>
                         </div>
                     <?php endforeach; ?>
                     <?php if (!$categories): ?><div class="text-muted small">No categories yet.</div><?php endif; ?>

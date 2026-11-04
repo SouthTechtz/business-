@@ -304,16 +304,18 @@ require_once 'sidebar.php';
                             <?php endif; ?>
                         </td>
                         <td class="text-right">
-                            <?php if ((int)($store['is_godown'] ?? 0) === 1): ?>
-                                <a href="godown.php" class="btn btn-action btn-light" title="Manage central Godown"><i class="fa fa-archive"></i></a>
-                            <?php endif; ?>
-                            <button type="button" class="btn btn-action btn-light" title="Edit" data-toggle="modal" data-target="#editStoreModal<?php echo (int)$store['warehouse_id']; ?>"><i class="fa fa-pencil"></i></button>
-                            <?php if ((int)($store['is_godown'] ?? 0) !== 1): ?>
-                                <button type="button" class="btn btn-action btn-outline-danger" title="Delete"
-                                        data-toggle="modal" data-target="#deleteStoreModal<?php echo (int)$store['warehouse_id']; ?>">
-                                    <i class="fa fa-trash"></i>
-                                </button>
-                            <?php endif; ?>
+                            <?php
+                            $store_actions = [];
+                            if ((int)($store['is_godown'] ?? 0) === 1) {
+                                $store_actions[] = ['label' => 'Manage central Godown', 'icon' => 'fa-archive', 'href' => 'godown.php'];
+                            }
+                            $store_actions[] = ['label' => 'Edit store', 'icon' => 'fa-pencil', 'attrs' => ['data-toggle' => 'modal', 'data-target' => '#editStoreModal' . (int)$store['warehouse_id']]];
+                            if ((int)($store['is_godown'] ?? 0) !== 1) {
+                                $store_actions[] = ['type' => 'divider'];
+                                $store_actions[] = ['label' => 'Delete store', 'icon' => 'fa-trash', 'danger' => true, 'attrs' => ['data-toggle' => 'modal', 'data-target' => '#deleteStoreModal' . (int)$store['warehouse_id']]];
+                            }
+                            echo row_action_menu($store_actions, 'Store actions');
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

@@ -13,6 +13,76 @@ function money($amount, $currency = 'TZS') {
     return $currency . ' ' . number_format((float)$amount, 2);
 }
 
+/**
+ * Render a list-row three-dot action menu.
+ *
+ * Each item supports:
+ *  - link:  ['label' => 'View', 'icon' => 'fa-eye', 'href' => '...', 'attrs' => [...]]
+ *  - button:['label' => 'Edit', 'icon' => 'fa-pencil', 'attrs' => ['data-toggle' => 'modal', ...]]
+ *  - form:  ['label' => 'Delete', 'icon' => 'fa-trash', 'danger' => true,
+ *            'form' => ['action' => 'page.php', 'fields' => [...], 'confirm' => 'Delete this?']]
+ *  - divider: ['type' => 'divider']
+ */
+function row_action_menu(array $items, $label = 'Actions') {
+    $items = array_values(array_filter($items));
+    if (!$items) {
+        return '<span class="text-muted">—</span>';
+    }
+
+    $html = '<div class="row-actions">'
+        . '<button type="button" class="btn btn-action btn-light row-actions-toggle" data-row-actions '
+        . 'aria-haspopup="menu" aria-expanded="false" title="' . e($label) . '" aria-label="' . e($label) . '">'
+        . '<i class="fa fa-ellipsis-v" aria-hidden="true"></i><span class="sr-only">' . e($label) . '</span>'
+        . '</button><div class="row-actions-menu" role="menu">';
+
+    foreach ($items as $item) {
+        if (($item['type'] ?? '') === 'divider') {
+            $html .= '<div class="row-actions-divider" role="separator"></div>';
+            continue;
+        }
+
+        $icon = !empty($item['icon']) ? '<i class="fa ' . e($item['icon']) . '" aria-hidden="true"></i>' : '';
+        $class = 'row-actions-item' . (!empty($item['danger']) ? ' is-danger' : '');
+        if (!empty($item['class'])) {
+            $class .= ' ' . $item['class'];
+        }
+        $attrs = '';
+        foreach (($item['attrs'] ?? []) as $name => $value) {
+            if ($name === 'class') {
+                continue;
+            }
+            $attrs .= ' ' . $name . '="' . e($value) . '"';
+        }
+
+        if (!empty($item['href'])) {
+            $html .= '<a class="' . $class . '" role="menuitem" href="' . e($item['href']) . '"' . $attrs . '>'
+                . $icon . e($item['label']) . '</a>';
+            continue;
+        }
+
+        if (!empty($item['form'])) {
+            $form = $item['form'];
+            $method = strtoupper((string)($form['method'] ?? 'POST'));
+            $html .= '<form method="' . e($method) . '" action="' . e($form['action']) . '" class="row-actions-form"'
+                . (!empty($form['confirm']) ? ' onsubmit="return confirm(\'' . e($form['confirm']) . '\');"' : '') . '>';
+            if ($method !== 'GET') {
+                $html .= csrf_field();
+            }
+            foreach (($form['fields'] ?? []) as $name => $value) {
+                $html .= '<input type="hidden" name="' . e($name) . '" value="' . e($value) . '">';
+            }
+            $html .= '<button type="submit" class="' . $class . '" role="menuitem">' . $icon . e($item['label']) . '</button>'
+                . '</form>';
+            continue;
+        }
+
+        $html .= '<button type="button" class="' . $class . '" role="menuitem"' . $attrs . '>'
+            . $icon . e($item['label']) . '</button>';
+    }
+
+    return $html . '</div></div>';
+}
+
 /** Get current tenant's currency code (cached per request). */
 function tenant_currency() {
     global $conn, $current_user;

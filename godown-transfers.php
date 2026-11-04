@@ -371,7 +371,9 @@ require_once 'sidebar.php';
                         </td>
                         <td><?php echo e(date('M d, Y H:i', strtotime($transfer['updated_at']))); ?></td>
                         <td class="text-right">
-                            <a href="godown-transfer-view.php?id=<?php echo (int)$transfer['transfer_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
+                            <?php echo row_action_menu([
+                                ['label' => 'View transfer', 'icon' => 'fa-eye', 'href' => 'godown-transfer-view.php?id=' . (int)$transfer['transfer_id']],
+                            ], 'Transfer actions'); ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

@@ -309,12 +309,14 @@ require_once 'sidebar.php';
                             <?php endif; ?>
                         </td>
                         <td class="text-right">
-                            <a href="stores.php?shop=<?php echo (int)$shop['shop_id']; ?>" class="btn btn-action btn-light" title="Stores"><i class="fa fa-cubes"></i></a>
-                            <button type="button" class="btn btn-action btn-light" title="Edit" data-toggle="modal" data-target="#editShopModal<?php echo (int)$shop['shop_id']; ?>"><i class="fa fa-pencil"></i></button>
-                            <button type="button" class="btn btn-action btn-outline-danger" title="Delete"
-                                    data-toggle="modal" data-target="#deleteShopModal<?php echo (int)$shop['shop_id']; ?>">
-                                <i class="fa fa-trash"></i>
-                            </button>
+                            <?php
+                            echo row_action_menu([
+                                ['label' => 'View stores', 'icon' => 'fa-cubes', 'href' => 'stores.php?shop=' . (int)$shop['shop_id']],
+                                ['label' => 'Edit shop', 'icon' => 'fa-pencil', 'attrs' => ['data-toggle' => 'modal', 'data-target' => '#editShopModal' . (int)$shop['shop_id']]],
+                                ['type' => 'divider'],
+                                ['label' => 'Delete shop', 'icon' => 'fa-trash', 'danger' => true, 'attrs' => ['data-toggle' => 'modal', 'data-target' => '#deleteShopModal' . (int)$shop['shop_id']]],
+                            ], 'Shop actions');
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

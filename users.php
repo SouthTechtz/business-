@@ -116,14 +116,26 @@ require_once 'sidebar.php';
                         </td>
                         <td><?php echo $row['last_login'] ? e(date('M d, Y H:i', strtotime($row['last_login']))) : 'Never'; ?></td>
                         <td class="text-right">
-                            <a href="user-view.php?id=<?php echo $row['user_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                            <a href="user-edit.php?id=<?php echo $row['user_id']; ?>" class="btn btn-action btn-light" title="Edit"><i class="fa fa-pencil"></i></a>
-                            <?php if (can('manage_shops')): ?>
-                                <a href="user-shops.php?user=<?php echo $row['user_id']; ?>" class="btn btn-action btn-light" title="Shop access"><i class="fa fa-building"></i></a>
-                            <?php endif; ?>
-                            <?php if ($row['user_id'] !== $current_user->user_id): ?>
-                                <a href="users.php?delete=<?php echo $row['user_id']; ?>" class="btn btn-action btn-light text-danger" title="Delete" onclick="return confirm('Delete this user?');"><i class="fa fa-trash"></i></a>
-                            <?php endif; ?>
+                            <?php
+                            $user_actions = [
+                                ['label' => 'View user', 'icon' => 'fa-eye', 'href' => 'user-view.php?id=' . (int)$row['user_id']],
+                                ['label' => 'Edit user', 'icon' => 'fa-pencil', 'href' => 'user-edit.php?id=' . (int)$row['user_id']],
+                            ];
+                            if (can('manage_shops')) {
+                                $user_actions[] = ['label' => 'Shop access', 'icon' => 'fa-building', 'href' => 'user-shops.php?user=' . (int)$row['user_id']];
+                            }
+                            if ($row['user_id'] !== $current_user->user_id) {
+                                $user_actions[] = ['type' => 'divider'];
+                                $user_actions[] = [
+                                    'label' => 'Delete user',
+                                    'icon' => 'fa-trash',
+                                    'danger' => true,
+                                    'href' => 'users.php?delete=' . (int)$row['user_id'],
+                                    'attrs' => ['onclick' => "return confirm('Delete this user?');"],
+                                ];
+                            }
+                            echo row_action_menu($user_actions, 'User actions');
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

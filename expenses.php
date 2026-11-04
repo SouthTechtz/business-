@@ -295,13 +295,37 @@ require_once 'sidebar.php';
                         </td>
                         <td><?php echo e($ex['method_name'] ?? '—'); ?></td>
                         <td class="text-right font-weight-semibold" style="color:var(--danger)"><?php echo e(money($ex['amount'], $cur)); ?></td>
-                        <td class="no-print">
-                            <button class="btn btn-action btn-light edit-expense" data-id="<?php echo $ex['expense_id']; ?>" data-category="<?php echo (int)$ex['category_id']; ?>" data-description="<?php echo e($ex['description']); ?>" data-amount="<?php echo e($ex['amount']); ?>" data-date="<?php echo e($ex['expense_date']); ?>" data-method="<?php echo (int)$ex['payment_method_id']; ?>" data-notes="<?php echo e($ex['notes']); ?>" data-items='<?php echo e(json_encode($lines)); ?>'><i class="fa fa-pencil"></i></button>
-                            <form method="POST" action="expenses.php" class="d-inline" onsubmit="return confirm('Delete this expense?');">
-                                <input type="hidden" name="action" value="delete_expense">
-                                <input type="hidden" name="expense_id" value="<?php echo $ex['expense_id']; ?>">
-                                <button class="btn btn-action btn-light"><i class="fa fa-trash"></i></button>
-                            </form>
+                        <td class="no-print text-right">
+                            <?php
+                            echo row_action_menu([
+                                [
+                                    'label' => 'Edit expense',
+                                    'icon' => 'fa-pencil',
+                                    'class' => 'edit-expense',
+                                    'attrs' => [
+                                        'data-id' => (int)$ex['expense_id'],
+                                        'data-category' => (int)$ex['category_id'],
+                                        'data-description' => $ex['description'],
+                                        'data-amount' => $ex['amount'],
+                                        'data-date' => $ex['expense_date'],
+                                        'data-method' => (int)$ex['payment_method_id'],
+                                        'data-notes' => $ex['notes'],
+                                        'data-items' => json_encode($lines),
+                                    ],
+                                ],
+                                ['type' => 'divider'],
+                                [
+                                    'label' => 'Delete expense',
+                                    'icon' => 'fa-trash',
+                                    'danger' => true,
+                                    'form' => [
+                                        'action' => 'expenses.php',
+                                        'confirm' => 'Delete this expense?',
+                                        'fields' => ['action' => 'delete_expense', 'expense_id' => (int)$ex['expense_id']],
+                                    ],
+                                ],
+                            ], 'Expense actions');
+                            ?>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -402,11 +426,20 @@ require_once 'sidebar.php';
                     <?php foreach ($categories as $c): ?>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         <span><i class="fa fa-tag mr-2 text-muted"></i><?php echo e($c['name']); ?></span>
-                        <form method="POST" action="expenses.php" class="d-inline" onsubmit="return confirm('Delete this category?');">
-                            <input type="hidden" name="action" value="delete_category">
-                            <input type="hidden" name="category_id" value="<?php echo $c['expense_category_id']; ?>">
-                            <button class="btn btn-action btn-light"><i class="fa fa-trash"></i></button>
-                        </form>
+                        <?php
+                        echo row_action_menu([
+                            [
+                                'label' => 'Delete category',
+                                'icon' => 'fa-trash',
+                                'danger' => true,
+                                'form' => [
+                                    'action' => 'expenses.php',
+                                    'confirm' => 'Delete this category?',
+                                    'fields' => ['action' => 'delete_category', 'category_id' => (int)$c['expense_category_id']],
+                                ],
+                            ],
+                        ], 'Category actions');
+                        ?>
                     </li>
                     <?php endforeach; ?>
                 </ul>

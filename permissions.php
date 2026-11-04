@@ -157,11 +157,20 @@ require_once 'sidebar.php';
                             </td>
                             <td><?php echo count(array_filter($user_roles_map, fn($list) => in_array((int)$role['role_id'], array_column($list, 'role_id')))); ?></td>
                             <td class="text-right">
-                                <form method="POST" action="permissions.php" class="d-inline" onsubmit="return confirm('Delete this role?');">
-                                    <input type="hidden" name="action" value="delete_role">
-                                    <input type="hidden" name="role_id" value="<?php echo $role['role_id']; ?>">
-                                    <button type="submit" class="btn btn-action btn-light text-danger"><i class="fa fa-trash"></i></button>
-                                </form>
+                                <?php
+                                echo row_action_menu([
+                                    [
+                                        'label' => 'Delete role',
+                                        'icon' => 'fa-trash',
+                                        'danger' => true,
+                                        'form' => [
+                                            'action' => 'permissions.php',
+                                            'confirm' => 'Delete this role?',
+                                            'fields' => ['action' => 'delete_role', 'role_id' => (int)$role['role_id']],
+                                        ],
+                                    ],
+                                ], 'Role actions');
+                                ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

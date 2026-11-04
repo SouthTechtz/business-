@@ -214,14 +214,26 @@ $cur = tenant_currency();
                         <td class="text-right"><?php echo e(money($inv['total'], $cur)); ?></td>
                         <td class="text-right"><?php echo e(money($inv['amount_due'], $cur)); ?></td>
                         <td class="text-right">
-                            <a href="invoice-details.php?id=<?php echo $inv['invoice_id']; ?>" class="btn btn-action btn-light" title="View"><i class="fa fa-eye"></i></a>
-                            <a href="invoice-print.php?id=<?php echo $inv['invoice_id']; ?>" class="btn btn-action btn-light" title="Print"><i class="fa fa-print"></i></a>
-                            <?php if ((float)$inv['amount_due'] > 0): ?>
-                                <a href="payment-add.php?invoice=<?php echo $inv['invoice_id']; ?>" class="btn btn-action btn-light text-success" title="Record Payment"><i class="fa fa-money"></i></a>
-                            <?php endif; ?>
-                            <?php if ((float)$inv['amount_due'] == (float)$inv['total']): ?>
-                                <a href="invoices.php?delete=<?php echo $inv['invoice_id']; ?>" class="btn btn-action btn-light text-danger" title="Delete" onclick="return confirm('Delete this invoice?');"><i class="fa fa-trash"></i></a>
-                            <?php endif; ?>
+                            <?php
+                            $invoice_actions = [
+                                ['label' => 'View invoice', 'icon' => 'fa-eye', 'href' => 'invoice-details.php?id=' . (int)$inv['invoice_id']],
+                                ['label' => 'Print invoice', 'icon' => 'fa-print', 'href' => 'invoice-print.php?id=' . (int)$inv['invoice_id']],
+                            ];
+                            if ((float)$inv['amount_due'] > 0) {
+                                $invoice_actions[] = ['label' => 'Record payment', 'icon' => 'fa-money', 'href' => 'payment-add.php?invoice=' . (int)$inv['invoice_id']];
+                            }
+                            if ((float)$inv['amount_due'] == (float)$inv['total']) {
+                                $invoice_actions[] = ['type' => 'divider'];
+                                $invoice_actions[] = [
+                                    'label' => 'Delete invoice',
+                                    'icon' => 'fa-trash',
+                                    'danger' => true,
+                                    'href' => 'invoices.php?delete=' . (int)$inv['invoice_id'],
+                                    'attrs' => ['onclick' => "return confirm('Delete this invoice?');"],
+                                ];
+                            }
+                            echo row_action_menu($invoice_actions, 'Invoice actions');
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>
