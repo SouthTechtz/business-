@@ -20,21 +20,6 @@ if ($lead_id > 0) {
         (int)$current_user->tenant_id
     );
     if (!$lead) $lead_id = 0;
-    if ($lead_id > 0) {
-        $lead_request = fetch_one(
-            "SELECT request_id, converted_order_id
-               FROM storefront_lead_requests
-              WHERE lead_id = ? AND tenant_id = ?
-              ORDER BY request_id LIMIT 1",
-            $lead_id,
-            (int)$current_user->tenant_id
-        );
-        if ($lead_request && empty($lead_request['converted_order_id'])) {
-            // Request-based leads must be converted through verification so the
-            // ordered products and payable total are copied to the order.
-            redirect('lead-verify.php?id=' . $lead_id);
-        }
-    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -115,6 +100,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute();
             $order_id = $conn->insert_id;
             $stmt->close();
+
+            // When an order is created from a lead that has an online request,
+            // copy the ordered products and use their total on the order.
+            if ($order_lead_id) {
+                $lead_request = fetch_one(
+                    "SELECT request_id FROM storefront_lead_requests
+                      WHERE lead_id = ? AND tenant_id = ?
+                      ORDER BY request_id DESC LIMIT 1",
+                    $order_lead_id,
+                    (int)$current_user->tenant_id
+                );
+                if ($lead_request) {
+                    $request_id = (int)$lead_request['request_id'];
+                    $request_items = fetch_all(
+                        "SELECT * FROM storefront_lead_request_items
+                          WHERE request_id = ? AND tenant_id = ? ORDER BY line_no",
+                        $request_id,
+                        (int)$current_user->tenant_id
+                    );
+                    if ($request_items) {
+                        $copy = $conn->prepare(
+                            "INSERT INTO order_items (tenant_id, order_id, line_no, product_id, product_code_snapshot,
+                                product_name_snapshot, product_description_snapshot, unit_label_snapshot, quantity,
+                                unit_price, tax_rate_snapshot, line_total)
+                             SELECT tenant_id, ?, line_no, product_id, product_code_snapshot, product_name_snapshot,
+                                product_description_snapshot, unit_label_snapshot, quantity, unit_price,
+                                tax_rate_snapshot, line_total
+                             FROM storefront_lead_request_items WHERE request_id = ? AND tenant_id = ?"
+                        );
+                        if (!$copy) throw new RuntimeException($conn->error);
+                        $copy->bind_param('iii', $order_id, $request_id, $current_user->tenant_id);
+                        if (!$copy->execute() || $copy->affected_rows !== count($request_items)) {
+                            throw new RuntimeException('Could not copy the requested products onto the order.');
+                        }
+                        $copy->close();
+
+                        $request_subtotal = 0.0;
+                        foreach ($request_items as $request_item) {
+                            $request_subtotal += (float)$request_item['line_total'];
+                        }
+                        $request_subtotal = round($request_subtotal, 2);
+                        $total_stmt = $conn->prepare(
+                            "UPDATE orders
+                                SET subtotal = ?, total = ?,
+                                    Amount_paid = LEAST(COALESCE(Amount_paid, 0), ?)
+                              WHERE order_id = ? AND tenant_id = ?"
+                        );
+                        if (!$total_stmt) throw new RuntimeException($conn->error);
+                        $total_stmt->bind_param('dddii', $request_subtotal, $request_subtotal,
+                            $request_subtotal, $order_id, $current_user->tenant_id);
+                        if (!$total_stmt->execute()) throw new RuntimeException($total_stmt->error);
+                        $total_stmt->close();
+
+                        $link = $conn->prepare(
+                            "UPDATE storefront_lead_requests
+                                SET converted_order_id = ?, converted_at = COALESCE(converted_at, NOW())
+                              WHERE request_id = ? AND tenant_id = ? AND converted_order_id IS NULL"
+                        );
+                        if (!$link) throw new RuntimeException($conn->error);
+                        $link->bind_param('iii', $order_id, $request_id, $current_user->tenant_id);
+                        if (!$link->execute()) throw new RuntimeException($link->error);
+                        $link->close();
+                    }
+                }
+            }
 
             $conn->commit();
             flash_set('success', 'Order created successfully.');
