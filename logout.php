@@ -9,4 +9,5 @@ if (!empty($_SESSION['user_id'])) {
     }
 }
 end_session();
-redirect('login.php');
+// Send signed-out users back to the public landing page.
+redirect('index.php');
