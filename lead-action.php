@@ -494,16 +494,14 @@ try {
             if (!in_array($target, $allowed, true)) {
                 lead_action_redirect($back, 'danger', 'That status change is not allowed from ' . ($statuses[$lead['status']] ?? $lead['status']) . '.');
             }
-            $storefront_request = $lead['source'] === 'storefront'
-                ? fetch_one(
-                    "SELECT request_id, converted_order_id FROM storefront_lead_requests WHERE lead_id = ? AND tenant_id = ?",
-                    $id,
-                    (int)$current_user->tenant_id
-                )
-                : null;
-            // Storefront requests must be confirmed on the shop-aware page so the
-            // order is linked to a shop before any stock is reserved.
-            if ($target === 'confirmed' && $storefront_request && empty($storefront_request['converted_order_id'])) {
+            $lead_request = fetch_one(
+                "SELECT request_id, converted_order_id FROM storefront_lead_requests WHERE lead_id = ? AND tenant_id = ?",
+                $id,
+                (int)$current_user->tenant_id
+            );
+            // Any lead with an order request must be confirmed on the shop-aware
+            // verification page so products and totals are copied to the order.
+            if ($target === 'confirmed' && $lead_request && empty($lead_request['converted_order_id'])) {
                 flash_set('info', 'Choose the responsible shop to confirm this request and create the order.');
                 redirect('lead-verify.php?id=' . $id);
             }

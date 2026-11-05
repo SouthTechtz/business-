@@ -20,6 +20,21 @@ if ($lead_id > 0) {
         (int)$current_user->tenant_id
     );
     if (!$lead) $lead_id = 0;
+    if ($lead_id > 0) {
+        $lead_request = fetch_one(
+            "SELECT request_id, converted_order_id
+               FROM storefront_lead_requests
+              WHERE lead_id = ? AND tenant_id = ?
+              ORDER BY request_id LIMIT 1",
+            $lead_id,
+            (int)$current_user->tenant_id
+        );
+        if ($lead_request && empty($lead_request['converted_order_id'])) {
+            // Request-based leads must be converted through verification so the
+            // ordered products and payable total are copied to the order.
+            redirect('lead-verify.php?id=' . $lead_id);
+        }
+    }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
