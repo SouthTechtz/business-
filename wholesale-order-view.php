@@ -37,6 +37,14 @@ $can_confirm_receipt = $has_order && wholesale_order_can_confirm_receipt([
     'stage' => $request_row['order_stage'] ?? 'shop',
     'customer_confirmed_at' => $request_row['order_customer_confirmed_at'] ?? null,
 ]);
+$order_payment_meta = $has_order ? wholesale_order_payment_meta([
+    'total' => $request_row['order_total'] ?? 0,
+    'Amount_paid' => $request_row['order_amount_paid'] ?? 0,
+]) : null;
+$order_is_paid = $has_order && wholesale_order_is_paid([
+    'total' => $request_row['order_total'] ?? 0,
+    'Amount_paid' => $request_row['order_amount_paid'] ?? 0,
+]);
 
 $page_title = 'Request ' . $request_row['lead_number'];
 require __DIR__ . '/wholesale-portal-header.php';
@@ -48,7 +56,11 @@ require __DIR__ . '/wholesale-portal-header.php';
     </div>
     <div class="ws-page-head-actions">
         <a class="ws-btn" href="wholesale-orders.php"><i class="fa fa-arrow-left" aria-hidden="true"></i> Back to orders</a>
-        <a class="ws-btn ws-btn-primary" href="wholesale-order-new.php"><i class="fa fa-plus" aria-hidden="true"></i> New request</a>
+        <?php if ($order_is_paid): ?>
+            <a class="ws-btn ws-btn-primary" href="wholesale-order-receipt.php?id=<?php echo (int)$request_row['order_id']; ?>"><i class="fa fa-file-text-o" aria-hidden="true"></i> View receipt</a>
+            <a class="ws-btn" href="wholesale-order-receipt.php?id=<?php echo (int)$request_row['order_id']; ?>&amp;download=1"><i class="fa fa-download" aria-hidden="true"></i> Download</a>
+        <?php endif; ?>
+        <a class="ws-btn" href="wholesale-order-new.php"><i class="fa fa-plus" aria-hidden="true"></i> New request</a>
     </div>
 </div>
 
@@ -104,6 +116,15 @@ require __DIR__ . '/wholesale-portal-header.php';
                     <?php if ($has_order): ?>
                         <div><dt>Order total</dt><dd><?php echo e(money($request_row['order_total'], $request_row['order_currency_code'] ?: $currency)); ?></dd></div>
                         <div><dt>Order status</dt><dd><?php echo e(ucfirst((string)$request_row['order_status'])); ?></dd></div>
+                        <div>
+                            <dt>Payment</dt>
+                            <dd>
+                                <span class="ws-badge <?php echo e($order_payment_meta['class']); ?>"><?php echo e($order_payment_meta['label']); ?></span>
+                                <?php if ($order_is_paid): ?>
+                                    <br><small class="text-muted"><?php echo e(money($request_row['order_amount_paid'], $request_row['order_currency_code'] ?: $currency)); ?> paid</small>
+                                <?php endif; ?>
+                            </dd>
+                        </div>
                         <div>
                             <dt>Order stage</dt>
                             <dd><span class="ws-badge <?php echo e($order_stage_meta['class']); ?>"><?php echo e($order_stage_meta['label']); ?></span></dd>

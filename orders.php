@@ -1,6 +1,7 @@
 ﻿<?php
 require_once 'config.php';
 require_once 'auth_check.php';
+require_once 'wholesale.php';
 require_permission('manage_orders');
 
 // 1. HANDLE AJAX REQUESTS FOR QUICK MODAL UPDATES (Must run before any HTML output)
@@ -104,6 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             }
             $stmt->close();
             $conn->commit();
+            wholesale_notify_order_paid($order_id, $tenant_id);
         } catch (Throwable $e) {
             $conn->rollback();
             throw $e;

@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'wholesale.php';
 require_permission('manage_orders');
 $page_title = 'New Order';
 
@@ -167,6 +168,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $conn->commit();
+            wholesale_notify_order_paid($order_id, (int)$current_user->tenant_id);
             flash_set('success', 'Order created successfully.');
             redirect('order-view.php?id=' . $order_id);
         } catch (Exception $ex) {

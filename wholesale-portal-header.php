@@ -11,12 +11,14 @@ if ($ws_logo === '' || !file_exists(__DIR__ . '/' . ltrim($ws_logo, '/'))) {
 $ws_current = basename((string)($_SERVER['SCRIPT_NAME'] ?? ''));
 $ws_title = isset($page_title) && $page_title !== '' ? $page_title : 'Wholesale portal';
 $ws_nav = [
-    'wholesale-dashboard.php' => ['Dashboard', 'fa-tachometer'],
-    'wholesale-order-new.php' => ['New order', 'fa-plus-circle'],
-    'wholesale-orders.php'    => ['My orders', 'fa-list-alt'],
-    'wholesale-activity.php'  => ['Activity', 'fa-history'],
-    'wholesale-account.php'   => ['My account', 'fa-user-circle'],
+    'wholesale-dashboard.php'      => ['Dashboard', 'fa-tachometer'],
+    'wholesale-order-new.php'      => ['New order', 'fa-plus-circle'],
+    'wholesale-orders.php'         => ['My orders', 'fa-list-alt'],
+    'wholesale-notifications.php'  => ['Notifications', 'fa-bell'],
+    'wholesale-activity.php'       => ['Activity', 'fa-history'],
+    'wholesale-account.php'        => ['My account', 'fa-user-circle'],
 ];
+$ws_unread_notifications = wholesale_unread_notification_count((int)$wholesale_user->tenant_id, (int)$wholesale_user->user_id);
 $ws_name = trim((string)$wholesaler['business_name']);
 if ($ws_name === '') $ws_name = $wholesale_user->fullName();
 $ws_contact_line = trim((string)($wholesaler['email'] ?? ''));
@@ -54,6 +56,9 @@ if ($ws_contact_line === '') $ws_contact_line = (string)$wholesale_user->usernam
                    <?php echo $ws_current === $ws_href ? 'aria-current="page"' : ''; ?>>
                     <i class="fa <?php echo e($ws_item[1]); ?>" aria-hidden="true"></i>
                     <span><?php echo e($ws_item[0]); ?></span>
+                    <?php if ($ws_href === 'wholesale-notifications.php' && $ws_unread_notifications > 0): ?>
+                        <span class="ws-nav-badge" aria-label="<?php echo (int)$ws_unread_notifications; ?> unread notifications"><?php echo (int)$ws_unread_notifications; ?></span>
+                    <?php endif; ?>
                 </a>
             <?php endforeach; ?>
         </nav>

@@ -68,6 +68,137 @@ function wholesale_order_can_confirm_receipt($order) {
     return $stage !== 'returned';
 }
 
+/** Whether a wholesale order has been fully paid. */
+function wholesale_order_is_paid($order) {
+    if (!$order) return false;
+    $total = round((float)($order['total'] ?? 0), 2);
+    $paid = round((float)($order['Amount_paid'] ?? 0), 2);
+    return $total > 0 && $paid + 0.005 >= $total;
+}
+
+/** Payment label and badge class for a wholesale order. */
+function wholesale_order_payment_meta($order) {
+    $total = round((float)($order['total'] ?? 0), 2);
+    $paid = round((float)($order['Amount_paid'] ?? 0), 2);
+    if ($total > 0 && $paid + 0.005 >= $total) {
+        return ['label' => 'Paid', 'class' => 'is-success'];
+    }
+    if ($paid > 0) {
+        return ['label' => 'Partially paid', 'class' => 'is-info'];
+    }
+    return ['label' => 'Unpaid', 'class' => 'is-neutral'];
+}
+
+/**
+ * Notify the wholesale customer when their order becomes fully paid.
+ * Safe to call after any order amount update; duplicates are ignored.
+ */
+function wholesale_notify_order_paid($order_id, $tenant_id) {
+    global $conn;
+
+    if (!db_table_exists('wholesale_notifications')) return false;
+
+    $order = fetch_one(
+        "SELECT o.order_id, o.order_number, o.currency_code, o.total, o.Amount_paid,
+                w.user_id AS wholesaler_user_id, w.contact_id
+           FROM orders o
+           JOIN wholesaler_accounts w
+             ON w.contact_id = o.contact_id AND w.tenant_id = o.tenant_id
+          WHERE o.order_id = ? AND o.tenant_id = ?
+          LIMIT 1",
+        (int)$order_id,
+        (int)$tenant_id
+    );
+    if (!$order || !wholesale_order_is_paid($order)) return false;
+
+    $user_id = (int)($order['wholesaler_user_id'] ?? 0);
+    if ($user_id <= 0) return false;
+
+    $currency = (string)($order['currency_code'] ?? '') ?: tenant_currency();
+    $title = 'Payment received for ' . $order['order_number'];
+    $message = 'We have received full payment of ' . money($order['total'], $currency)
+        . ' for order ' . $order['order_number'] . '. Your receipt is ready to view or download.';
+
+    $stmt = $conn->prepare(
+        "INSERT IGNORE INTO wholesale_notifications
+            (tenant_id, user_id, contact_id, order_id, type, title, message, created_at)
+         VALUES (?, ?, ?, ?, 'order_paid', ?, ?, NOW())"
+    );
+    if (!$stmt) return false;
+    $contact_id = (int)($order['contact_id'] ?? 0) ?: null;
+    $stmt->bind_param(
+        'iiiiss',
+        $tenant_id,
+        $user_id,
+        $contact_id,
+        $order_id,
+        $title,
+        $message
+    );
+    $ok = $stmt->execute();
+    $created = $ok && $stmt->affected_rows > 0;
+    $stmt->close();
+    return $created;
+}
+
+/** Notifications for a wholesale portal user, newest first. */
+function wholesale_notifications($tenant_id, $user_id, $limit = 50, $offset = 0) {
+    if (!db_table_exists('wholesale_notifications')) return [];
+    $limit = max(1, min(200, (int)$limit));
+    $offset = max(0, (int)$offset);
+    return fetch_all(
+        "SELECT n.*,
+                (SELECT r.request_id FROM storefront_lead_requests r
+                  WHERE r.converted_order_id = n.order_id AND r.tenant_id = n.tenant_id
+                  ORDER BY r.request_id LIMIT 1) AS request_id,
+                o.order_number, o.total AS order_total, o.Amount_paid AS order_amount_paid,
+                o.currency_code AS order_currency_code
+           FROM wholesale_notifications n
+           LEFT JOIN orders o ON o.order_id = n.order_id AND o.tenant_id = n.tenant_id
+          WHERE n.tenant_id = ? AND n.user_id = ?
+          ORDER BY n.created_at DESC, n.notification_id DESC
+          LIMIT {$limit} OFFSET {$offset}",
+        (int)$tenant_id,
+        (int)$user_id
+    );
+}
+
+/** Number of unread wholesale notifications. */
+function wholesale_unread_notification_count($tenant_id, $user_id) {
+    if (!db_table_exists('wholesale_notifications')) return 0;
+    $row = fetch_one(
+        "SELECT COUNT(*) AS total FROM wholesale_notifications
+          WHERE tenant_id = ? AND user_id = ? AND read_at IS NULL",
+        (int)$tenant_id,
+        (int)$user_id
+    );
+    return (int)($row['total'] ?? 0);
+}
+
+/** Mark one notification, or all notifications, as read. */
+function wholesale_mark_notifications_read($tenant_id, $user_id, $notification_id = null) {
+    global $conn;
+    if (!db_table_exists('wholesale_notifications')) return;
+    if ($notification_id !== null) {
+        $stmt = $conn->prepare(
+            "UPDATE wholesale_notifications SET read_at = NOW()
+              WHERE notification_id = ? AND tenant_id = ? AND user_id = ? AND read_at IS NULL"
+        );
+        if (!$stmt) return;
+        $notification_id = (int)$notification_id;
+        $stmt->bind_param('iii', $notification_id, $tenant_id, $user_id);
+    } else {
+        $stmt = $conn->prepare(
+            "UPDATE wholesale_notifications SET read_at = NOW()
+              WHERE tenant_id = ? AND user_id = ? AND read_at IS NULL"
+        );
+        if (!$stmt) return;
+        $stmt->bind_param('ii', $tenant_id, $user_id);
+    }
+    $stmt->execute();
+    $stmt->close();
+}
+
 /** One order belonging to a wholesale contact, or null. */
 function wholesale_order($tenant_id, $order_id, $contact_id) {
     return fetch_one(
@@ -92,7 +223,8 @@ function wholesale_requests($tenant_id, $contact_id, $limit = 50, $offset = 0) {
                 l.lead_id, l.lead_number, l.status, l.notes,
                 o.order_id, o.order_number, o.status AS order_status, o.stage AS order_stage,
                 o.customer_confirmed_at AS order_customer_confirmed_at,
-                o.total AS order_total, o.currency_code AS order_currency_code,
+                o.total AS order_total, o.Amount_paid AS order_amount_paid,
+                o.currency_code AS order_currency_code,
                 o.created_at AS order_created_at
            FROM storefront_lead_requests r
            JOIN leads l ON l.lead_id = r.lead_id AND l.tenant_id = r.tenant_id
@@ -127,7 +259,8 @@ function wholesale_request($tenant_id, $request_id, $contact_id) {
                 o.order_id, o.order_number, o.status AS order_status, o.stage AS order_stage,
                 o.customer_confirmed_at AS order_customer_confirmed_at,
                 o.customer_confirmation_note AS order_customer_confirmation_note,
-                o.total AS order_total, o.currency_code AS order_currency_code,
+                o.total AS order_total, o.Amount_paid AS order_amount_paid,
+                o.currency_code AS order_currency_code,
                 o.created_at AS order_created_at
            FROM storefront_lead_requests r
            JOIN leads l ON l.lead_id = r.lead_id AND l.tenant_id = r.tenant_id
@@ -156,7 +289,7 @@ function wholesale_orders($tenant_id, $contact_id, $limit = 50) {
     $limit = max(1, min(200, (int)$limit));
     return fetch_all(
         "SELECT o.order_id, o.order_number, o.status, o.stage, o.customer_confirmed_at,
-                o.currency_code, o.subtotal, o.total, o.created_at, o.notes,
+                o.currency_code, o.subtotal, o.total, o.Amount_paid, o.created_at, o.notes,
                 (SELECT r.request_id FROM storefront_lead_requests r
                   WHERE r.converted_order_id = o.order_id AND r.tenant_id = o.tenant_id
                   ORDER BY r.request_id LIMIT 1) AS request_id

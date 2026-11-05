@@ -102,7 +102,7 @@ require __DIR__ . '/wholesale-portal-header.php';
         <div class="ws-table-wrap">
             <table class="ws-table">
                 <thead>
-                    <tr><th>Order</th><th>Date</th><th class="text-right">Total</th><th>Stage</th><th>Status</th><th class="text-right">Delivery</th></tr>
+                    <tr><th>Order</th><th>Date</th><th class="text-right">Total</th><th>Stage</th><th>Status</th><th>Payment</th><th class="text-right">Delivery</th></tr>
                 </thead>
                 <tbody>
                     <?php foreach ($orders as $order_row): ?>
@@ -110,6 +110,8 @@ require __DIR__ . '/wholesale-portal-header.php';
                         $stage_meta = wholesale_order_stage_meta($order_row['stage'] ?? 'shop');
                         $received = wholesale_order_is_received($order_row);
                         $can_confirm = wholesale_order_can_confirm_receipt($order_row);
+                        $payment_meta = wholesale_order_payment_meta($order_row);
+                        $is_paid = wholesale_order_is_paid($order_row);
                         ?>
                         <tr>
                             <td>
@@ -117,11 +119,15 @@ require __DIR__ . '/wholesale-portal-header.php';
                                 <?php if (!empty($order_row['request_id'])): ?>
                                     <br><a class="ws-btn ws-btn-sm mt-1" href="wholesale-order-view.php?id=<?php echo (int)$order_row['request_id']; ?>">View request</a>
                                 <?php endif; ?>
+                                <?php if ($is_paid): ?>
+                                    <br><a class="ws-btn ws-btn-sm mt-1" href="wholesale-order-receipt.php?id=<?php echo (int)$order_row['order_id']; ?>"><i class="fa fa-file-text-o" aria-hidden="true"></i> Receipt</a>
+                                <?php endif; ?>
                             </td>
                             <td><?php echo e(date('d M Y, H:i', strtotime($order_row['created_at']))); ?></td>
                             <td class="text-right"><?php echo e(money($order_row['total'], $order_row['currency_code'] ?: $currency)); ?></td>
                             <td><span class="ws-badge <?php echo e($stage_meta['class']); ?>"><?php echo e($stage_meta['label']); ?></span></td>
                             <td><span class="ws-badge is-neutral"><?php echo e(ucfirst((string)$order_row['status'])); ?></span></td>
+                            <td><span class="ws-badge <?php echo e($payment_meta['class']); ?>"><?php echo e($payment_meta['label']); ?></span></td>
                             <td class="text-right">
                                 <?php if ($received): ?>
                                     <span class="ws-badge is-success">Received</span>
