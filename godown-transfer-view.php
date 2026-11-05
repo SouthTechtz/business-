@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'notification-helpers.php';
 require_permission_any(['manage_godown', 'approve_godown_transfers', 'dispatch_godown_transfers', 'receive_godown_transfers', 'request_godown_transfers', 'manage_inventory', 'manage_shops']);
 $page_title = 'Stock Transfer';
 
@@ -180,6 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $conn->commit();
             $in_transaction = false;
+            notification_notify_transfer_approved($transfer_id, $tenant_id, (int)$current_user->user_id);
             consume_form_token();
             audit_log('approve', 'stock_transfer', $transfer_id, 'Transfer ' . $locked['transfer_number'] . ' approved. No stock changed.');
             flash_set('success', 'Transfer approved. Physical stock is unchanged until dispatch.');
@@ -286,6 +288,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $conn->commit();
             $in_transaction = false;
+            notification_notify_transfer_dispatched($transfer_id, $tenant_id, (int)$current_user->user_id);
             consume_form_token();
             audit_log('dispatch', 'stock_transfer', $transfer_id, 'Transfer ' . $locked['transfer_number'] . ' dispatched; source stock deducted once and now in transit.');
             flash_set('success', 'Transfer dispatched. Source stock was deducted and the quantities are now in transit.');
@@ -491,6 +494,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $conn->commit();
             $in_transaction = false;
+            notification_notify_transfer_received($transfer_id, $tenant_id, $total_accepted, $has_discrepancy, (int)$current_user->user_id);
             consume_form_token();
             audit_log(
                 'receive',
@@ -544,6 +548,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $conn->commit();
             $in_transaction = false;
+            notification_notify_transfer_cancelled($transfer_id, $tenant_id, (int)$current_user->user_id);
             consume_form_token();
             audit_log('cancel', 'stock_transfer', $transfer_id, 'Transfer ' . $locked['transfer_number'] . ' cancelled: ' . $reason);
             flash_set('success', 'Transfer cancelled. No stock was moved.');
@@ -586,6 +591,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $conn->commit();
             $in_transaction = false;
+            notification_notify_transfer_resolved($transfer_id, $tenant_id, (int)$current_user->user_id);
             consume_form_token();
             audit_log('resolve', 'stock_transfer', $transfer_id, 'Discrepancy on transfer ' . $locked['transfer_number'] . ' resolved: ' . $resolution . '. Original quantities were preserved.');
             flash_set('success', 'Discrepancy resolved. Original quantities and stock movements were preserved.');

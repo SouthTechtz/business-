@@ -17,6 +17,9 @@
     </div>
 </div>
 
+<div class="app-toast-stack" id="appToastStack" data-feed="notifications-feed.php" aria-live="polite" aria-atomic="false"></div>
+<script src="assets/js/notification-toasts.js?v=<?php echo file_exists('assets/js/notification-toasts.js') ? filemtime('assets/js/notification-toasts.js') : time(); ?>"></script>
+
 <script>
     function showAppAlert(message, title, onClose) {
         var $modal = $('#appAlertModal');

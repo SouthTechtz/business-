@@ -1,7 +1,8 @@
-ï»¿<?php
+<?php
 require_once 'config.php';
 require_once 'auth_check.php';
 require_once 'wholesale.php';
+require_once 'notification-helpers.php';
 require_permission('manage_orders');
 
 // 1. HANDLE AJAX REQUESTS FOR QUICK MODAL UPDATES (Must run before any HTML output)
@@ -106,6 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
             $stmt->close();
             $conn->commit();
             wholesale_notify_order_paid($order_id, $tenant_id);
+            notification_notify_order_paid($order_id, $tenant_id, (int)$current_user->user_id);
         } catch (Throwable $e) {
             $conn->rollback();
             throw $e;
@@ -336,7 +338,7 @@ function order_stage_class($stage) {
                                 <?php echo e($o['customer_name']); ?>
                                 <?php if ($o['customer_phone']): ?><br><small class="text-muted"><?php echo e($o['customer_phone']); ?></small><?php endif; ?>
                             </td>
-                            <td><?php echo e($o['shop_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . ($o['store_name'] ?? ''), ' /') : 'â€”'); ?></td>
+                            <td><?php echo e($o['shop_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . ($o['store_name'] ?? ''), ' /') : '—'); ?></td>
                             <td>
                                 <span class="badge badge-<?php echo e(order_stage_class($current_stage)); ?>">
                                     <?php echo e($stages[$current_stage] ?? ucfirst($current_stage)); ?>
@@ -353,7 +355,7 @@ function order_stage_class($stage) {
                                 <?php
                                 $assignee = trim((string)($o['assignee_first'] ?? '') . ' ' . (string)($o['assignee_last'] ?? ''));
                                 $creator = trim((string)($o['creator_first'] ?? '') . ' ' . (string)($o['creator_last'] ?? ''));
-                                echo e($assignee ?: $creator ?: 'â€”');
+                                echo e($assignee ?: $creator ?: '—');
                                 ?>
                             </td>
                             <td><?php echo e(date('M d, Y H:i', strtotime($o['created_at']))); ?></td>

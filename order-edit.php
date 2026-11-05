@@ -2,6 +2,7 @@
 require_once 'header.php';
 require_once 'auth_check.php';
 require_once 'wholesale.php';
+require_once 'notification-helpers.php';
 require_permission('manage_orders');
 $page_title = 'Edit Order';
 
@@ -115,6 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->close();
             $conn->commit();
             wholesale_notify_order_paid($id, (int)$current_user->tenant_id);
+            notification_notify_order_paid($id, (int)$current_user->tenant_id, (int)$current_user->user_id);
             audit_log('update', 'order', $id, 'Order updated');
             flash_set('success', 'Order updated successfully.');
             redirect('order-view.php?id=' . $id);

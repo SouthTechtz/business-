@@ -217,6 +217,103 @@ $recent_wholesalers = db_table_exists('wholesaler_accounts')
     )
     : [];
 
+// Total earned by each shop: completed POS sales + paid online/wholesale
+// orders fulfilled by the shop, less completed refunds.
+$shop_earnings = fetch_all(
+    "SELECT s.shop_id, s.name, s.code, s.is_active,
+            COALESCE((
+                SELECT SUM(po.total)
+                  FROM pos_orders po
+                  JOIN warehouses w ON w.warehouse_id = po.warehouse_id AND w.tenant_id = po.tenant_id
+                 WHERE po.tenant_id = s.tenant_id
+                   AND w.shop_id = s.shop_id
+                   AND po.status = 'completed'
+            ), 0) AS pos_sales,
+            COALESCE((
+                SELECT SUM(o.Amount_paid)
+                  FROM orders o
+                 WHERE o.tenant_id = s.tenant_id
+                   AND o.status NOT IN ('cancelled', 'rejected')
+                   AND (o.stage IS NULL OR o.stage <> 'returned')
+                   AND (
+                       o.shop_id = s.shop_id
+                       OR (o.shop_id IS NULL AND o.warehouse_id IN (
+                           SELECT w2.warehouse_id FROM warehouses w2
+                            WHERE w2.tenant_id = s.tenant_id AND w2.shop_id = s.shop_id
+                       ))
+                   )
+            ), 0) AS order_payments,
+            COALESCE((
+                SELECT SUM(sr.refund_amount)
+                  FROM sales_returns sr
+                 WHERE sr.tenant_id = s.tenant_id
+                   AND sr.status = 'completed'
+                   AND (
+                       sr.shop_id = s.shop_id
+                       OR (sr.shop_id IS NULL AND sr.warehouse_id IN (
+                           SELECT w3.warehouse_id FROM warehouses w3
+                            WHERE w3.tenant_id = s.tenant_id AND w3.shop_id = s.shop_id
+                       ))
+                   )
+            ), 0) AS refunds
+       FROM shops s
+      WHERE s.tenant_id = ?
+      ORDER BY s.is_active DESC, s.name ASC",
+    $current_user->tenant_id
+);
+
+// Orders not linked to a shop (for example an online order awaiting shop
+// assignment) are shown separately so the card still reconciles.
+$unassigned_earnings = fetch_one(
+    "SELECT
+        COALESCE((SELECT SUM(o.Amount_paid) FROM orders o
+                   WHERE o.tenant_id = ? AND o.status NOT IN ('cancelled', 'rejected')
+                     AND (o.stage IS NULL OR o.stage <> 'returned')
+                     AND o.shop_id IS NULL
+                     AND (o.warehouse_id IS NULL OR o.warehouse_id NOT IN (
+                         SELECT w.warehouse_id FROM warehouses w
+                          WHERE w.tenant_id = ? AND w.shop_id IS NOT NULL
+                     ))), 0) AS order_payments,
+        COALESCE((SELECT SUM(sr.refund_amount) FROM sales_returns sr
+                   WHERE sr.tenant_id = ? AND sr.status = 'completed'
+                     AND sr.shop_id IS NULL
+                     AND (sr.warehouse_id IS NULL OR sr.warehouse_id NOT IN (
+                         SELECT w.warehouse_id FROM warehouses w
+                          WHERE w.tenant_id = ? AND w.shop_id IS NOT NULL
+                     ))), 0) AS refunds",
+    $current_user->tenant_id,
+    $current_user->tenant_id,
+    $current_user->tenant_id,
+    $current_user->tenant_id
+) ?: [];
+$unassigned_orders = (float)($unassigned_earnings['order_payments'] ?? 0);
+$unassigned_refunds = (float)($unassigned_earnings['refunds'] ?? 0);
+if (abs($unassigned_orders) > 0.005 || abs($unassigned_refunds) > 0.005) {
+    $shop_earnings[] = [
+        'shop_id' => 0,
+        'name' => 'Unassigned',
+        'code' => 'Orders not linked to a shop',
+        'is_active' => 0,
+        'pos_sales' => 0,
+        'order_payments' => $unassigned_orders,
+        'refunds' => $unassigned_refunds,
+    ];
+}
+
+$shop_pos_total = 0.0;
+$shop_order_total = 0.0;
+$shop_refunds_total = 0.0;
+$shop_earnings_total = 0.0;
+foreach ($shop_earnings as $shop_row) {
+    $shop_pos = (float)($shop_row['pos_sales'] ?? 0);
+    $shop_orders = (float)($shop_row['order_payments'] ?? 0);
+    $shop_refunds = (float)($shop_row['refunds'] ?? 0);
+    $shop_pos_total += $shop_pos;
+    $shop_order_total += $shop_orders;
+    $shop_refunds_total += $shop_refunds;
+    $shop_earnings_total += $shop_pos + $shop_orders - $shop_refunds;
+}
+
 require_once 'navbar.php';
 require_once 'sidebar.php';
 ?>
@@ -362,6 +459,78 @@ require_once 'sidebar.php';
                 <div class="widget-label">Low Stock Items</div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12 mb-3">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap" style="gap:8px;">
+                <div>
+                    <h5 class="card-title mb-0">Total Earned by Shop</h5>
+                    <small class="text-muted">Completed POS sales and order payments, less refunds.</small>
+                </div>
+                <span class="badge badge-primary" style="font-size:12px;padding:7px 12px;">
+                    <?php echo e(money($shop_earnings_total, $cur)); ?> total
+                </span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Shop</th>
+                                <th class="text-right">POS Sales</th>
+                                <th class="text-right">Order Payments</th>
+                                <th class="text-right">Refunds</th>
+                                <th class="text-right">Total Earned</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        <?php if (!$shop_earnings): ?>
+                            <tr><td colspan="5" class="text-center text-muted py-4">No shops yet.</td></tr>
+                        <?php else: foreach ($shop_earnings as $shop_row): ?>
+                            <?php
+                            $shop_pos = (float)($shop_row['pos_sales'] ?? 0);
+                            $shop_orders = (float)($shop_row['order_payments'] ?? 0);
+                            $shop_refunds = (float)($shop_row['refunds'] ?? 0);
+                            $shop_net = $shop_pos + $shop_orders - $shop_refunds;
+                            ?>
+                            <tr>
+                                <td>
+                                    <?php if ((int)$shop_row['shop_id'] > 0): ?>
+                                        <a href="shop-view.php?id=<?php echo (int)$shop_row['shop_id']; ?>" class="font-weight-semibold"><?php echo e($shop_row['name']); ?></a>
+                                    <?php else: ?>
+                                        <span class="font-weight-semibold"><?php echo e($shop_row['name']); ?></span>
+                                    <?php endif; ?>
+                                    <div class="text-muted small">
+                                        <?php echo e($shop_row['code']); ?><?php echo ((int)$shop_row['is_active'] === 1 || (int)$shop_row['shop_id'] === 0) ? '' : ' &middot; Inactive'; ?>
+                                    </div>
+                                </td>
+                                <td class="text-right"><?php echo e(money($shop_pos, $cur)); ?></td>
+                                <td class="text-right"><?php echo e(money($shop_orders, $cur)); ?></td>
+                                <td class="text-right <?php echo $shop_refunds > 0 ? 'text-danger' : 'text-muted'; ?>">
+                                    <?php echo $shop_refunds > 0 ? '- ' . e(money($shop_refunds, $cur)) : e(money(0, $cur)); ?>
+                                </td>
+                                <td class="text-right font-weight-semibold"><?php echo e(money($shop_net, $cur)); ?></td>
+                            </tr>
+                        <?php endforeach; endif; ?>
+                        </tbody>
+                        <?php if ($shop_earnings): ?>
+                        <tfoot>
+                            <tr>
+                                <th>Total</th>
+                                <th class="text-right"><?php echo e(money($shop_pos_total, $cur)); ?></th>
+                                <th class="text-right"><?php echo e(money($shop_order_total, $cur)); ?></th>
+                                <th class="text-right"><?php echo $shop_refunds_total > 0 ? '- ' . e(money($shop_refunds_total, $cur)) : e(money(0, $cur)); ?></th>
+                                <th class="text-right"><?php echo e(money($shop_earnings_total, $cur)); ?></th>
+                            </tr>
+                        </tfoot>
+                        <?php endif; ?>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 

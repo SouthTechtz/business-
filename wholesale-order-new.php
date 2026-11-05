@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/wholesale_auth.php';
 require_once __DIR__ . '/storefront.php';
+require_once __DIR__ . '/notification-helpers.php';
 
 $tenant_id = (int)$wholesale_user->tenant_id;
 $contact_id = (int)($wholesaler['contact_id'] ?? 0);
@@ -155,6 +156,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
 
             $conn->commit();
+            notification_notify_order_request(
+                $tenant_id,
+                $lead_id,
+                $lead_number,
+                $company_name,
+                $subtotal,
+                $currency,
+                'wholesale',
+                (int)$wholesale_user->user_id
+            );
             consume_form_token();
             audit_log('create', 'wholesale_order', $request_id, 'Wholesale order request ' . $lead_number);
             flash_set('success', 'Order request ' . $lead_number . ' was sent. Our team will confirm stock and pricing.');

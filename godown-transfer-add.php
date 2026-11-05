@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'notification-helpers.php';
 require_permission_any(['manage_godown', 'request_godown_transfers']);
 $can_manage_godown = can('manage_godown');
 $can_request = can('request_godown_transfers');
@@ -488,6 +489,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $conn->commit();
         $in_transaction = false;
+        notification_notify_stock_request($transfer_id, $tenant_id, (int)$current_user->user_id);
         consume_form_token();
         audit_log(
             'create',

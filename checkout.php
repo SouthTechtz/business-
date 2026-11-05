@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/storefront.php';
+require_once __DIR__ . '/notification-helpers.php';
 
 $sf_tenant = storefront_tenant();
 if (!$sf_tenant) {
@@ -248,6 +249,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
 
             $conn->commit();
+            notification_notify_order_request(
+                $sf_tenant_id,
+                $sf_lead_id,
+                $sf_lead_number,
+                $sf_form['customer_name'],
+                $sf_estimated_total,
+                $sf_currency,
+                'online'
+            );
             consume_form_token();
             unset($_SESSION['storefront_cart']);
             $_SESSION['storefront_last_order'] = [

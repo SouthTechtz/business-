@@ -53,6 +53,7 @@ if ($ws_contact_line === '') $ws_contact_line = (string)$wholesale_user->usernam
         <nav class="ws-nav" aria-label="Wholesale portal">
             <?php foreach ($ws_nav as $ws_href => $ws_item): ?>
                 <a href="<?php echo e($ws_href); ?>" class="ws-nav-link<?php echo $ws_current === $ws_href ? ' is-active' : ''; ?>"
+                   <?php echo $ws_href === 'wholesale-notifications.php' ? 'id="wsNotifyNav"' : ''; ?>
                    <?php echo $ws_current === $ws_href ? 'aria-current="page"' : ''; ?>>
                     <i class="fa <?php echo e($ws_item[1]); ?>" aria-hidden="true"></i>
                     <span><?php echo e($ws_item[0]); ?></span>

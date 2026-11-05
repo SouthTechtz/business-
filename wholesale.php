@@ -175,6 +175,60 @@ function wholesale_unread_notification_count($tenant_id, $user_id) {
     return (int)($row['total'] ?? 0);
 }
 
+/** Whether wholesale notifications support one-time toast tracking. */
+function wholesale_notifications_toast_supported() {
+    global $conn;
+    static $supported = null;
+    if ($supported === null) {
+        $supported = false;
+        if (db_table_exists('wholesale_notifications')) {
+            $column = $conn->query("SHOW COLUMNS FROM `wholesale_notifications` LIKE 'toast_seen_at'");
+            $supported = $column && $column->num_rows > 0;
+        }
+    }
+    return $supported;
+}
+
+/**
+ * Unread wholesale notifications that have not been shown as a toast yet.
+ * Rows are marked as seen so each toast appears only once.
+ */
+function wholesale_notification_feed_pending($tenant_id, $user_id, $limit = 5) {
+    global $conn;
+    if (!wholesale_notifications_toast_supported()) return [];
+
+    $tenant_id = (int)$tenant_id;
+    $user_id = (int)$user_id;
+    $limit = max(1, min(10, (int)$limit));
+
+    $rows = fetch_all(
+        "SELECT notification_id, type, title, message, order_id, created_at
+           FROM wholesale_notifications
+          WHERE tenant_id = ? AND user_id = ? AND read_at IS NULL AND toast_seen_at IS NULL
+          ORDER BY created_at ASC, notification_id ASC
+          LIMIT {$limit}",
+        $tenant_id,
+        $user_id
+    );
+    if (!$rows) return [];
+
+    $ids = array_map(fn($row) => (int)$row['notification_id'], $rows);
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $conn->prepare(
+        "UPDATE wholesale_notifications SET toast_seen_at = NOW()
+          WHERE tenant_id = ? AND user_id = ? AND notification_id IN ({$placeholders})"
+    );
+    if ($stmt) {
+        $types = 'ii' . str_repeat('i', count($ids));
+        $params = array_merge([$tenant_id, $user_id], $ids);
+        $stmt->bind_param($types, ...$params);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    return $rows;
+}
+
 /** Mark one notification, or all notifications, as read. */
 function wholesale_mark_notifications_read($tenant_id, $user_id, $notification_id = null) {
     global $conn;
