@@ -67,6 +67,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
                 if (($_POST['confirm_transport'] ?? '') !== '1') {
                     throw new RuntimeException('Confirm that the stock has started moving before setting the order to In transport.');
                 }
+                $order_shop_id = (int)($locked_order['shop_id'] ?? 0);
+                $shop_warehouse_id = $order_shop_id > 0 ? shop_inventory_warehouse_id($order_shop_id, $tenant_id) : null;
+                if (!$shop_warehouse_id) {
+                    throw new RuntimeException('Assign this order to a shop with an active shop inventory location before moving it into transport.');
+                }
+                if ((int)$locked_order['warehouse_id'] !== (int)$shop_warehouse_id) {
+                    $stmt = $conn->prepare(
+                        "UPDATE orders SET warehouse_id = ? WHERE order_id = ? AND tenant_id = ?"
+                    );
+                    if (!$stmt) throw new RuntimeException($conn->error);
+                    $stmt->bind_param('iii', $shop_warehouse_id, $order_id, $tenant_id);
+                    if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+                    $stmt->close();
+                }
                 dispatch_order_stock_for_transport(
                     $order_id,
                     $tenant_id,
@@ -409,7 +423,7 @@ function order_stage_class($stage) {
                         <div class="custom-control custom-checkbox">
                             <input type="checkbox" class="custom-control-input" id="qe_confirm_transport" name="confirm_transport" value="1">
                             <label class="custom-control-label" for="qe_confirm_transport">
-                                I confirm this stock has started moving. The order quantities will be deducted from the selected store.
+                                I confirm the stock has started moving. The order quantities will be deducted from the selected shop's inventory.
                             </label>
                         </div>
                     </div>

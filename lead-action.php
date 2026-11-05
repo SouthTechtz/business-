@@ -286,19 +286,22 @@ try {
                 if (!$valid_shop) {
                     throw new RuntimeException('The selected shop is no longer active or does not belong to this tenant.');
                 }
-                if ($warehouse_id > 0) {
-                    $valid_location = fetch_one(
-                        "SELECT warehouse_id FROM warehouses
-                          WHERE tenant_id = ? AND warehouse_id = ? AND shop_id = ?
-                                AND is_active = 1 AND location_type IN ('store', 'shop')
-                          FOR UPDATE",
-                        (int)$current_user->tenant_id,
-                        $warehouse_id,
-                        $shop_id
-                    );
-                    if (!$valid_location) {
-                        throw new RuntimeException('The selected inventory location is no longer active or does not belong to the selected shop.');
-                    }
+                $shop_warehouse_id = shop_inventory_warehouse_id($shop_id, (int)$current_user->tenant_id);
+                if (!$shop_warehouse_id) {
+                    throw new RuntimeException('The selected shop has no active shop inventory location.');
+                }
+                $warehouse_id = (int)$shop_warehouse_id;
+                $valid_location = fetch_one(
+                    "SELECT warehouse_id FROM warehouses
+                      WHERE tenant_id = ? AND warehouse_id = ? AND shop_id = ?
+                            AND is_active = 1 AND location_type = 'shop'
+                      FOR UPDATE",
+                    (int)$current_user->tenant_id,
+                    $warehouse_id,
+                    $shop_id
+                );
+                if (!$valid_location) {
+                    throw new RuntimeException('The selected shop inventory location is no longer active.');
                 }
 
                 $order_id = (int)($request['converted_order_id'] ?? 0);

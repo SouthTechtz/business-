@@ -17,7 +17,8 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $shop_id = !empty($_POST['shop_id']) ? (int)$_POST['shop_id'] : null;
-    $warehouse_id = !empty($_POST['warehouse_id']) ? (int)$_POST['warehouse_id'] : null;
+    // Orders always draw stock from the shop's own inventory location.
+    $warehouse_id = $shop_id ? shop_inventory_warehouse_id($shop_id) : null;
     $contact_id = !empty($_POST['contact_id']) ? (int)$_POST['contact_id'] : null;
     $customer_name = trim($_POST['customer_name'] ?? '');
     $customer_phone = trim($_POST['customer_phone'] ?? '');
@@ -60,8 +61,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (($_POST['confirm_transport'] ?? '') !== '1') {
                     throw new RuntimeException('Confirm that the stock has started moving before setting the order to In transport.');
                 }
-                if ((int)$warehouse_id !== (int)$locked_order['warehouse_id']) {
-                    throw new RuntimeException('Save the order with its selected store before moving it into transport.');
+                if (!$shop_id || !$warehouse_id) {
+                    throw new RuntimeException('Assign this order to a shop with an active shop inventory location before moving it into transport.');
+                }
+                if ((int)$warehouse_id !== (int)$locked_order['warehouse_id']
+                    || (int)$shop_id !== (int)$locked_order['shop_id']) {
+                    $stmt = $conn->prepare(
+                        "UPDATE orders SET shop_id = ?, warehouse_id = ?
+                          WHERE order_id = ? AND tenant_id = ?"
+                    );
+                    if (!$stmt) throw new RuntimeException($conn->error);
+                    $stmt->bind_param('iiii', $shop_id, $warehouse_id, $id, $current_user->tenant_id);
+                    if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+                    $stmt->close();
                 }
                 dispatch_order_stock_for_transport(
                     $id,
@@ -169,15 +181,6 @@ require_once 'sidebar.php';
                     </select>
                 </div>
                 <div class="col-md-4 form-group">
-                    <label>Warehouse / Store</label>
-                    <select name="warehouse_id" class="form-control">
-                        <option value="">— Select Warehouse —</option>
-                        <?php foreach ($warehouses as $w): ?>
-                            <option value="<?php echo (int)$w['warehouse_id']; ?>" <?php echo (int)$order['warehouse_id'] === (int)$w['warehouse_id'] ? 'selected' : ''; ?>><?php echo e(store_label($w)); ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="col-md-4 form-group">
                     <label>Contact Profile (Optional)</label>
                     <select name="contact_id" class="form-control">
                         <option value="">— None —</option>
@@ -211,7 +214,7 @@ require_once 'sidebar.php';
                         <div class="custom-control custom-checkbox">
                             <input type="checkbox" class="custom-control-input" id="editConfirmTransport" name="confirm_transport" value="1">
                             <label class="custom-control-label" for="editConfirmTransport">
-                                I confirm this stock has started moving. The order quantities will be deducted from the selected store.
+                                I confirm the stock has started moving. The order quantities will be deducted from the selected shop's inventory.
                             </label>
                         </div>
                     </div>

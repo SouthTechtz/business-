@@ -2034,7 +2034,7 @@ function reserve_order_stock($order_id, $tenant_id, $shop_id, $warehouse_id, $cr
             if ((int)$row['product_id'] !== $expected['product_id']
                 || (int)$row['warehouse_id'] !== $warehouse_id
                 || abs((float)$row['quantity'] - $expected['quantity']) > 0.0001) {
-                throw new RuntimeException('This order reservation no longer matches the selected store or quantities.');
+                throw new RuntimeException('This order reservation no longer matches the selected shop inventory location or quantities.');
             }
         }
         return count($existing);
@@ -2174,7 +2174,7 @@ function dispatch_order_stock_for_transport($order_id, $tenant_id, $created_by =
 
     $warehouse_id = (int)($order['warehouse_id'] ?? 0);
     if ($warehouse_id <= 0) {
-        throw new RuntimeException('Select a store for this order before moving it into transport.');
+        throw new RuntimeException('Select a shop inventory location for this order before moving it into transport.');
     }
     $warehouse = fetch_one(
         "SELECT warehouse_id, name FROM warehouses
@@ -2182,7 +2182,7 @@ function dispatch_order_stock_for_transport($order_id, $tenant_id, $created_by =
         $warehouse_id,
         $tenant_id
     );
-    if (!$warehouse) throw new RuntimeException('The order store is no longer active.');
+    if (!$warehouse) throw new RuntimeException('The order shop inventory location is no longer active.');
     if (order_stock_was_dispatched($order_id, $tenant_id)) {
         throw new RuntimeException('Stock for this order has already been deducted for transport.');
     }
@@ -2243,7 +2243,7 @@ function dispatch_order_stock_for_transport($order_id, $tenant_id, $created_by =
             || (int)$reservation['product_id'] !== $expected_reservations[$item_id]['product_id']
             || (int)$reservation['warehouse_id'] !== $warehouse_id
             || abs((float)$reservation['quantity'] - $expected_reservations[$item_id]['quantity']) > 0.0001) {
-            throw new RuntimeException('The order stock reservation no longer matches its store or quantities.');
+            throw new RuntimeException('The order stock reservation no longer matches its shop inventory location or quantities.');
         }
     }
 

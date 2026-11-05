@@ -24,16 +24,12 @@ if ($lead_id > 0) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $shop_id = !empty($_POST['shop_id']) ? (int)$_POST['shop_id'] : null;
-    $warehouse_id = !empty($_POST['warehouse_id']) ? (int)$_POST['warehouse_id'] : null;
-    if (!empty($shop_id)) {
-        $wh = shop_inventory_warehouse_id((int)$shop_id);
-        if (!$wh) {
-            $error = 'The selected shop does not have an active inventory location.';
-            $shop_id = null;
-            $warehouse_id = null;
-        } else {
-            $warehouse_id = (int)$wh;
-        }
+    // Orders always draw stock from the shop's own inventory location.
+    $warehouse_id = $shop_id ? shop_inventory_warehouse_id((int)$shop_id) : null;
+    if ($shop_id && !$warehouse_id) {
+        $error = 'The selected shop does not have an active shop inventory location.';
+        $shop_id = null;
+        $warehouse_id = null;
     }
     $contact_id = !empty($_POST['contact_id']) ? (int)$_POST['contact_id'] : null;
     $customer_name = trim($_POST['customer_name'] ?? '');
@@ -184,15 +180,6 @@ require_once 'sidebar.php';
                         <option value="">— Select Shop —</option>
                         <?php foreach ($shops as $s): ?>
                             <option value="<?php echo (int)$s['shop_id']; ?>"><?php echo e($s['name']); ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="col-md-4 form-group">
-                    <label>Warehouse / Store</label>
-                    <select name="warehouse_id" class="form-control">
-                        <option value="">— Select Warehouse —</option>
-                        <?php foreach ($warehouses as $w): ?>
-                            <option value="<?php echo (int)$w['warehouse_id']; ?>"><?php echo e(store_label($w)); ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>

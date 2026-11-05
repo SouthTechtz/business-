@@ -34,17 +34,14 @@ if ($shop_id <= 0 && $shops) {
     // several shops can switch using the selector below.
     $shop_id = (int)$shops[0]['shop_id'];
 }
-// Prefer the Shop's inventory location; fall back to one of its active Stores.
+// Orders always use the Shop's own inventory location. Stores are for stock
+// transfers and POS, not for fulfilling customer orders.
 if ($shop_id > 0) {
-    if ($warehouse_id <= 0 && shop_inventory_ready($shop_id)) {
-        $wh = shop_inventory_warehouse_id($shop_id);
-        if ($wh) $warehouse_id = (int)$wh;
-    }
+    $warehouse_id = (int)(shop_inventory_warehouse_id($shop_id) ?? 0);
     $store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;
-    if (!$store || (int)$store['shop_id'] !== $shop_id) {
-        $auto_stores = accessible_stores($shop_id, false);
-        $warehouse_id = $auto_stores ? (int)$auto_stores[0]['warehouse_id'] : 0;
-        $store = $warehouse_id > 0 ? find_accessible_store($warehouse_id, false) : null;
+    if (!$store || (int)$store['shop_id'] !== $shop_id || (string)($store['location_type'] ?? '') !== 'shop') {
+        $warehouse_id = 0;
+        $store = null;
     }
 } else {
     $warehouse_id = 0;
