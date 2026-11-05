@@ -262,6 +262,20 @@ try {
                 if (!$locked_lead || !$request || $locked_lead['status'] === 'cancelled') {
                     throw new RuntimeException('This order request is no longer available for verification.');
                 }
+                $request_items = fetch_all(
+                    "SELECT * FROM storefront_lead_request_items
+                      WHERE request_id = ? AND tenant_id = ? ORDER BY line_no",
+                    (int)$request['request_id'],
+                    (int)$current_user->tenant_id
+                );
+                if (!$request_items) {
+                    throw new RuntimeException('This request has no products to convert.');
+                }
+                $request_subtotal = 0.0;
+                foreach ($request_items as $request_item) {
+                    $request_subtotal += (float)$request_item['line_total'];
+                }
+                $request_subtotal = round($request_subtotal, 2);
                 $valid_shop = fetch_one(
                     "SELECT shop_id FROM shops
                       WHERE tenant_id = ? AND shop_id = ? AND is_active = 1
@@ -310,9 +324,6 @@ try {
                     if ($existing_orders) {
                         $order = $existing_orders[0];
                         $order_id = (int)$order['order_id'];
-                        if (($order['source'] ?? '') !== 'storefront') {
-                            throw new RuntimeException('The linked order is not a storefront order and needs administrator review.');
-                        }
                         $stmt = $conn->prepare(
                             "UPDATE storefront_lead_requests SET converted_order_id = ?, converted_at = COALESCE(converted_at, NOW())
                               WHERE request_id = ? AND tenant_id = ? AND converted_order_id IS NULL"
@@ -325,9 +336,6 @@ try {
                 }
 
                 if ($order) {
-                    if (($order['source'] ?? '') !== 'storefront') {
-                        throw new RuntimeException('The existing order is not a storefront order and needs administrator review.');
-                    }
                     if (in_array($order['status'], ['confirmed', 'fulfilled'], true)
                         && ((int)$order['shop_id'] !== $shop_id || (int)($order['warehouse_id'] ?? 0) !== $warehouse_id)) {
                         throw new RuntimeException('The existing confirmed order is assigned to a different shop or store.');
@@ -336,25 +344,45 @@ try {
                         throw new RuntimeException('The linked order is already ' . $order['status'] . '. It will not be duplicated or reopened.');
                     }
                     if (in_array($order['status'], ['new', 'under_review'], true)) {
+                        // Rebuild the draft order from the customer's request so the
+                        // payable amount and lines always match what was ordered.
+                        $stmt = $conn->prepare("DELETE FROM order_items WHERE order_id = ? AND tenant_id = ?");
+                        $stmt->bind_param('ii', $order_id, $current_user->tenant_id);
+                        if (!$stmt->execute()) throw new RuntimeException($stmt->error);
+                        $stmt->close();
+
                         $stmt = $conn->prepare(
-                            "UPDATE orders SET status = 'under_review', shop_id = ?, warehouse_id = ?
+                            "INSERT INTO order_items (tenant_id, order_id, line_no, product_id, product_code_snapshot,
+                                product_name_snapshot, product_description_snapshot, unit_label_snapshot, quantity,
+                                unit_price, tax_rate_snapshot, line_total)
+                             SELECT tenant_id, ?, line_no, product_id, product_code_snapshot, product_name_snapshot,
+                                product_description_snapshot, unit_label_snapshot, quantity, unit_price,
+                                tax_rate_snapshot, line_total
+                             FROM storefront_lead_request_items WHERE request_id = ? AND tenant_id = ?"
+                        );
+                        $stmt->bind_param('iii', $order_id, $request['request_id'], $current_user->tenant_id);
+                        if (!$stmt->execute() || $stmt->affected_rows !== count($request_items)) {
+                            throw new RuntimeException('Could not rebuild every requested product on the order.');
+                        }
+                        $stmt->close();
+
+                        $order_currency = (string)($request['currency_code'] ?: tenant_currency());
+                        $stmt = $conn->prepare(
+                            "UPDATE orders
+                                SET status = 'under_review', shop_id = ?, warehouse_id = ?,
+                                    subtotal = ?, total = ?,
+                                    Amount_paid = LEAST(COALESCE(Amount_paid, 0), ?),
+                                    currency_code = ?
                               WHERE order_id = ? AND tenant_id = ? AND status IN ('new', 'under_review')"
                         );
                         $warehouse_db = $warehouse_id > 0 ? $warehouse_id : null;
-                        $stmt->bind_param('iiii', $shop_id, $warehouse_db, $order_id, $current_user->tenant_id);
+                        $stmt->bind_param('iidddsii', $shop_id, $warehouse_db, $request_subtotal, $request_subtotal,
+                            $request_subtotal, $order_currency, $order_id, $current_user->tenant_id);
                         if (!$stmt->execute()) throw new RuntimeException($stmt->error);
                         $stmt->close();
                     }
                     $order_number = (string)$order['order_number'];
                 } else {
-                    $items = fetch_all(
-                        "SELECT * FROM storefront_lead_request_items
-                          WHERE request_id = ? AND tenant_id = ? ORDER BY line_no",
-                        (int)$request['request_id'],
-                        (int)$current_user->tenant_id
-                    );
-                    if (!$items) throw new RuntimeException('This request has no products to convert.');
-
                     $order_number = next_document_number($current_user->tenant_id, 'order', 'ORD');
                     $contact_id = null;
                     if (!empty($locked_lead['contact_id'])) {
@@ -373,9 +401,10 @@ try {
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'under_review', ?, ?, ?, ?, ?, ?)"
                     );
                     $order_warehouse_id = $warehouse_id > 0 ? $warehouse_id : null;
+                    $order_currency = (string)($request['currency_code'] ?: tenant_currency());
                     $stmt->bind_param('isiissssssddiii', $current_user->tenant_id, $order_number, $contact_id, $id,
                         $locked_lead['contact_name'], $locked_lead['phone'], $locked_lead['location'], $locked_lead['email'],
-                        $order_source, $request['currency_code'], $request['subtotal'], $request['subtotal'], $shop_id,
+                        $order_source, $order_currency, $request_subtotal, $request_subtotal, $shop_id,
                         $order_warehouse_id, $current_user->user_id);
                     if (!$stmt->execute()) throw new RuntimeException($stmt->error);
                     $order_id = (int)$stmt->insert_id;
@@ -391,7 +420,7 @@ try {
                          FROM storefront_lead_request_items WHERE request_id = ? AND tenant_id = ?"
                     );
                     $stmt->bind_param('iii', $order_id, $request['request_id'], $current_user->tenant_id);
-                    if (!$stmt->execute() || $stmt->affected_rows !== count($items)) {
+                    if (!$stmt->execute() || $stmt->affected_rows !== count($request_items)) {
                         throw new RuntimeException('Could not copy every requested product into the order.');
                     }
                     $stmt->close();

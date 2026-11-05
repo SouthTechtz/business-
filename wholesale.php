@@ -364,47 +364,13 @@ function create_wholesale_account($tenant_id, array $input) {
         $wholesaler_id = (int)$stmt->insert_id;
         $stmt->close();
 
-        // Keep the established CRM flow: every self-registered wholesale
-        // customer appears in Leads for follow-up.
-        $lead_number = next_document_number($tenant_id, 'lead', 'LEAD');
-        $lead_notes = 'Wholesale account registered online.';
-        $stmt = $conn->prepare(
-            "INSERT INTO leads
-                (tenant_id, lead_number, contact_id, contact_name, company_name, phone, email, location, source, status, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'wholesale', 'new', ?)"
-        );
-        if (!$stmt) throw new RuntimeException($conn->error);
-        $stmt->bind_param(
-            'isissssss',
-            $tenant_id,
-            $lead_number,
-            $contact_id,
-            $name,
-            $name,
-            $phone,
-            $email_db,
-            $location,
-            $lead_notes
-        );
-        if (!$stmt->execute()) throw new RuntimeException($stmt->error);
-        $lead_id = (int)$stmt->insert_id;
-        $stmt->close();
-
-        record_lead_activity(
-            $lead_id,
-            $tenant_id,
-            'created',
-            'Wholesale registration received',
-            'A wholesale customer created an online account and is ready for a pricing follow-up.'
-        );
-
+        // Registration creates the customer account only. Leads are created
+        // when the customer actually submits an online order request.
         $conn->commit();
         return [
             'user_id'         => $user_id,
             'contact_id'      => $contact_id,
             'wholesaler_id'   => $wholesaler_id,
-            'lead_id'         => $lead_id,
-            'lead_number'     => $lead_number,
             'username'        => $username,
             'customer_number' => $customer_number,
         ];
