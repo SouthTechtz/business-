@@ -35,7 +35,8 @@ if ($warehouse_filter > 0 && !in_array($warehouse_filter, $sales_location_ids, t
 $sql = "SELECT o.*, c.first_name, c.last_name, c.company_name,
                w.name store_name, s.name shop_name,
                COALESCE(oi.items_total, 0) items_total,
-               COALESCE(oi.items_count, 0) items_count
+               COALESCE(oi.items_count, 0) items_count,
+               COALESCE(pay.amount_paid, 0) amount_paid
         FROM pos_orders o
         LEFT JOIN pos_sessions ps ON ps.session_id = o.session_id AND ps.tenant_id = o.tenant_id
         LEFT JOIN (
@@ -44,6 +45,11 @@ $sql = "SELECT o.*, c.first_name, c.last_name, c.company_name,
               FROM pos_order_items
              GROUP BY order_id
         ) oi ON oi.order_id = o.order_id
+        LEFT JOIN (
+            SELECT order_id, SUM(amount) amount_paid
+              FROM pos_payments
+             GROUP BY order_id
+        ) pay ON pay.order_id = o.order_id
         LEFT JOIN contacts c ON c.contact_id = o.contact_id
         LEFT JOIN warehouses w ON w.warehouse_id = COALESCE(o.warehouse_id, ps.warehouse_id, oi.item_warehouse_id)
             AND w.tenant_id = o.tenant_id
@@ -216,8 +222,9 @@ $cur = tenant_currency();
                             <?php endif; ?>
                         </td>
                         <td>
-                            <span class="badge badge-<?php echo $o['status'] === 'completed' ? 'success' : ($o['status'] === 'cancelled' ? 'danger' : 'warning'); ?>">
-                                <?php echo e(ucfirst($o['status'])); ?>
+                            <?php $sale_status_meta = pos_sale_payment_status($o['status'], $o['total'], $o['amount_paid'] ?? 0); ?>
+                            <span class="badge badge-<?php echo e($sale_status_meta['class']); ?>">
+                                <?php echo e($sale_status_meta['label']); ?>
                             </span>
                         </td>
                         <td class="text-right font-weight-semibold"><?php echo e(money($o['total'], $cur)); ?></td>

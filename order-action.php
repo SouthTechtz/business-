@@ -408,6 +408,52 @@ try {
             order_action_redirect($back, 'success', 'Lead unlinked from this order.');
             break;
 
+        case 'mark_returned':
+            if (order_is_returned($order)) {
+                order_action_redirect($back, 'danger', 'This order is already marked as returned.');
+            }
+            if (in_array($status, ['cancelled', 'rejected'], true)) {
+                order_action_redirect($back, 'danger', 'A cancelled or rejected order cannot be returned.');
+            }
+            $reason = trim((string)($_POST['reason'] ?? ''));
+            if (mb_strlen($reason) < 3) {
+                order_action_redirect($back, 'danger', 'Enter a return reason of at least 3 characters.');
+            }
+
+            $returned_amount = 0.0;
+            $conn->begin_transaction();
+            try {
+                $locked = fetch_one(
+                    "SELECT * FROM orders WHERE order_id = ? AND tenant_id = ? FOR UPDATE",
+                    $id,
+                    $current_user->tenant_id
+                );
+                if (!$locked || order_is_returned($locked)) {
+                    throw new RuntimeException('This order was changed by someone else. Reload and try again.');
+                }
+                if (in_array((string)$locked['status'], ['cancelled', 'rejected'], true)) {
+                    throw new RuntimeException('A cancelled or rejected order cannot be returned.');
+                }
+                $returned_amount = record_order_return(
+                    $id,
+                    (int)$current_user->tenant_id,
+                    (int)$current_user->user_id,
+                    $reason,
+                    (float)($locked['Amount_paid'] ?? 0),
+                    false
+                );
+                release_order_reservations($id, (int)$current_user->tenant_id, 'Order returned: ' . $reason);
+                $conn->commit();
+            } catch (Throwable $ex) {
+                $conn->rollback();
+                throw $ex;
+            }
+            audit_log('return_order', 'order', $id, 'Order returned: ' . $reason
+                . '; reversed ' . number_format($returned_amount, 2, '.', '') . ' from sales');
+            order_action_redirect($back, 'success', 'Order marked returned. '
+                . number_format($returned_amount, 2, '.', '') . ' was deducted from sales and any active reservation was released.');
+            break;
+
         default:
             order_action_redirect($back, 'danger', 'Unknown order action.');
     }

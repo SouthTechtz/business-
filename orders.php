@@ -22,6 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
         $amount_paid_input = $_POST['Amount_paid'] ?? '';
         $order_total_input = $_POST['order_total'] ?? '';
         $stage = trim($_POST['stage'] ?? 'shop');
+        $return_reason = trim((string)($_POST['return_reason'] ?? ''));
         $valid_stages = ['shop', 'transport', 'completed', 'returned'];
 
         if (
@@ -42,6 +43,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
 
         if (!in_array($stage, $valid_stages, true)) {
             echo json_encode(['success' => false, 'message' => 'Choose a valid order stage.']);
+            exit;
+        }
+        if ($stage === 'returned' && $return_reason === '') {
+            echo json_encode(['success' => false, 'message' => 'Enter a reason for returning this order.']);
             exit;
         }
 
@@ -105,16 +110,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action']) && $_P
                 throw new RuntimeException('Database update failed: ' . $error);
             }
             $stmt->close();
+
+            if ($stage === 'returned') {
+                // Keep the paid amount for history, but reverse its contribution to sales.
+                record_order_return(
+                    $order_id,
+                    $tenant_id,
+                    (int)$current_user->user_id,
+                    $return_reason,
+                    $amount_paid,
+                    $current_stage === 'returned'
+                );
+            } elseif ($current_stage === 'returned') {
+                clear_order_return($order_id, $tenant_id);
+            }
+
             $conn->commit();
-            wholesale_notify_order_paid($order_id, $tenant_id);
-            notification_notify_order_paid($order_id, $tenant_id, (int)$current_user->user_id);
+            if ($stage !== 'returned') {
+                wholesale_notify_order_paid($order_id, $tenant_id);
+                notification_notify_order_paid($order_id, $tenant_id, (int)$current_user->user_id);
+            }
         } catch (Throwable $e) {
             $conn->rollback();
             throw $e;
         }
 
         if (function_exists('audit_log')) {
-            audit_log('update', 'order', $order_id, 'Quick updated total, amount paid, and stage');
+            $details = 'Quick updated total, amount paid, and stage';
+            if ($stage === 'returned') {
+                $details .= '; returned: ' . $return_reason
+                    . '; reversed ' . number_format($amount_paid, 2, '.', '') . ' from sales';
+            }
+            audit_log('update', 'order', $order_id, $details);
         }
         echo json_encode(['success' => true]);
     } catch (Throwable $e) {
@@ -230,7 +257,7 @@ function order_stage_class($stage) {
         case 'completed': return 'success'; // Green
         case 'returned': return 'danger';   // Red
         case 'transport': return 'info';
-        case 'shop': default: return 'primary';
+        case 'shop': default: return 'navy';
     }
 }
 ?>
@@ -338,11 +365,14 @@ function order_stage_class($stage) {
                                 <?php echo e($o['customer_name']); ?>
                                 <?php if ($o['customer_phone']): ?><br><small class="text-muted"><?php echo e($o['customer_phone']); ?></small><?php endif; ?>
                             </td>
-                            <td><?php echo e($o['shop_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . ($o['store_name'] ?? ''), ' /') : '—'); ?></td>
+                            <td><?php echo e($o['shop_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . ($o['store_name'] ?? ''), ' /') : 'ï¿½'); ?></td>
                             <td>
                                 <span class="badge badge-<?php echo e(order_stage_class($current_stage)); ?>">
                                     <?php echo e($stages[$current_stage] ?? ucfirst($current_stage)); ?>
                                 </span>
+                                <?php if ($current_stage === 'returned' && !empty($o['return_reason'])): ?>
+                                    <small class="text-muted d-block"><?php echo e($o['return_reason']); ?></small>
+                                <?php endif; ?>
                             </td>
                             <td>
                                 <span class="badge badge-<?php echo e(payment_status_class($payment_status)); ?>">
@@ -355,7 +385,7 @@ function order_stage_class($stage) {
                                 <?php
                                 $assignee = trim((string)($o['assignee_first'] ?? '') . ' ' . (string)($o['assignee_last'] ?? ''));
                                 $creator = trim((string)($o['creator_first'] ?? '') . ' ' . (string)($o['creator_last'] ?? ''));
-                                echo e($assignee ?: $creator ?: '—');
+                                echo e($assignee ?: $creator ?: 'ï¿½');
                                 ?>
                             </td>
                             <td><?php echo e(date('M d, Y H:i', strtotime($o['created_at']))); ?></td>
@@ -374,6 +404,7 @@ function order_stage_class($stage) {
                                             'data-total' => money($o['total'], $o['currency_code'] ?: $cur),
                                             'data-order-total' => $o['total'],
                                             'data-stage' => $current_stage,
+                                            'data-return-reason' => (string)($o['return_reason'] ?? ''),
                                         ],
                                     ],
                                 ], 'Order actions');
@@ -422,6 +453,13 @@ function order_stage_class($stage) {
                             <option value="completed">Completed</option>
                             <option value="returned">Returned</option>
                         </select>
+                    </div>
+                    <div class="form-group d-none" id="qe_return_reason_group">
+                        <label>Return Reason <span class="text-danger">*</span></label>
+                        <input type="text" name="return_reason" id="qe_return_reason" class="form-control" maxlength="255" placeholder="Why was this order returned?">
+                        <small class="text-danger d-block mt-1">
+                            The amount paid on this order will be deducted from sales.
+                        </small>
                     </div>
                     <div class="alert alert-warning d-none" id="qe_transport_confirmation">
                         <div class="custom-control custom-checkbox">
@@ -481,8 +519,10 @@ function order_stage_class($stage) {
             $('#qe_amount_paid').val(btn.data('amount-paid'));
             $('#qe_order_total').val(btn.data('order-total'));
             $('#qe_stage').data('original-stage', btn.data('stage')).val(btn.data('stage'));
+            $('#qe_return_reason').val(btn.data('return-reason') || '');
             $('#qe_confirm_transport').prop('checked', false);
             toggleTransportConfirmation();
+            toggleReturnReason();
             $('#quickEditModal').modal('show');
         });
 
@@ -494,7 +534,16 @@ function order_stage_class($stage) {
             if (!needsConfirmation) $('#qe_confirm_transport').prop('checked', false);
         }
 
-        $('#qe_stage').on('change', toggleTransportConfirmation);
+        function toggleReturnReason() {
+            var needsReason = $('#qe_stage').val() === 'returned';
+            $('#qe_return_reason_group').toggleClass('d-none', !needsReason);
+            $('#qe_return_reason').prop('required', needsReason);
+        }
+
+        $('#qe_stage').on('change', function () {
+            toggleTransportConfirmation();
+            toggleReturnReason();
+        });
 
         // Submit quick edit via AJAX
         $('#quickEditForm').on('submit', function (e) {

@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Nov 04, 2026 at 04:30 PM
+-- Generation Time: Nov 06, 2026 at 09:48 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -60,14 +60,6 @@ CREATE TABLE `audit_logs` (
   `details` text DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- Dumping data for table `audit_logs`
---
-
-INSERT INTO `audit_logs` (`log_id`, `tenant_id`, `user_id`, `action`, `entity_type`, `entity_id`, `details`, `created_at`) VALUES
-(1, 1, 47, 'logout', 'user', 47, 'User signed out', '2026-11-04 15:27:24'),
-(2, 1, 1, 'login', 'user', 1, 'User signed in', '2026-11-04 15:27:29');
 
 -- --------------------------------------------------------
 
@@ -301,6 +293,30 @@ CREATE TABLE `inventory_stock` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `inventory_stock`
+--
+
+INSERT INTO `inventory_stock` (`stock_id`, `tenant_id`, `product_id`, `warehouse_id`, `quantity`, `reorder_level`, `production_date`, `expires_at`, `last_counted_at`, `updated_at`) VALUES
+(1, 1, 1, 1, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(2, 1, 1, 11, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(3, 1, 1, 13, 50.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(4, 1, 1, 14, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(5, 1, 1, 15, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(6, 1, 1, 17, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(7, 1, 4, 1, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(8, 1, 4, 11, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(9, 1, 4, 13, 50.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(10, 1, 4, 14, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(11, 1, 4, 15, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(12, 1, 4, 17, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(13, 1, 5, 1, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(14, 1, 5, 11, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(15, 1, 5, 13, 50.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(16, 1, 5, 14, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(17, 1, 5, 15, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14'),
+(18, 1, 5, 17, 5.00, 5.00, NULL, NULL, '2026-11-06 11:41:14', '2026-11-06 08:41:14');
+
 -- --------------------------------------------------------
 
 --
@@ -427,6 +443,41 @@ CREATE TABLE `leads` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `lead_notification_reads`
+--
+
+CREATE TABLE `lead_notification_reads` (
+  `tenant_id` int(10) UNSIGNED NOT NULL,
+  `user_id` int(10) UNSIGNED NOT NULL,
+  `lead_id` int(10) UNSIGNED NOT NULL,
+  `read_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `notifications`
+--
+
+CREATE TABLE `notifications` (
+  `notification_id` int(10) UNSIGNED NOT NULL,
+  `tenant_id` int(10) UNSIGNED NOT NULL,
+  `user_id` int(10) UNSIGNED NOT NULL,
+  `actor_user_id` int(10) UNSIGNED DEFAULT NULL,
+  `type` varchar(50) NOT NULL DEFAULT 'system',
+  `title` varchar(191) NOT NULL,
+  `message` text DEFAULT NULL,
+  `link` varchar(255) DEFAULT NULL,
+  `icon` varchar(50) NOT NULL DEFAULT 'fa-bell',
+  `dedupe_key` varchar(191) DEFAULT NULL,
+  `read_at` datetime DEFAULT NULL,
+  `toast_seen_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `orders`
 --
 
@@ -458,8 +509,15 @@ CREATE TABLE `orders` (
   `cancelled_by` int(10) UNSIGNED DEFAULT NULL,
   `cancelled_at` datetime DEFAULT NULL,
   `cancel_reason` varchar(255) DEFAULT NULL,
+  `return_reason` varchar(255) DEFAULT NULL,
+  `returned_at` datetime DEFAULT NULL,
+  `returned_by` int(10) UNSIGNED DEFAULT NULL,
+  `returned_amount` decimal(15,2) NOT NULL DEFAULT 0.00,
   `fulfilled_by` int(10) UNSIGNED DEFAULT NULL,
   `fulfilled_at` datetime DEFAULT NULL,
+  `customer_confirmed_at` datetime DEFAULT NULL,
+  `customer_confirmed_by` int(11) DEFAULT NULL,
+  `customer_confirmation_note` varchar(255) DEFAULT NULL,
   `fulfilled_invoice_id` int(10) UNSIGNED DEFAULT NULL,
   `fulfilled_invoice_number` varchar(100) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
@@ -775,6 +833,15 @@ CREATE TABLE `products` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `products`
+--
+
+INSERT INTO `products` (`product_id`, `tenant_id`, `category_id`, `code`, `name`, `description`, `barcode`, `sku`, `brand`, `unit_id`, `purchase_price`, `sale_price`, `wholesale_price`, `wholesale_min_qty`, `tax_rate`, `min_stock_level`, `date_added`, `is_active`, `is_service`, `variant_size`, `variant_color`, `image`, `created_by`, `created_at`) VALUES
+(1, 1, 2, 'PRD-001', 'Turret Camera', '', 'PRD-001', 'CMR', 'GSP GROUP', 1, 10000.00, 20000.00, 15000.00, 10.00, 1.00, 5.00, '2026-11-04', 1, 0, NULL, NULL, 'uploads/products/38b642ff6a81bace1d23bee00fdea25f.jpg', 1, '2026-11-04 19:34:26'),
+(4, 1, 2, 'PRD-002', 'Wireless Bluetooth Speaker', 'Portable Bluetooth speaker with rich sound, a rechargeable battery and wireless connectivity.', 'PRD-002', 'SPK-001', NULL, 1, 45000.00, 75000.00, 65000.00, 10.00, 0.00, 5.00, '2026-11-06', 1, 0, NULL, NULL, NULL, 1, '2026-11-06 05:06:12'),
+(5, 1, 3, 'PRD-003', 'Solar  Panel', 'Durable stainless steel cooking pot with a tempered lid for everyday kitchen use.', 'PRD-003', 'POT-001', 'GSP GROUP', 1, 18000.00, 32000.00, 27000.00, 12.00, 0.00, 5.00, '2026-11-06', 1, 0, NULL, NULL, 'uploads/products/c682b144b38de37c584ab13452b80257.jpg', 1, '2026-11-06 05:06:12');
+
 -- --------------------------------------------------------
 
 --
@@ -794,10 +861,8 @@ CREATE TABLE `product_categories` (
 --
 
 INSERT INTO `product_categories` (`category_id`, `tenant_id`, `parent_category_id`, `name`, `description`) VALUES
-(1, 1, NULL, 'Beverages', NULL),
 (2, 1, NULL, 'Electronics', NULL),
-(3, 1, NULL, 'Household', NULL),
-(4, 1, 3, 'Carpet', 'home carpets');
+(3, 1, NULL, 'Household', NULL);
 
 -- --------------------------------------------------------
 
@@ -994,7 +1059,7 @@ CREATE TABLE `sales_returns` (
   `return_id` int(10) UNSIGNED NOT NULL,
   `tenant_id` int(10) UNSIGNED NOT NULL,
   `return_number` varchar(50) NOT NULL,
-  `source_type` enum('pos','invoice') NOT NULL DEFAULT 'pos',
+  `source_type` enum('pos','invoice','order') NOT NULL DEFAULT 'pos',
   `source_id` int(10) UNSIGNED NOT NULL,
   `customer_id` int(10) UNSIGNED DEFAULT NULL,
   `shop_id` int(10) UNSIGNED DEFAULT NULL,
@@ -1057,7 +1122,15 @@ INSERT INTO `schema_migrations` (`migration`, `applied_at`) VALUES
 ('016_sales_returns', '2026-10-31 15:29:14'),
 ('017_phase722_invoice_integration', '2026-11-01 05:18:31'),
 ('018_shop_transfer_routes', '2026-11-02 12:31:14'),
-('020_godown_to_shop_transfer_route', '2026-11-03 09:56:50');
+('020_godown_to_shop_transfer_route', '2026-11-03 09:56:50'),
+('024_wholesale_order_receipt_confirmation', '2026-11-04 21:53:02'),
+('025_wholesale_payment_notifications', '2026-11-05 09:42:59'),
+('026_system_notifications', '2026-11-05 10:22:57'),
+('027_lead_notification_reads', '2026-11-06 05:42:18'),
+('028_sync_pos_invoice_payments', '2026-11-06 06:57:57'),
+('029_sidebar_badge_seen', '2026-11-06 07:19:47'),
+('030_order_return_reason', '2026-11-06 07:59:25'),
+('031_order_sales_returns', '2026-11-06 08:24:54');
 
 -- --------------------------------------------------------
 
@@ -1085,6 +1158,30 @@ INSERT INTO `shops` (`shop_id`, `tenant_id`, `name`, `code`, `address`, `phone`,
 (1, 1, 'Survey', 'SHOP-001', NULL, NULL, 1, '2026-10-27 09:00:31', '2026-11-03 09:11:57'),
 (7, 1, 'kariakoo', 'SHOP-002', 'Kariakoo', '0767427016', 1, '2026-10-27 09:51:15', '2026-11-03 12:17:16'),
 (11, 1, 'Mwenge', 'SHOP-004', 'Mwenge', '0987654323', 0, '2026-10-28 06:32:17', '2026-11-04 12:56:18');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `sidebar_badge_seen`
+--
+
+CREATE TABLE `sidebar_badge_seen` (
+  `tenant_id` int(10) UNSIGNED NOT NULL,
+  `user_id` int(10) UNSIGNED NOT NULL,
+  `section` varchar(40) NOT NULL,
+  `seen_at` timestamp NOT NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `sidebar_badge_seen`
+--
+
+INSERT INTO `sidebar_badge_seen` (`tenant_id`, `user_id`, `section`, `seen_at`) VALUES
+(1, 1, 'inventory', '2026-11-06 08:44:14'),
+(1, 1, 'invoices', '2026-11-06 08:41:39'),
+(1, 1, 'leads', '2026-11-06 08:41:37'),
+(1, 1, 'orders', '2026-11-06 08:43:28'),
+(1, 1, 'transfers', '2026-11-06 08:45:50');
 
 -- --------------------------------------------------------
 
@@ -1235,13 +1332,6 @@ CREATE TABLE `storefront_request_notification_reads` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
---
--- Dumping data for table `storefront_request_notification_reads`
---
-
-INSERT INTO `storefront_request_notification_reads` (`tenant_id`, `user_id`, `last_seen_lead_id`, `updated_at`) VALUES
-(1, 1, 0, '2026-11-04 15:25:00');
-
 -- --------------------------------------------------------
 
 --
@@ -1301,7 +1391,7 @@ CREATE TABLE `system_settings` (
 --
 
 INSERT INTO `system_settings` (`setting_id`, `tenant_id`, `company_name`, `company_email`, `company_phone`, `company_address`, `default_currency`, `invoice_prefix`, `invoice_next_number`, `apply_tax`, `logo_path`) VALUES
-(1, 1, 'TECHDOKTA INVESTMENT LIMITED & GSP LIMITED', '', '', '', 'TZS', 'INV-', 1014, 0, 'uploads/logo_1_1793796611.jpg');
+(1, 1, 'TECHDOKTA INVESTMENT LIMITED & GSP LIMITED', '', '', '', 'TZS', 'INV-', 1001, 0, 'uploads/logo_1_1793796611.jpg');
 
 -- --------------------------------------------------------
 
@@ -1420,13 +1510,14 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`user_id`, `tenant_id`, `username`, `email`, `password_hash`, `first_name`, `last_name`, `phone`, `is_active`, `last_login`, `created_at`) VALUES
-(1, 1, 'admin', 'dezlinvestment@gmail.com', '$2y$10$fcpe/kqLWziTy77xn6Gp0OkZdLIIn67EIFd5uhWymJ9tv2jzkm64y', 'System', 'Administrator', '+255677004313', 1, '2026-11-04 18:27:29', '2026-08-28 13:20:03'),
-(20, 1, 'kariakooshop', 'kariakooshop@gmail.com', '$2y$10$1geoMyYQHX14IjaBDTPZaO3kMZp5YVVbXojQVZSUH7wj.Kr9qlLxa', 'kariakoo', 'shop', '+255688228112', 1, '2026-11-04 15:47:29', '2026-10-28 01:34:48'),
-(46, 1, 'mwengeshop', 'mwengeshop@gmail.com', '$2y$10$a2wmqJO2B91K628zTQMPq.L.7FK2Lf4PBMAfEoDar/kweodp3dVoq', 'mwenge', 'shop', '', 1, '2026-11-04 17:48:29', '2026-11-02 13:24:22'),
-(47, 1, 'surveyshop', 'surveyshop@gmail.com', '$2y$10$5SDbui3UP83WRITu2S89cuA.02i/0XEuZXrWCy154Vyzvpsmex0n.', 'Survey', 'Shop', '', 1, '2026-11-04 18:08:50', '2026-11-02 14:24:57'),
-(48, 1, 'kariakoostore', 'Kariakoostore@gmail.com', '$2y$10$qSq5Ug2NqVkXdPCEvBTNoOwpflCHOt0rl63U4fYEK.JDc8pQ6iRhq', 'kariakoo', 'Store', '', 1, '2026-11-03 17:38:42', '2026-11-02 15:18:44'),
-(49, 1, 'Godown', 'Godown@gmail.com', '$2y$10$F9Np.89ShGC8dmwOXsjlzubD2HjXTYqMZH0Sx5V.IRX4zq4.Dk3AS', 'Godown', 'Godown', '', 1, '2026-11-04 09:42:50', '2026-11-02 15:21:53'),
-(50, 1, 'mwengestore', 'mwengestore@gmail.com', '$2y$10$FC46NWljPNFXsty6Zfk1deLD8x61YOFmuPO.jEVx3Uh1Q1JJXv2Yi', 'mwenge', 'store', 'admin@123', 1, '2026-11-03 13:42:32', '2026-11-03 10:41:02');
+(1, 1, 'admin', 'GlobalSecurity@gmail.com', '$2y$10$fcpe/kqLWziTy77xn6Gp0OkZdLIIn67EIFd5uhWymJ9tv2jzkm64y', 'System', 'Administrator', '+255677004313', 1, '2026-11-06 08:44:23', '2026-08-28 13:20:03'),
+(20, 1, 'kariakooshop', 'kariakooshop@gmail.com', '$2y$10$1geoMyYQHX14IjaBDTPZaO3kMZp5YVVbXojQVZSUH7wj.Kr9qlLxa', 'kariakoo', 'shop', '+255688228112', 1, '2026-11-05 12:57:20', '2026-10-28 01:34:48'),
+(46, 1, 'mwengeshop', 'mwengeshop@gmail.com', '$2y$10$a2wmqJO2B91K628zTQMPq.L.7FK2Lf4PBMAfEoDar/kweodp3dVoq', 'mwenge', 'shop', '', 1, '2026-11-04 23:01:49', '2026-11-02 13:24:22'),
+(47, 1, 'surveyshop', 'surveyshop@gmail.com', '$2y$10$5SDbui3UP83WRITu2S89cuA.02i/0XEuZXrWCy154Vyzvpsmex0n.', 'Survey', 'Shop', '', 1, '2026-11-05 08:56:33', '2026-11-02 14:24:57'),
+(48, 1, 'kariakoostore', 'Kariakoostore@gmail.com', '$2y$10$qSq5Ug2NqVkXdPCEvBTNoOwpflCHOt0rl63U4fYEK.JDc8pQ6iRhq', 'kariakoo', 'Store', '', 1, '2026-11-05 12:48:46', '2026-11-02 15:18:44'),
+(49, 1, 'Godown', 'Godown@gmail.com', '$2y$10$F9Np.89ShGC8dmwOXsjlzubD2HjXTYqMZH0Sx5V.IRX4zq4.Dk3AS', 'Godown', 'Godown', '', 1, '2026-11-06 08:26:51', '2026-11-02 15:21:53'),
+(50, 1, 'mwengestore', 'mwengestore@gmail.com', '$2y$10$FC46NWljPNFXsty6Zfk1deLD8x61YOFmuPO.jEVx3Uh1Q1JJXv2Yi', 'mwenge', 'store', 'admin@123', 1, '2026-11-03 13:42:32', '2026-11-03 10:41:02'),
+(61, 1, 'msafi', 'msafi@wholesale.local', '$2y$10$M1cCCn9/OMEIm5.7BepLueAWQoYAeFwC0ODijZ3cFi2WudVZZFEb6', 'Msafi', '', '0612345678', 1, '2026-11-06 08:30:56', '2026-11-04 22:15:25');
 
 -- --------------------------------------------------------
 
@@ -1503,7 +1594,8 @@ INSERT INTO `user_roles` (`user_role_id`, `user_id`, `role_id`, `tenant_id`, `as
 (57, 50, 24, 1, '2026-11-03 10:41:02'),
 (58, 20, 15, 1, '2026-11-03 10:41:54'),
 (59, 48, 24, 1, '2026-11-03 10:42:17'),
-(69, 47, 15, 1, '2026-11-04 15:04:35');
+(69, 47, 15, 1, '2026-11-04 15:04:35'),
+(71, 61, 26, 1, '2026-11-04 22:15:25');
 
 -- --------------------------------------------------------
 
@@ -1587,6 +1679,26 @@ CREATE TABLE `wholesaler_accounts` (
   `status` varchar(20) NOT NULL DEFAULT 'active',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `wholesale_notifications`
+--
+
+CREATE TABLE `wholesale_notifications` (
+  `notification_id` int(10) UNSIGNED NOT NULL,
+  `tenant_id` int(10) UNSIGNED NOT NULL,
+  `user_id` int(10) UNSIGNED NOT NULL,
+  `contact_id` int(10) UNSIGNED DEFAULT NULL,
+  `order_id` int(10) UNSIGNED DEFAULT NULL,
+  `type` varchar(40) NOT NULL DEFAULT 'order_paid',
+  `title` varchar(191) NOT NULL,
+  `message` text DEFAULT NULL,
+  `read_at` datetime DEFAULT NULL,
+  `toast_seen_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -1741,6 +1853,24 @@ ALTER TABLE `leads`
   ADD KEY `fk_leads_contact` (`contact_id`),
   ADD KEY `fk_leads_assigned` (`assigned_to`),
   ADD KEY `fk_leads_created_by` (`created_by`);
+
+--
+-- Indexes for table `lead_notification_reads`
+--
+ALTER TABLE `lead_notification_reads`
+  ADD PRIMARY KEY (`tenant_id`,`user_id`,`lead_id`),
+  ADD KEY `idx_lnr_lead` (`tenant_id`,`lead_id`),
+  ADD KEY `fk_lnr_user` (`user_id`),
+  ADD KEY `fk_lnr_lead` (`lead_id`);
+
+--
+-- Indexes for table `notifications`
+--
+ALTER TABLE `notifications`
+  ADD PRIMARY KEY (`notification_id`),
+  ADD UNIQUE KEY `uniq_notification_dedupe` (`tenant_id`,`user_id`,`dedupe_key`),
+  ADD KEY `idx_notification_user` (`tenant_id`,`user_id`,`read_at`,`created_at`),
+  ADD KEY `idx_notification_toast` (`tenant_id`,`user_id`,`toast_seen_at`);
 
 --
 -- Indexes for table `orders`
@@ -1952,6 +2082,13 @@ ALTER TABLE `shops`
   ADD KEY `fk_shops_tenant` (`tenant_id`);
 
 --
+-- Indexes for table `sidebar_badge_seen`
+--
+ALTER TABLE `sidebar_badge_seen`
+  ADD PRIMARY KEY (`tenant_id`,`user_id`,`section`),
+  ADD KEY `fk_sbs_user` (`user_id`);
+
+--
 -- Indexes for table `stock_transfers`
 --
 ALTER TABLE `stock_transfers`
@@ -2127,6 +2264,14 @@ ALTER TABLE `wholesaler_accounts`
   ADD KEY `fk_wholesaler_contact` (`contact_id`);
 
 --
+-- Indexes for table `wholesale_notifications`
+--
+ALTER TABLE `wholesale_notifications`
+  ADD PRIMARY KEY (`notification_id`),
+  ADD UNIQUE KEY `uniq_wholesale_notification` (`tenant_id`,`user_id`,`order_id`,`type`),
+  ADD KEY `idx_wholesale_notification_user` (`tenant_id`,`user_id`,`read_at`);
+
+--
 -- AUTO_INCREMENT for dumped tables
 --
 
@@ -2140,7 +2285,7 @@ ALTER TABLE `activities`
 -- AUTO_INCREMENT for table `audit_logs`
 --
 ALTER TABLE `audit_logs`
-  MODIFY `log_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `log_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `contacts`
@@ -2200,7 +2345,7 @@ ALTER TABLE `inventory_movements`
 -- AUTO_INCREMENT for table `inventory_stock`
 --
 ALTER TABLE `inventory_stock`
-  MODIFY `stock_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `stock_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
 
 --
 -- AUTO_INCREMENT for table `invoices`
@@ -2225,6 +2370,12 @@ ALTER TABLE `journal_entries`
 --
 ALTER TABLE `leads`
   MODIFY `lead_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `notifications`
+--
+ALTER TABLE `notifications`
+  MODIFY `notification_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `orders`
@@ -2290,7 +2441,7 @@ ALTER TABLE `pos_sessions`
 -- AUTO_INCREMENT for table `products`
 --
 ALTER TABLE `products`
-  MODIFY `product_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `product_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `product_categories`
@@ -2416,7 +2567,7 @@ ALTER TABLE `units_of_measurement`
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `user_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=60;
+  MODIFY `user_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
 
 --
 -- AUTO_INCREMENT for table `user_godowns`
@@ -2434,7 +2585,7 @@ ALTER TABLE `user_inventory_locations`
 -- AUTO_INCREMENT for table `user_roles`
 --
 ALTER TABLE `user_roles`
-  MODIFY `user_role_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=70;
+  MODIFY `user_role_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=72;
 
 --
 -- AUTO_INCREMENT for table `user_shops`
@@ -2453,6 +2604,12 @@ ALTER TABLE `warehouses`
 --
 ALTER TABLE `wholesaler_accounts`
   MODIFY `wholesaler_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `wholesale_notifications`
+--
+ALTER TABLE `wholesale_notifications`
+  MODIFY `notification_id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- Constraints for dumped tables
@@ -2566,6 +2723,14 @@ ALTER TABLE `leads`
   ADD CONSTRAINT `fk_leads_contact` FOREIGN KEY (`contact_id`) REFERENCES `contacts` (`contact_id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_leads_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`user_id`) ON DELETE SET NULL,
   ADD CONSTRAINT `fk_leads_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`tenant_id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `lead_notification_reads`
+--
+ALTER TABLE `lead_notification_reads`
+  ADD CONSTRAINT `fk_lnr_lead` FOREIGN KEY (`lead_id`) REFERENCES `leads` (`lead_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_lnr_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`tenant_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_lnr_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `orders`
@@ -2725,6 +2890,13 @@ ALTER TABLE `sales_return_items`
 --
 ALTER TABLE `shops`
   ADD CONSTRAINT `fk_shops_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`tenant_id`) ON DELETE CASCADE;
+
+--
+-- Constraints for table `sidebar_badge_seen`
+--
+ALTER TABLE `sidebar_badge_seen`
+  ADD CONSTRAINT `fk_sbs_tenant` FOREIGN KEY (`tenant_id`) REFERENCES `tenants` (`tenant_id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `fk_sbs_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE;
 
 --
 -- Constraints for table `stock_transfers`

@@ -84,19 +84,21 @@ if (mb_strlen($q) >= 2) {
     }
 
     if ($inScope('sales') && can('manage_pos')) {
-        $sales_sql = "SELECT order_id, order_number, total, status, order_date FROM pos_orders
-             WHERE tenant_id = ? AND order_number LIKE ?";
+        $sales_sql = "SELECT o.order_id, o.order_number, o.total, o.status, o.order_date,
+                             COALESCE((SELECT SUM(p.amount) FROM pos_payments p WHERE p.order_id = o.order_id), 0) amount_paid
+             FROM pos_orders o
+             WHERE o.tenant_id = ? AND o.order_number LIKE ?";
         $scope_ids = accessible_warehouse_ids();
         if ($scope_ids !== null) {
-            $sales_sql .= $scope_ids ? " AND warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . ")" : " AND 1 = 0";
+            $sales_sql .= $scope_ids ? " AND o.warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . ")" : " AND 1 = 0";
         }
-        $sales_sql .= " ORDER BY order_id DESC LIMIT 6";
+        $sales_sql .= " ORDER BY o.order_id DESC LIMIT 6";
         $rows = fetch_all($sales_sql, $current_user->tenant_id, $like);
         foreach ($rows as $o) {
             $results[] = [
                 'group' => 'Sales',
                 'title' => $o['order_number'],
-                'subtitle' => date('M d, Y', strtotime($o['order_date'])) . ' • ' . ucfirst($o['status']) . ' • Total: ' . number_format((float)$o['total'], 2, '.', ''),
+                'subtitle' => date('M d, Y', strtotime($o['order_date'])) . ' • ' . pos_sale_payment_status($o['status'], $o['total'], $o['amount_paid'] ?? 0)['label'] . ' • Total: ' . number_format((float)$o['total'], 2, '.', ''),
                 'url' => 'sale-details.php?id=' . (int)$o['order_id'],
             ];
         }

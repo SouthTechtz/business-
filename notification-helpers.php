@@ -257,6 +257,27 @@ function notification_mark_read($tenant_id, $user_id, $notification_id = null) {
 }
 
 /**
+ * Mark every notification that points at a specific page as read. Used when
+ * the user opens the record directly instead of clicking the bell item.
+ */
+function notification_mark_link_read($tenant_id, $user_id, $link) {
+    global $conn;
+    if (!notifications_ready()) return;
+
+    $link = trim((string)$link);
+    if ($link === '') return;
+
+    $stmt = $conn->prepare(
+        "UPDATE notifications SET read_at = NOW()
+          WHERE tenant_id = ? AND user_id = ? AND link = ? AND read_at IS NULL"
+    );
+    if (!$stmt) return;
+    $stmt->bind_param('iis', $tenant_id, $user_id, $link);
+    $stmt->execute();
+    $stmt->close();
+}
+
+/**
  * Notifications that should pop up as toasts. Rows are marked as seen so a
  * toast is only shown once, even across page reloads.
  */
@@ -542,12 +563,12 @@ function notification_notify_order_created($order_id, $tenant_id, $actor_user_id
 /** Tell finance/order staff that an order is fully paid. */
 function notification_notify_order_paid($order_id, $tenant_id, $actor_user_id = 0) {
     $order = fetch_one(
-        "SELECT order_id, order_number, customer_name, total, Amount_paid, currency_code
+        "SELECT order_id, order_number, customer_name, total, Amount_paid, currency_code, stage
            FROM orders WHERE order_id = ? AND tenant_id = ?",
         (int)$order_id,
         (int)$tenant_id
     );
-    if (!$order) return 0;
+    if (!$order || order_is_returned($order)) return 0;
 
     $total = round((float)$order['total'], 2);
     $paid = round((float)$order['Amount_paid'], 2);

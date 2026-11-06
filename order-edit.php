@@ -26,6 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $customer_phone = trim($_POST['customer_phone'] ?? '');
     $customer_location = trim($_POST['customer_location'] ?? '');
     $stage = trim($_POST['stage'] ?? 'shop');
+    $return_reason = trim((string)($_POST['return_reason'] ?? ''));
     $order_total_input = $_POST['order_total'] ?? '';
     $amount_paid_input = $_POST['Amount_paid'] ?? '';
     $notes = trim($_POST['notes'] ?? '');
@@ -44,6 +45,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Amounts must be valid, and amount paid cannot exceed the order total.';
     } elseif (!in_array($stage, $valid_stages, true)) {
         $error = 'Choose a valid order stage.';
+    } elseif ($stage === 'returned' && $return_reason === '') {
+        $error = 'Enter a reason for returning this order.';
     } else {
         $order_total = round((float)$order_total_input, 2);
         $amount_paid = round((float)$amount_paid_input, 2);
@@ -114,10 +117,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new RuntimeException('Could not update the order: ' . $stmt_error);
             }
             $stmt->close();
+
+            if ($stage === 'returned') {
+                record_order_return(
+                    $id,
+                    (int)$current_user->tenant_id,
+                    (int)$current_user->user_id,
+                    $return_reason,
+                    $amount_paid,
+                    $current_stage === 'returned'
+                );
+            } elseif ($current_stage === 'returned') {
+                clear_order_return($id, (int)$current_user->tenant_id);
+            }
+
             $conn->commit();
-            wholesale_notify_order_paid($id, (int)$current_user->tenant_id);
-            notification_notify_order_paid($id, (int)$current_user->tenant_id, (int)$current_user->user_id);
-            audit_log('update', 'order', $id, 'Order updated');
+            if ($stage !== 'returned') {
+                wholesale_notify_order_paid($id, (int)$current_user->tenant_id);
+                notification_notify_order_paid($id, (int)$current_user->tenant_id, (int)$current_user->user_id);
+            }
+            $audit_details = 'Order updated';
+            if ($stage === 'returned') {
+                $audit_details .= '; returned: ' . $return_reason
+                    . '; reversed ' . number_format($amount_paid, 2, '.', '') . ' from sales';
+            }
+            audit_log('update', 'order', $id, $audit_details);
             flash_set('success', 'Order updated successfully.');
             redirect('order-view.php?id=' . $id);
         } catch (Throwable $ex) {
@@ -135,6 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'total' => $order_total_input,
         'Amount_paid' => $amount_paid_input,
         'stage' => $stage,
+        'return_reason' => $return_reason,
         'notes' => $notes,
     ]);
 }
@@ -213,6 +238,12 @@ require_once 'sidebar.php';
                         <option value="returned" <?php echo ($order['stage'] ?? '') === 'returned' ? 'selected' : ''; ?>>Returned</option>
                     </select>
                 </div>
+                <div class="col-md-12 form-group d-none" id="editReturnReasonGroup">
+                    <label>Return Reason <span class="text-danger">*</span></label>
+                    <input type="text" name="return_reason" id="editReturnReason" class="form-control" maxlength="255"
+                           value="<?php echo e($order['return_reason'] ?? ''); ?>" placeholder="Why was this order returned?">
+                    <small class="text-danger d-block mt-1">The amount paid on this order will be deducted from sales.</small>
+                </div>
                 <div class="col-md-12 form-group d-none" id="editTransportConfirmation">
                     <div class="alert alert-warning mb-0">
                         <div class="custom-control custom-checkbox">
@@ -239,6 +270,8 @@ require_once 'sidebar.php';
         var $stage = $('#editOrderStage');
         var $confirmation = $('#editTransportConfirmation');
         var $checkbox = $('#editConfirmTransport');
+        var $returnReasonGroup = $('#editReturnReasonGroup');
+        var $returnReason = $('#editReturnReason');
 
         function toggleTransportConfirmation() {
             var needsConfirmation = $stage.val() === 'transport'
@@ -248,8 +281,18 @@ require_once 'sidebar.php';
             if (!needsConfirmation) $checkbox.prop('checked', false);
         }
 
-        $stage.on('change', toggleTransportConfirmation);
+        function toggleReturnReason() {
+            var needsReason = $stage.val() === 'returned';
+            $returnReasonGroup.toggleClass('d-none', !needsReason);
+            $returnReason.prop('required', needsReason);
+        }
+
+        $stage.on('change', function () {
+            toggleTransportConfirmation();
+            toggleReturnReason();
+        });
         toggleTransportConfirmation();
+        toggleReturnReason();
     });
 </script>
 

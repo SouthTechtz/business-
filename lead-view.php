@@ -34,6 +34,31 @@ $storefront_request = fetch_one(
     $id,
     (int)$current_user->tenant_id
 );
+
+// Opening a request lead clears its "new request" badge for this user.
+if ($storefront_request && db_table_exists('lead_notification_reads')) {
+    $stmt = $conn->prepare(
+        "INSERT IGNORE INTO lead_notification_reads (tenant_id, user_id, lead_id)
+         VALUES (?, ?, ?)"
+    );
+    if ($stmt) {
+        $stmt->bind_param(
+            'iii',
+            $current_user->tenant_id,
+            $current_user->user_id,
+            $id
+        );
+        $stmt->execute();
+        $stmt->close();
+    }
+}
+require_once 'notification-helpers.php';
+notification_mark_link_read(
+    (int)$current_user->tenant_id,
+    (int)$current_user->user_id,
+    'lead-view.php?id=' . $id
+);
+
 $storefront_request_items = $storefront_request
     ? fetch_all(
         "SELECT * FROM storefront_lead_request_items

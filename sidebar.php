@@ -8,6 +8,10 @@ $is_shop_manager = is_shop_manager();
         : [];
     $sidebar_shop = $sidebar_shop_access ? $sidebar_shop_access[0] : null;
     $sidebar_store = $sidebar_store_access ? $sidebar_store_access[0] : null;
+    $sidebar_section = sidebar_badge_section_for_script($_SERVER['PHP_SELF'] ?? '');
+    if ($sidebar_section !== null) {
+        sidebar_badge_mark_seen($sidebar_section);
+    }
     $sidebar_notifications = sidebar_notification_counts();
     ?>
     <aside class="sidebar" id="sidebar">
@@ -148,14 +152,33 @@ $is_shop_manager = is_shop_manager();
             <?php endif; ?>
             <?php if (can("manage_leads")): ?>
             <?php
+            // Count pending request leads the current user has not opened yet.
+            $lead_reads_ready = db_table_exists('lead_notification_reads');
+            $lead_read_exclusion = $lead_reads_ready
+                ? " AND NOT EXISTS (
+                        SELECT 1 FROM lead_notification_reads lnr
+                         WHERE lnr.tenant_id = l.tenant_id AND lnr.user_id = ?
+                           AND lnr.lead_id = l.lead_id
+                    )"
+                : '';
+            $new_storefront_params = [(int)$current_user->tenant_id];
+            if ($lead_reads_ready) {
+                $new_storefront_params[] = (int)$current_user->user_id;
+            }
+            $lead_seen = sidebar_badge_seen_map((int)$current_user->tenant_id, (int)$current_user->user_id);
+            $lead_seen_sql = '';
+            if (!empty($lead_seen['leads'])) {
+                $lead_seen_sql = ' AND l.created_at > ?';
+                $new_storefront_params[] = $lead_seen['leads'];
+            }
             $new_storefront_requests = fetch_one(
                 "SELECT COUNT(*) AS total
                    FROM leads l
                    JOIN storefront_lead_requests r ON r.lead_id = l.lead_id AND r.tenant_id = l.tenant_id
                   WHERE l.tenant_id = ?
                     AND l.status NOT IN (\"converted\", \"lost\", \"cancelled\")
-                    AND r.converted_order_id IS NULL",
-                (int)$current_user->tenant_id
+                    AND r.converted_order_id IS NULL{$lead_read_exclusion}{$lead_seen_sql}",
+                ...$new_storefront_params
             );
             $new_storefront_request_count = (int)($new_storefront_requests["total"] ?? 0);
             ?>

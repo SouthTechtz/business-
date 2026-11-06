@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('sale-add.php');
         }
         if ((int)($_SESSION['active_shop_id'] ?? 0) !== $requested) {
-            unset($_SESSION['pos_cart']);
+            unset($_SESSION['pos_cart'], $_SESSION['pos_open_cart']);
         }
         $_SESSION['active_shop_id'] = $requested;
         redirect('sale-add.php');
@@ -95,6 +95,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'quantity'      => $qty,
                 'is_service'    => (int)$product['is_service'],
             ];
+            // Phones show the cart as an overlay; open it once the item is added.
+            $_SESSION['pos_open_cart'] = 1;
         }
         redirect('sale-add.php');
     }
@@ -330,6 +332,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 // ---- Render ----
 $cart = $_SESSION['pos_cart'] ?? [];
+$pos_open_cart = !empty($_SESSION['pos_open_cart']);
+unset($_SESSION['pos_open_cart']);
 $products = fetch_all(
     "SELECT p.*, GREATEST(0, COALESCE((SELECT s.quantity FROM inventory_stock s
                            WHERE s.product_id = p.product_id AND s.warehouse_id = ? AND s.tenant_id = p.tenant_id), 0)
@@ -402,6 +406,7 @@ require_once 'sidebar.php';
 </div>
 
 <?php if ($selected_shop_id): ?>
+    <div class="pos-layout">
     <div class="pos-products">
         <div class="pos-search">
             <div class="input-group">
@@ -411,11 +416,6 @@ require_once 'sidebar.php';
                 </div>
             </div>
         </div>
-        <?php if (!$cart): ?>
-            <div class="alert alert-light border small mb-2" id="posCartHint">
-                <i class="fa fa-shopping-cart mr-1"></i> Select a product to open the cart.
-            </div>
-        <?php endif; ?>
         <div class="pos-list" id="posGrid">
             <?php foreach ($products as $p): ?>
                 <div class="pos-row" data-id="<?php echo (int)$p['product_id']; ?>"
@@ -446,17 +446,20 @@ require_once 'sidebar.php';
         </div>
     </div>
 
-    <div class="pos-cart<?php echo !$cart ? ' is-empty' : ''; ?>">
+    <div class="pos-cart<?php echo $pos_open_cart ? ' is-open' : ''; ?>" id="posCartPanel" aria-label="Sale cart">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="card-title">Cart (<?php echo count($cart); ?>)</h5>
-                <?php if ($cart): ?>
-                    <form method="POST" action="sale-add.php" class="d-inline">
-                        <?php echo csrf_field(); ?>
-                        <input type="hidden" name="action" value="clear_cart">
-                        <button type="submit" class="btn btn-sm btn-light text-danger">Clear</button>
-                    </form>
-                <?php endif; ?>
+                <h5 class="card-title mb-0">Cart (<span id="posCartCount"><?php echo count($cart); ?></span>)</h5>
+                <div class="d-flex align-items-center" style="gap:6px;">
+                    <?php if ($cart): ?>
+                        <form method="POST" action="sale-add.php" class="d-inline">
+                            <?php echo csrf_field(); ?>
+                            <input type="hidden" name="action" value="clear_cart">
+                            <button type="submit" class="btn btn-sm btn-light text-danger">Clear</button>
+                        </form>
+                    <?php endif; ?>
+                    <button type="button" class="btn btn-sm btn-light pos-cart-close" id="posCartClose" aria-label="Close cart"><i class="fa fa-times"></i></button>
+                </div>
             </div>
             <div class="card-body">
                 <form method="POST" action="sale-add.php" id="addForm">
@@ -558,6 +561,13 @@ require_once 'sidebar.php';
             </div>
         </div>
     </div>
+
+    <div class="pos-cart-backdrop<?php echo $pos_open_cart ? ' is-open' : ''; ?>" id="posCartBackdrop"></div>
+    <button type="button" class="pos-cart-toggle" id="posCartToggle" aria-label="Open cart">
+        <i class="fa fa-shopping-cart" aria-hidden="true"></i>
+        <span>Cart</span>
+        <span class="pos-cart-toggle-count" id="posCartToggleCount"><?php echo count($cart); ?></span>
+    </button>
 </div>
 
 <?php endif; ?>
@@ -698,7 +708,26 @@ require_once 'sidebar.php';
         });
     }
 
+    function setCartOpen(open) {
+        $('#posCartPanel').toggleClass('is-open', open);
+        $('#posCartBackdrop').toggleClass('is-open', open);
+        $('body').toggleClass('pos-cart-open', open);
+    }
+
     $(function () {
+        $('#posCartToggle').on('click', function () {
+            setCartOpen(true);
+        });
+        $('#posCartClose, #posCartBackdrop').on('click', function () {
+            setCartOpen(false);
+        });
+        $(document).on('keydown', function (e) {
+            if (e.key === 'Escape') setCartOpen(false);
+        });
+        if ($('#posCartPanel').hasClass('is-open')) {
+            setCartOpen(true);
+        }
+
         $('#cartItems').on('input', '.cart-price, .cart-qty', function () {
             recalcTotals();
         });

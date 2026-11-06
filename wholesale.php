@@ -12,7 +12,7 @@ function wholesale_status_meta($status) {
         case 'pending':
             return ['label' => 'Pending review', 'class' => 'badge-warning'];
         case 'confirmed':
-            return ['label' => 'Confirmed', 'class' => 'badge-primary'];
+            return ['label' => 'Confirmed', 'class' => 'badge-navy'];
         case 'converted':
             return ['label' => 'Converted to order', 'class' => 'badge-success'];
         case 'cancelled':
@@ -99,7 +99,7 @@ function wholesale_notify_order_paid($order_id, $tenant_id) {
     if (!db_table_exists('wholesale_notifications')) return false;
 
     $order = fetch_one(
-        "SELECT o.order_id, o.order_number, o.currency_code, o.total, o.Amount_paid,
+        "SELECT o.order_id, o.order_number, o.currency_code, o.total, o.Amount_paid, o.stage,
                 w.user_id AS wholesaler_user_id, w.contact_id
            FROM orders o
            JOIN wholesaler_accounts w
@@ -109,7 +109,8 @@ function wholesale_notify_order_paid($order_id, $tenant_id) {
         (int)$order_id,
         (int)$tenant_id
     );
-    if (!$order || !wholesale_order_is_paid($order)) return false;
+    if (!$order || order_is_returned($order)) return false;
+    if (!wholesale_order_is_paid($order)) return false;
 
     $user_id = (int)($order['wholesaler_user_id'] ?? 0);
     if ($user_id <= 0) return false;
@@ -314,6 +315,7 @@ function wholesale_request($tenant_id, $request_id, $contact_id) {
                 o.customer_confirmed_at AS order_customer_confirmed_at,
                 o.customer_confirmation_note AS order_customer_confirmation_note,
                 o.total AS order_total, o.Amount_paid AS order_amount_paid,
+                o.return_reason AS order_return_reason,
                 o.currency_code AS order_currency_code,
                 o.created_at AS order_created_at
            FROM storefront_lead_requests r

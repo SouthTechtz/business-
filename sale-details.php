@@ -40,6 +40,7 @@ $payment_summary = fetch_one(
 ) ?: [];
 $amount_paid = (float)($payment_summary['paid'] ?? 0);
 $balance_due = max(0, (float)$order['total'] - $amount_paid);
+$sale_status_meta = pos_sale_payment_status($order['status'], $order['total'], $amount_paid);
 
 $sale_invoice = can('manage_invoices')
     ? fetch_one(
@@ -93,7 +94,7 @@ $cur = tenant_currency();
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="card-title">Items</h5>
-                <span class="badge badge-<?php echo $order['status'] === 'completed' ? 'success' : ($order['status'] === 'cancelled' ? 'danger' : 'warning'); ?>"><?php echo e(ucfirst($order['status'])); ?></span>
+                <span class="badge badge-<?php echo e($sale_status_meta['class']); ?>"><?php echo e($sale_status_meta['label']); ?></span>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
@@ -125,7 +126,7 @@ $cur = tenant_currency();
             <div class="card-body">
                 <div class="cart-total-row"><span>Order #</span><span class="font-weight-semibold"><?php echo e($order['order_number']); ?></span></div>
                 <div class="cart-total-row"><span>Date</span><span><?php echo e(date('M d, Y H:i', strtotime($order['order_date']))); ?></span></div>
-                <div class="cart-total-row"><span>Status</span><span><?php echo e(ucfirst($order['status'])); ?></span></div>
+                <div class="cart-total-row"><span>Status</span><span><?php echo e($sale_status_meta['label']); ?></span></div>
                 <hr>
                 <div class="cart-total-row"><span>Subtotal</span><span><?php echo e(money($order['subtotal'], $cur)); ?></span></div>
                 <?php if ((float)$order['tax_amount'] > 0): ?>

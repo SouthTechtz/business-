@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'pos-invoice.php';
 require_permission('manage_receipts');
 $page_title = 'Record Payment';
 
@@ -90,6 +91,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute();
             $stmt->close();
         }
+
+        // Keep the linked POS sale's payment ledger in step with the invoice.
+        sync_pos_sale_payments_from_invoice(
+            (int)$current_user->tenant_id,
+            $invoice_id,
+            [
+                'payment_method_id' => $method_id,
+                'payment_date'      => $payment_date,
+                'created_by'        => (int)$current_user->user_id,
+            ]
+        );
 
         $conn->commit();
         $invoice_number = $locked_invoice['invoice_number'];

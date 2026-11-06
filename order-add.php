@@ -39,6 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $customer_location = trim($_POST['customer_location'] ?? '');
     $status = 'new';
     $stage = trim($_POST['stage'] ?? 'shop');
+    $return_reason = trim((string)($_POST['return_reason'] ?? ''));
     $amount_paid = (float)($_POST['Amount_paid'] ?? 0);
     $notes = trim($_POST['notes'] ?? '');
     $order_total = 0.0;
@@ -54,6 +55,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'Amount paid cannot be greater than the order total.';
             }
         }
+    }
+
+    if ($error === '' && !in_array($stage, ['shop', 'transport', 'completed', 'returned'], true)) {
+        $error = 'Choose a valid order stage.';
+    }
+    if ($error === '' && $stage === 'returned' && $return_reason === '') {
+        $error = 'Enter a reason for returning this order.';
     }
 
     // Ignore stale or foreign contact/lead references instead of failing on a
@@ -168,10 +176,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
 
+            if ($stage === 'returned') {
+                record_order_return(
+                    $order_id,
+                    (int)$current_user->tenant_id,
+                    (int)$current_user->user_id,
+                    $return_reason,
+                    $amount_paid,
+                    false
+                );
+            }
+
             $conn->commit();
-            wholesale_notify_order_paid($order_id, (int)$current_user->tenant_id);
+            if ($stage !== 'returned') {
+                wholesale_notify_order_paid($order_id, (int)$current_user->tenant_id);
+                notification_notify_order_paid($order_id, (int)$current_user->tenant_id, (int)$current_user->user_id);
+            }
             notification_notify_order_created($order_id, (int)$current_user->tenant_id, (int)$current_user->user_id);
-            notification_notify_order_paid($order_id, (int)$current_user->tenant_id, (int)$current_user->user_id);
             flash_set('success', 'Order created successfully.');
             redirect('order-view.php?id=' . $order_id);
         } catch (Exception $ex) {
@@ -269,12 +290,18 @@ require_once 'sidebar.php';
                 </div>
                 <div class="col-md-4 form-group">
                     <label>Order Stage <span class="text-danger">*</span></label>
-                    <select name="stage" class="form-control" required>
-                        <option value="shop">At the shop</option>
-                        <option value="transport">In transport</option>
-                        <option value="completed">Completed</option>
-                        <option value="returned">Returned</option>
+                    <select name="stage" id="addOrderStage" class="form-control" required>
+                        <option value="shop" <?php echo ($_POST['stage'] ?? 'shop') === 'shop' ? 'selected' : ''; ?>>At the shop</option>
+                        <option value="transport" <?php echo ($_POST['stage'] ?? '') === 'transport' ? 'selected' : ''; ?>>In transport</option>
+                        <option value="completed" <?php echo ($_POST['stage'] ?? '') === 'completed' ? 'selected' : ''; ?>>Completed</option>
+                        <option value="returned" <?php echo ($_POST['stage'] ?? '') === 'returned' ? 'selected' : ''; ?>>Returned</option>
                     </select>
+                </div>
+                <div class="col-md-12 form-group d-none" id="addReturnReasonGroup">
+                    <label>Return Reason <span class="text-danger">*</span></label>
+                    <input type="text" name="return_reason" id="addReturnReason" class="form-control" maxlength="255"
+                           value="<?php echo e($_POST['return_reason'] ?? ''); ?>" placeholder="Why was this order returned?">
+                    <small class="text-danger d-block mt-1">The amount paid on this order will be deducted from sales.</small>
                 </div>
 
                 <div class="col-md-12 form-group">
@@ -286,5 +313,22 @@ require_once 'sidebar.php';
         </form>
     </div>
 </div>
+
+<script>
+    $(function () {
+        var $stage = $('#addOrderStage');
+        var $group = $('#addReturnReasonGroup');
+        var $reason = $('#addReturnReason');
+
+        function toggleReturnReason() {
+            var needsReason = $stage.val() === 'returned';
+            $group.toggleClass('d-none', !needsReason);
+            $reason.prop('required', needsReason);
+        }
+
+        $stage.on('change', toggleReturnReason);
+        toggleReturnReason();
+    });
+</script>
 
 <?php require_once 'footer.php'; ?>

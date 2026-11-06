@@ -340,6 +340,7 @@ function report_pos_sale_rows($from = '', $to = '', array $filters = []) {
                    w.name location_name, s.name shop_name,
                    COALESCE(oi.items_total, 0) items_total,
                    COALESCE(oi.items_count, 0) items_count,
+                   COALESCE(pay.amount_paid, 0) amount_paid,
                    COALESCE(rt.return_count, 0) return_count,
                    COALESCE(rt.returned_qty, 0) returned_qty,
                    COALESCE(rt.resale_qty, 0) resale_qty,
@@ -355,6 +356,10 @@ function report_pos_sale_rows($from = '', $to = '', array $filters = []) {
                 SELECT order_id, SUM(quantity) items_count, SUM(total) items_total
                 FROM pos_order_items GROUP BY order_id
             ) oi ON oi.order_id = o.order_id
+            LEFT JOIN (
+                SELECT order_id, SUM(amount) amount_paid
+                FROM pos_payments GROUP BY order_id
+            ) pay ON pay.order_id = o.order_id
             LEFT JOIN (
                 SELECT sr.source_id, COUNT(DISTINCT sr.return_id) return_count,
                        SUM(sri.quantity) returned_qty, SUM(sri.resale_quantity) resale_qty,

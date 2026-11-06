@@ -52,7 +52,7 @@ echo '<?mso-application progid="Excel.Sheet"?>' . "\n";
     cell(trim(($o['first_name'] ?? '') . ' ' . ($o['last_name'] ?? '')) ?: $o['company_name'] ?: 'Walk-in Customer'),
     cell($o['shop_name'] ?: 'Unattributed (historical)'),
     cell((float)$o['items_count'], 'Number'),
-    cell(ucfirst($o['status'])),
+    cell(pos_sale_payment_status($o['status'], $o['total'], $o['amount_paid'] ?? 0)['label']),
     cell(number_format((float)$o['subtotal'], 2, '.', ''), 'Number'),
     cell(number_format((float)$o['tax_amount'], 2, '.', ''), 'Number'),
     cell(number_format((float)$o['discount'], 2, '.', ''), 'Number'),

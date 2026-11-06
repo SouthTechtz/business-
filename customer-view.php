@@ -38,7 +38,15 @@ $payments = fetch_all(
 );
 
 $orders = fetch_all(
-    "SELECT * FROM pos_orders WHERE contact_id = ? AND tenant_id = ?{$order_scope} ORDER BY order_date DESC LIMIT 10",
+    "SELECT o.*, COALESCE(pay.amount_paid, 0) amount_paid
+       FROM pos_orders o
+       LEFT JOIN (
+           SELECT order_id, SUM(amount) amount_paid
+             FROM pos_payments
+            GROUP BY order_id
+       ) pay ON pay.order_id = o.order_id
+      WHERE o.contact_id = ? AND o.tenant_id = ?{$order_scope}
+      ORDER BY o.order_date DESC LIMIT 10",
     $id, $current_user->tenant_id
 );
 
@@ -255,7 +263,8 @@ $cur = tenant_currency();
                             <tr>
                                 <td><a href="sale-details.php?id=<?php echo $ord['order_id']; ?>"><?php echo e($ord['order_number']); ?></a></td>
                                 <td><?php echo e(date('M d, Y H:i', strtotime($ord['order_date']))); ?></td>
-                                <td><span class="badge badge-<?php echo $ord['status'] === 'completed' ? 'success' : ($ord['status'] === 'cancelled' ? 'danger' : 'warning'); ?>"><?php echo e($ord['status']); ?></span></td>
+                                <?php $sale_status_meta = pos_sale_payment_status($ord['status'], $ord['total'], $ord['amount_paid'] ?? 0); ?>
+                                <td><span class="badge badge-<?php echo e($sale_status_meta['class']); ?>"><?php echo e($sale_status_meta['label']); ?></span></td>
                                 <td class="text-right"><?php echo e(money($ord['total'], $cur)); ?></td>
                             </tr>
                         <?php endforeach; ?>

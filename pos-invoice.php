@@ -207,3 +207,90 @@ function create_invoice_from_pos_sale($tenant_id, $order_id, $created_by)
         throw $exception;
     }
 }
+
+/**
+ * Mirror payments recorded against a POS-generated invoice into the sale's
+ * payment ledger so the sale always shows the same amount paid.
+ *
+ * The invoice's amount_paid already includes any payment taken at the POS
+ * (create_invoice_from_pos_sale copies it), so only the difference between the
+ * invoice amount paid and the sale's existing payments is inserted.
+ *
+ * @param array|null $payment Optional payment row (method/date/creator) used
+ *                            for the mirrored ledger entry.
+ * @return float Amount added to the sale ledger.
+ */
+function sync_pos_sale_payments_from_invoice($tenant_id, $invoice_id, ?array $payment = null)
+{
+    global $conn;
+
+    $tenant_id = (int)$tenant_id;
+    $invoice_id = (int)$invoice_id;
+
+    $invoice = fetch_one(
+        "SELECT invoice_id, reference, amount_paid
+           FROM invoices
+          WHERE invoice_id = ? AND tenant_id = ?",
+        $invoice_id,
+        $tenant_id
+    );
+    if (!$invoice || trim((string)$invoice['reference']) === '') {
+        return 0.0;
+    }
+
+    $sale = fetch_one(
+        "SELECT order_id, total
+           FROM pos_orders
+          WHERE tenant_id = ? AND order_number = ?
+          LIMIT 1",
+        $tenant_id,
+        (string)$invoice['reference']
+    );
+    if (!$sale) {
+        return 0.0;
+    }
+
+    $invoice_paid = round((float)$invoice['amount_paid'], 2);
+    $sale_total = round((float)$sale['total'], 2);
+    $paid_row = fetch_one(
+        "SELECT COALESCE(SUM(amount), 0) paid FROM pos_payments WHERE order_id = ?",
+        (int)$sale['order_id']
+    ) ?: [];
+    $sale_paid = round((float)($paid_row['paid'] ?? 0), 2);
+
+    // Never mirror more than the sale is worth.
+    $target = min($invoice_paid, $sale_total);
+    $missing = round($target - $sale_paid, 2);
+    if ($missing <= 0.005) {
+        return 0.0;
+    }
+
+    $method_id = (int)($payment['payment_method_id'] ?? 0);
+    $method_db = $method_id > 0 ? $method_id : null;
+    $paid_at = trim((string)($payment['payment_date'] ?? ''));
+    if ($paid_at === '') {
+        $paid_at = date('Y-m-d H:i:s');
+    } else {
+        $paid_at = str_replace('T', ' ', $paid_at);
+    }
+    $created_by = isset($payment['created_by']) ? (int)$payment['created_by'] : null;
+    if ($created_by !== null && $created_by <= 0) {
+        $created_by = null;
+    }
+
+    $stmt = $conn->prepare(
+        "INSERT INTO pos_payments (order_id, amount, payment_method_id, paid_at, created_by)
+         VALUES (?, ?, ?, ?, ?)"
+    );
+    if (!$stmt) {
+        throw new RuntimeException($conn->error);
+    }
+    $order_id = (int)$sale['order_id'];
+    $stmt->bind_param('idisi', $order_id, $missing, $method_db, $paid_at, $created_by);
+    if (!$stmt->execute()) {
+        throw new RuntimeException($stmt->error);
+    }
+    $stmt->close();
+
+    return $missing;
+}

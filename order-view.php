@@ -35,6 +35,14 @@ if (!order_is_visible($order)) {
     die('You do not have access to this order.');
 }
 
+// Opening the order clears its bell notification badge for this user.
+require_once 'notification-helpers.php';
+notification_mark_link_read(
+    (int)$current_user->tenant_id,
+    (int)$current_user->user_id,
+    'order-view.php?id=' . $id
+);
+
 $items = fetch_all(
     "SELECT oi.*,
             (SELECT st.quantity FROM inventory_stock st
@@ -282,6 +290,22 @@ $cur = $order['currency_code'] ?: tenant_currency();
                         <tr><th>Customer received</th><td><?php echo $order['customer_confirmed_at'] ? e(date('M d, Y H:i', strtotime($order['customer_confirmed_at']))) : '-'; ?></td></tr>
                         <tr><th>Closed</th><td><?php echo $order['rejected_at'] ? 'Rejected: ' . e($order['rejection_reason']) : ($order['cancelled_at'] ? 'Cancelled: ' . e($order['cancel_reason']) : ($order['fulfilled_at'] ? 'Fulfilled ' . e(date('M d, Y', strtotime($order['fulfilled_at']))) : '—')); ?></td></tr>
                         <tr>
+                            <th>Returned</th>
+                            <td>
+                                <?php if (!empty($order['returned_at'])): ?>
+                                    <?php echo e(date('M d, Y H:i', strtotime($order['returned_at']))); ?>
+                                    &middot; <?php echo e($order['return_reason'] ?: 'No reason recorded'); ?>
+                                    <?php if ((float)($order['returned_amount'] ?? 0) > 0.005): ?>
+                                        <small class="text-danger d-block">
+                                            Deducted from sales: <?php echo e(money($order['returned_amount'], $cur)); ?>
+                                        </small>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    —
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <tr>
                             <th>Invoice</th>
                             <td>
                                 <?php if ($order['fulfilled_invoice_id']): ?>
@@ -305,7 +329,7 @@ $cur = $order['currency_code'] ?: tenant_currency();
                                     <td><?php echo e($res['product_name_snapshot']); ?><small class="text-muted d-block"><?php echo e($res['product_code_snapshot']); ?></small></td>
                                     <td class="text-right"><?php echo e((float)$res['quantity']); ?></td>
                                     <td>
-                                        <span class="badge badge-<?php echo $res['status'] === 'active' ? 'primary' : ($res['status'] === 'consumed' ? 'success' : 'secondary'); ?>">
+                                        <span class="badge badge-<?php echo $res['status'] === 'active' ? 'navy' : ($res['status'] === 'consumed' ? 'success' : 'secondary'); ?>">
                                             <?php echo e(ucfirst($res['status'])); ?>
                                         </span>
                                         <?php if ($res['consumed_invoice_id']): ?><small class="text-muted d-block">Invoice #<?php echo (int)$res['consumed_invoice_id']; ?></small><?php endif; ?>
@@ -467,6 +491,24 @@ $cur = $order['currency_code'] ?: tenant_currency();
                             <input type="text" name="reason" class="form-control form-control-sm" maxlength="255" required>
                         </div>
                         <button type="submit" class="btn btn-outline-secondary btn-block"><i class="fa fa-ban mr-1"></i> Cancel Order</button>
+                    </form>
+                <?php endif; ?>
+
+                <?php if ($order_stage !== 'returned' && !in_array($status, ['cancelled', 'rejected'], true)): ?>
+                    <form method="POST" action="order-action.php" class="mt-3">
+                        <?php echo csrf_field(); ?>
+                        <input type="hidden" name="action" value="mark_returned">
+                        <input type="hidden" name="order_id" value="<?php echo $id; ?>">
+                        <div class="form-group">
+                            <label class="small">Return Reason <span class="text-danger">*</span></label>
+                            <input type="text" name="reason" class="form-control form-control-sm" maxlength="255" required
+                                   placeholder="Why is this order being returned?">
+                            <small class="text-muted">The amount paid on this order will be deducted from sales.</small>
+                        </div>
+                        <button type="submit" class="btn btn-outline-danger btn-block"
+                                onclick="return confirm('Mark this order as returned and deduct its paid amount from sales?');">
+                            <i class="fa fa-undo mr-1"></i> Mark Returned
+                        </button>
                     </form>
                 <?php endif; ?>
 

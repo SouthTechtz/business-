@@ -93,8 +93,94 @@ function sidebar_count_badge($count, $label, $class = 'badge-danger') {
 }
 
 /**
+ * Map a script name to the sidebar badge section it belongs to.
+ * Opening one of these pages acknowledges that section's badge.
+ */
+function sidebar_badge_section_for_script($script) {
+    $script = basename((string)$script);
+    // In the godown-manager layout, "My Godown" is not the transfers page.
+    if ($script === 'godown.php' && is_godown_manager()) {
+        return null;
+    }
+    $sections = [
+        'orders'    => ['orders.php'],
+        'invoices'  => ['invoices.php'],
+        'inventory' => ['inventory.php'],
+        'transfers' => ['godown-transfers.php', 'godown.php'],
+        'leads'     => ['leads.php'],
+    ];
+    foreach ($sections as $section => $scripts) {
+        if (in_array($script, $scripts, true)) {
+            return $section;
+        }
+    }
+    return null;
+}
+
+/** Whether the per-user sidebar badge table is available. */
+function sidebar_badge_seen_ready() {
+    static $ready = null;
+    if ($ready === null) {
+        $ready = db_table_exists('sidebar_badge_seen');
+    }
+    return $ready;
+}
+
+/** Last time the signed-in user opened each sidebar section's page. */
+function sidebar_badge_seen_map($tenant_id, $user_id) {
+    $map = [];
+    if (!sidebar_badge_seen_ready()) {
+        return $map;
+    }
+
+    $rows = fetch_all(
+        "SELECT section, seen_at
+           FROM sidebar_badge_seen
+          WHERE tenant_id = ? AND user_id = ?",
+        (int)$tenant_id,
+        (int)$user_id
+    );
+    foreach ($rows as $row) {
+        $map[(string)$row['section']] = (string)$row['seen_at'];
+    }
+    return $map;
+}
+
+/** Record that the signed-in user has opened a sidebar section's page. */
+function sidebar_badge_mark_seen($section, $tenant_id = null, $user_id = null) {
+    global $conn, $current_user;
+
+    if (!$current_user) {
+        return;
+    }
+
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $user_id = $user_id === null ? (int)$current_user->user_id : (int)$user_id;
+    $section = trim((string)$section);
+    if ($tenant_id <= 0 || $user_id <= 0 || $section === '') {
+        return;
+    }
+    if (!sidebar_badge_seen_ready()) {
+        return;
+    }
+
+    $stmt = $conn->prepare(
+        "INSERT INTO sidebar_badge_seen (tenant_id, user_id, section, seen_at)
+         VALUES (?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE seen_at = NOW()"
+    );
+    if (!$stmt) {
+        return;
+    }
+    $stmt->bind_param('iis', $tenant_id, $user_id, $section);
+    $stmt->execute();
+    $stmt->close();
+}
+
+/**
  * Role/location scoped notification counts for sidebar navigation.
- * Counts only items the signed-in user can act on or see in their locations.
+ * Counts only items the signed-in user can act on or see in their locations,
+ * and only activity newer than the last time they opened that section.
  */
 function sidebar_notification_counts($tenant_id = null) {
     global $current_user;
@@ -109,17 +195,21 @@ function sidebar_notification_counts($tenant_id = null) {
         return $cache[$cache_key];
     }
 
+    $seen = sidebar_badge_seen_map($tenant_id, (int)$current_user->user_id);
     $counts = ['orders' => 0, 'invoices' => 0, 'transfers' => 0, 'low_stock' => 0];
 
     // Orders waiting for review/assignment.
     if (can('manage_orders')) {
         [$visibility_sql, $visibility_params] = order_visibility_clause('o');
-        $row = fetch_one(
-            "SELECT COUNT(*) AS c FROM orders o
-              WHERE o.tenant_id = ? AND o.status IN ('new', 'under_review')" . $visibility_sql,
-            $tenant_id,
-            ...$visibility_params
-        );
+        $sql = "SELECT COUNT(*) AS c FROM orders o
+                 WHERE o.tenant_id = ? AND o.status IN ('new', 'under_review')" . $visibility_sql;
+        $params = [$tenant_id, ...$visibility_params];
+        if (!empty($seen['orders'])) {
+            $sql .= ' AND (o.created_at > ? OR o.updated_at > ?)';
+            $params[] = $seen['orders'];
+            $params[] = $seen['orders'];
+        }
+        $row = fetch_one($sql, ...$params);
         $counts['orders'] = (int)($row['c'] ?? 0);
     }
 
@@ -152,6 +242,11 @@ function sidebar_notification_counts($tenant_id = null) {
         if ($warehouse_ids !== null) {
             $sql .= ' AND i.warehouse_id IN (' . implode(',', array_map('intval', $warehouse_ids)) . ')';
         }
+        if (!empty($seen['invoices'])) {
+            // Only new unpaid invoices should raise the badge again after a visit.
+            $sql .= ' AND i.created_at > ?';
+            $params[] = $seen['invoices'];
+        }
         $row = fetch_one($sql, ...$params);
         $counts['invoices'] = (int)($row['c'] ?? 0);
     }
@@ -160,6 +255,7 @@ function sidebar_notification_counts($tenant_id = null) {
     if (can('manage_inventory') || can('manage_godown') || can('request_godown_transfers') || can('receive_godown_transfers') || can('approve_godown_transfers') || can('dispatch_godown_transfers')) {
         $sql = "SELECT COUNT(*) AS c FROM stock_transfers t
                  WHERE t.tenant_id = ? AND t.status IN ('draft', 'approved', 'dispatched', 'discrepancy')";
+        $params = [$tenant_id];
         if (!tenant_admin_scope()) {
             $scope_parts = [];
             if (!empty($warehouse_ids)) {
@@ -177,7 +273,12 @@ function sidebar_notification_counts($tenant_id = null) {
             }
         }
         if ($sql !== '') {
-            $row = fetch_one($sql, $tenant_id);
+            if (!empty($seen['transfers'])) {
+                $sql .= ' AND (t.created_at > ? OR t.updated_at > ?)';
+                $params[] = $seen['transfers'];
+                $params[] = $seen['transfers'];
+            }
+            $row = fetch_one($sql, ...$params);
             $counts['transfers'] = (int)($row['c'] ?? 0);
         }
     }
@@ -189,13 +290,18 @@ function sidebar_notification_counts($tenant_id = null) {
                       FROM inventory_stock s
                       JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
                      WHERE s.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0";
+        $params = [$tenant_id];
         if ($warehouse_ids !== null) {
             $sql .= ' AND s.warehouse_id IN (' . implode(',', array_map('intval', $warehouse_ids)) . ')';
         }
         $sql .= "     GROUP BY s.product_id
-                    HAVING SUM(s.quantity) <= MAX(COALESCE(p.min_stock_level, 0))
-                ) low_stock";
-        $row = fetch_one($sql, $tenant_id);
+                    HAVING SUM(s.quantity) <= MAX(COALESCE(p.min_stock_level, 0))";
+        if (!empty($seen['inventory'])) {
+            $sql .= ' AND MAX(s.updated_at) > ?';
+            $params[] = $seen['inventory'];
+        }
+        $sql .= " ) low_stock";
+        $row = fetch_one($sql, ...$params);
         $counts['low_stock'] = (int)($row['c'] ?? 0);
     }
 
@@ -1412,7 +1518,7 @@ function godown_transfer_status_class($status) {
     $map = [
         'draft'       => 'warning',
         'approved'    => 'info',
-        'dispatched'  => 'primary',
+        'dispatched'  => 'navy',
         'received'    => 'success',
         'discrepancy' => 'danger',
         'cancelled'   => 'secondary',
@@ -1757,6 +1863,267 @@ function order_allowed_transitions($status) {
     return $map[$status] ?? [];
 }
 
+/** Whether an order is currently in the returned stage. */
+function order_is_returned($order) {
+    return $order && strtolower(trim((string)($order['stage'] ?? ''))) === 'returned';
+}
+
+/**
+ * SQL expression for the amount an order contributes to sales.
+ * The paid amount is reduced by the recorded return amount, so a returned order
+ * nets to zero instead of its payment being counted without a deduction.
+ */
+function order_sales_amount_sql($alias = 'o') {
+    $alias = preg_replace('/[^A-Za-z0-9_]/', '', (string)$alias);
+    if ($alias === '') {
+        $alias = 'o';
+    }
+    return "COALESCE({$alias}.Amount_paid, 0) - COALESCE({$alias}.returned_amount, 0)";
+}
+
+/**
+ * Record an order return reason and the amount reversed from sales.
+ * The caller must hold an open transaction and pass the locked order values.
+ */
+function record_order_return($order_id, $tenant_id, $user_id, $reason, $amount_paid, $already_returned = false) {
+    global $conn;
+
+    $reason = trim((string)$reason);
+    if ($reason === '') {
+        throw new RuntimeException('Enter a reason for returning this order.');
+    }
+    if (mb_strlen($reason) > 255) {
+        $reason = mb_substr($reason, 0, 255);
+    }
+
+    $order_id = (int)$order_id;
+    $tenant_id = (int)$tenant_id;
+    $user_id = (int)$user_id;
+    $amount = round((float)$amount_paid, 2);
+
+    if ($already_returned) {
+        $stmt = $conn->prepare(
+            "UPDATE orders
+                SET return_reason = ?, returned_amount = ?
+              WHERE order_id = ? AND tenant_id = ?"
+        );
+        if (!$stmt) throw new RuntimeException($conn->error);
+        $stmt->bind_param('sdii', $reason, $amount, $order_id, $tenant_id);
+    } else {
+        $stmt = $conn->prepare(
+            "UPDATE orders
+                SET stage = 'returned', return_reason = ?, returned_at = NOW(),
+                    returned_by = ?, returned_amount = ?
+              WHERE order_id = ? AND tenant_id = ?"
+        );
+        if (!$stmt) throw new RuntimeException($conn->error);
+        $stmt->bind_param('sidii', $reason, $user_id, $amount, $order_id, $tenant_id);
+    }
+
+    if (!$stmt->execute()) {
+        $error = $stmt->error;
+        $stmt->close();
+        throw new RuntimeException($error);
+    }
+    $stmt->close();
+
+    if (db_table_exists('sales_returns')) {
+        sync_order_sales_return($order_id, $tenant_id, $user_id, $amount);
+    }
+
+    return $amount;
+}
+
+/**
+ * Create or refresh the sales-return record that mirrors an order return.
+ * The caller must hold an open transaction.
+ */
+function sync_order_sales_return($order_id, $tenant_id, $user_id, $refund_amount) {
+    global $conn;
+
+    if (!db_table_exists('sales_returns') || !db_table_exists('sales_return_items')) {
+        return 0;
+    }
+
+    $order_id = (int)$order_id;
+    $tenant_id = (int)$tenant_id;
+    $user_id = (int)$user_id;
+    $refund_amount = round((float)$refund_amount, 2);
+
+    $order = fetch_one(
+        "SELECT * FROM orders WHERE order_id = ? AND tenant_id = ?",
+        $order_id,
+        $tenant_id
+    );
+    if (!$order) {
+        return 0;
+    }
+
+    $customer_id = (int)($order['contact_id'] ?? 0) ?: null;
+    $shop_id = (int)($order['shop_id'] ?? 0) ?: null;
+    $warehouse_id = (int)($order['warehouse_id'] ?? 0) ?: null;
+
+    $existing = fetch_one(
+        "SELECT * FROM sales_returns
+          WHERE tenant_id = ? AND source_type = 'order' AND source_id = ?
+          ORDER BY return_id DESC LIMIT 1 FOR UPDATE",
+        $tenant_id,
+        $order_id
+    );
+
+    if ($existing) {
+        $return_id = (int)$existing['return_id'];
+        $stmt = $conn->prepare(
+            "UPDATE sales_returns
+                SET refund_amount = ?, customer_id = ?, shop_id = ?, warehouse_id = ?,
+                    status = 'completed', return_date = NOW(), created_by = ?
+              WHERE return_id = ? AND tenant_id = ?"
+        );
+        if (!$stmt) throw new RuntimeException($conn->error);
+        $stmt->bind_param(
+            'diiiiii',
+            $refund_amount,
+            $customer_id,
+            $shop_id,
+            $warehouse_id,
+            $user_id,
+            $return_id,
+            $tenant_id
+        );
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException($error);
+        }
+        $stmt->close();
+
+        $stmt = $conn->prepare("DELETE FROM sales_return_items WHERE return_id = ? AND tenant_id = ?");
+        if (!$stmt) throw new RuntimeException($conn->error);
+        $stmt->bind_param('ii', $return_id, $tenant_id);
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
+            $stmt->close();
+            throw new RuntimeException($error);
+        }
+        $stmt->close();
+    } else {
+        $return_id = db_insert('sales_returns', [
+            'tenant_id' => $tenant_id,
+            'return_number' => next_document_number($tenant_id, 'sales_return', 'RET'),
+            'source_type' => 'order',
+            'source_id' => $order_id,
+            'customer_id' => $customer_id,
+            'shop_id' => $shop_id,
+            'warehouse_id' => $warehouse_id,
+            'return_date' => date('Y-m-d H:i:s'),
+            'refund_amount' => $refund_amount,
+            'status' => 'completed',
+            'created_by' => $user_id ?: null,
+            'submission_token' => 'order-return-' . $order_id,
+        ]);
+        if (!$return_id) {
+            throw new RuntimeException('Could not create the sales return for this order.');
+        }
+    }
+
+    $items = fetch_all(
+        "SELECT product_id, quantity, unit_price, line_total
+           FROM order_items
+          WHERE order_id = ? AND tenant_id = ?
+          ORDER BY line_no",
+        $order_id,
+        $tenant_id
+    );
+
+    $returnable = [];
+    $line_total_sum = 0.0;
+    foreach ($items as $item) {
+        if ((int)$item['product_id'] <= 0) continue;
+        $returnable[] = $item;
+        $line_total_sum += (float)$item['line_total'];
+    }
+    if ($line_total_sum <= 0.005) {
+        $line_total_sum = max(0, (float)($order['total'] ?? 0));
+    }
+
+    $remaining = $refund_amount;
+    $last_index = count($returnable) - 1;
+    foreach ($returnable as $index => $item) {
+        if ($index === $last_index) {
+            $item_refund = $remaining;
+        } else {
+            $line_total = (float)$item['line_total'];
+            $item_refund = $line_total_sum > 0
+                ? round($refund_amount * $line_total / $line_total_sum, 2)
+                : 0.0;
+            if ($item_refund > $remaining) {
+                $item_refund = $remaining;
+            }
+        }
+        $item_refund = round($item_refund, 2);
+        $remaining = round($remaining - $item_refund, 2);
+
+        $inserted = db_insert('sales_return_items', [
+            'return_id' => $return_id,
+            'tenant_id' => $tenant_id,
+            'product_id' => (int)$item['product_id'],
+            'quantity' => (float)$item['quantity'],
+            'unit_price' => (float)$item['unit_price'],
+            'refund_amount' => $item_refund,
+            'resale_quantity' => 0.0,
+        ]);
+        if (!$inserted) {
+            throw new RuntimeException('Could not create the sales return items for this order.');
+        }
+    }
+
+    return $return_id;
+}
+
+/** Cancel the sales-return record when an order is no longer returned. */
+function cancel_order_sales_return($order_id, $tenant_id) {
+    global $conn;
+
+    if (!db_table_exists('sales_returns')) {
+        return;
+    }
+
+    $stmt = $conn->prepare(
+        "UPDATE sales_returns
+            SET status = 'cancelled'
+          WHERE tenant_id = ? AND source_type = 'order' AND source_id = ? AND status = 'completed'"
+    );
+    if (!$stmt) throw new RuntimeException($conn->error);
+    $stmt->bind_param('ii', $tenant_id, $order_id);
+    if (!$stmt->execute()) {
+        $error = $stmt->error;
+        $stmt->close();
+        throw new RuntimeException($error);
+    }
+    $stmt->close();
+}
+
+/** Clear the return details when an order is moved out of the returned stage. */
+function clear_order_return($order_id, $tenant_id) {
+    global $conn;
+
+    $stmt = $conn->prepare(
+        "UPDATE orders
+            SET return_reason = NULL, returned_at = NULL, returned_by = NULL, returned_amount = 0.00
+          WHERE order_id = ? AND tenant_id = ?"
+    );
+    if (!$stmt) throw new RuntimeException($conn->error);
+    $stmt->bind_param('ii', $order_id, $tenant_id);
+    if (!$stmt->execute()) {
+        $error = $stmt->error;
+        $stmt->close();
+        throw new RuntimeException($error);
+    }
+    $stmt->close();
+
+    cancel_order_sales_return($order_id, $tenant_id);
+}
+
 /** Human-readable lead statuses. */
 function lead_statuses() {
     return [
@@ -1811,12 +2178,36 @@ function order_visibility_clause($alias = 'o') {
     return [' AND (' . implode(' OR ', $parts) . ')', $params];
 }
 
+/**
+ * Payment-aware display status for a POS sale. A completed sale that was not
+ * fully paid is shown as partially paid or unpaid instead of completed.
+ */
+function pos_sale_payment_status($status, $total, $amount_paid) {
+    $status = strtolower(trim((string)$status));
+    if ($status === 'cancelled') {
+        return ['label' => 'Cancelled', 'class' => 'danger'];
+    }
+    if ($status === 'pending') {
+        return ['label' => 'Pending', 'class' => 'warning'];
+    }
+
+    $total = round((float)$total, 2);
+    $paid = round((float)$amount_paid, 2);
+    if ($total <= 0.005 || $paid + 0.005 >= $total) {
+        return ['label' => 'Completed', 'class' => 'success'];
+    }
+    if ($paid > 0.005) {
+        return ['label' => 'Partially paid', 'class' => 'warning'];
+    }
+    return ['label' => 'Unpaid', 'class' => 'danger'];
+}
+
 /** Bootstrap badge class for an order status. */
 function order_status_class($status) {
     $map = [
         'new'          => 'warning',
         'under_review' => 'info',
-        'confirmed'    => 'primary',
+        'confirmed'    => 'navy',
         'fulfilled'    => 'success',
         'rejected'     => 'danger',
         'cancelled'    => 'secondary',
@@ -2414,7 +2805,7 @@ function quotation_status_class($status) {
         'accepted'  => 'success',
         'rejected'  => 'danger',
         'expired'   => 'warning',
-        'converted' => 'primary',
+        'converted' => 'navy',
     ];
     return $map[$status] ?? 'secondary';
 }

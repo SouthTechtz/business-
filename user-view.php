@@ -88,7 +88,7 @@ require_once 'sidebar.php';
                             <tr><td colspan="4" class="text-center text-muted py-4">No activity yet.</td></tr>
                         <?php else: foreach ($logs as $log): ?>
                             <tr>
-                                <td><span class="badge badge-primary"><?php echo e($log['action']); ?></span></td>
+                                <td><span class="badge badge-navy"><?php echo e($log['action']); ?></span></td>
                                 <td><?php echo e($log['entity_type']); ?> #<?php echo e($log['entity_id']); ?></td>
                                 <td><?php echo e($log['details'] ?? '—'); ?></td>
                                 <td><?php echo e(date('M d, Y H:i', strtotime($log['created_at']))); ?></td>

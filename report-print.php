@@ -302,7 +302,7 @@ switch ($type) {
                     <td><?php echo e(date('M d, Y', strtotime($r['order_date']))); ?></td>
                     <td><?php echo e($r['shop_name'] ?: 'Unattributed (historical)'); ?></td>
                     <td><?php echo e(trim(($r['first_name'] ?? '') . ' ' . ($r['last_name'] ?? '')) ?: ($r['company_name'] ?: 'Walk-in Customer')); ?></td>
-                    <td><?php echo e(ucfirst($r['status'])); ?></td>
+                    <td><?php echo e(pos_sale_payment_status($r['status'], $r['total'], $r['amount_paid'] ?? 0)['label']); ?></td>
                     <td class="text-right"><?php echo e(money($r['total'], $cur)); ?></td>
                     <td class="text-right"><?php echo e(money($r['accepted_returns'], $cur)); ?></td>
                     <td class="text-right"><?php echo e(money($r['net_sales'], $cur)); ?></td>

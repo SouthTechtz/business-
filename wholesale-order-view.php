@@ -129,6 +129,12 @@ require __DIR__ . '/wholesale-portal-header.php';
                             <dt>Order stage</dt>
                             <dd><span class="ws-badge <?php echo e($order_stage_meta['class']); ?>"><?php echo e($order_stage_meta['label']); ?></span></dd>
                         </div>
+                        <?php if (($request_row['order_stage'] ?? '') === 'returned'): ?>
+                            <div>
+                                <dt>Return reason</dt>
+                                <dd><?php echo e($request_row['order_return_reason'] ?: 'No reason recorded'); ?></dd>
+                            </div>
+                        <?php endif; ?>
                         <div>
                             <dt>Delivery confirmation</dt>
                             <dd>

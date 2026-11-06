@@ -123,7 +123,8 @@ $row = fetch_one(
         COALESCE((SELECT SUM(total) FROM pos_orders
                    WHERE tenant_id = ? AND status = 'completed'
                      AND MONTH(order_date) = MONTH(NOW()) AND YEAR(order_date) = YEAR(NOW()){$wh_scope}), 0)
-      + COALESCE((SELECT SUM(Amount_paid) FROM orders
+      + COALESCE((SELECT SUM(COALESCE(Amount_paid, 0) - COALESCE(returned_amount, 0))
+                    FROM orders
                    WHERE tenant_id = ? AND status NOT IN ('cancelled', 'rejected')
                      AND MONTH(created_at) = MONTH(NOW()) AND YEAR(created_at) = YEAR(NOW())), 0)
      ) AS t",
@@ -230,11 +231,10 @@ $shop_earnings = fetch_all(
                    AND po.status = 'completed'
             ), 0) AS pos_sales,
             COALESCE((
-                SELECT SUM(o.Amount_paid)
+                SELECT SUM(COALESCE(o.Amount_paid, 0))
                   FROM orders o
                  WHERE o.tenant_id = s.tenant_id
                    AND o.status NOT IN ('cancelled', 'rejected')
-                   AND (o.stage IS NULL OR o.stage <> 'returned')
                    AND (
                        o.shop_id = s.shop_id
                        OR (o.shop_id IS NULL AND o.warehouse_id IN (
@@ -266,9 +266,9 @@ $shop_earnings = fetch_all(
 // assignment) are shown separately so the card still reconciles.
 $unassigned_earnings = fetch_one(
     "SELECT
-        COALESCE((SELECT SUM(o.Amount_paid) FROM orders o
+        COALESCE((SELECT SUM(COALESCE(o.Amount_paid, 0) - COALESCE(o.returned_amount, 0))
+                    FROM orders o
                    WHERE o.tenant_id = ? AND o.status NOT IN ('cancelled', 'rejected')
-                     AND (o.stage IS NULL OR o.stage <> 'returned')
                      AND o.shop_id IS NULL
                      AND (o.warehouse_id IS NULL OR o.warehouse_id NOT IN (
                          SELECT w.warehouse_id FROM warehouses w
@@ -468,7 +468,7 @@ require_once 'sidebar.php';
             <div class="card-header d-flex justify-content-between align-items-center flex-wrap" style="gap:8px;">
                 <div>
                     <h5 class="card-title mb-0">Total Earned by Shop</h5>
-                    <small class="text-muted">Completed POS sales and order payments, less refunds.</small>
+                    <small class="text-muted">Completed POS sales and order payments, less sales returns and refunds.</small>
                 </div>
                 <span class="badge badge-primary" style="font-size:12px;padding:7px 12px;">
                     <?php echo e(money($shop_earnings_total, $cur)); ?> total
