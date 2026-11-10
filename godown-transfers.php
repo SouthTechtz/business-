@@ -216,6 +216,18 @@ if (!tenant_admin_scope()) {
     $sql .= $scope_parts ? ' AND (' . implode(' OR ', $scope_parts) . ')' : ' AND 1 = 0';
 }
 
+// Brand-scoped Mini Admin: only transfers that contain their brand's products.
+$transfer_brand_scope = current_brand_scope();
+if ($transfer_brand_scope !== '') {
+    $sql .= " AND EXISTS (
+                SELECT 1 FROM stock_transfer_items bti
+                  JOIN products bp ON bp.product_id = bti.product_id AND bp.tenant_id = bti.tenant_id
+                 WHERE bti.transfer_id = t.transfer_id AND bti.tenant_id = t.tenant_id
+                   AND bp.brand = ?
+              )";
+    $params[] = $transfer_brand_scope;
+}
+
 if ($status !== '') {
     $sql .= ' AND t.status = ?';
     $params[] = $status;

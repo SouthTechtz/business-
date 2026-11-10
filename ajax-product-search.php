@@ -42,6 +42,13 @@ if ($is_pos) {
     }
 }
 
+// A branded shop only sells products carrying that brand.
+$search_shop_id = $is_pos
+    ? (int)($shop_id ?? 0)
+    : (int)($store['shop_id'] ?? 0);
+$search_shop_brand = $search_shop_id > 0 ? shop_brand($search_shop_id) : '';
+$brand_sql = $search_shop_brand !== '' ? " AND p.brand = ?" : '';
+
 $params = [];
 if ($store) {
     $stock_expr = "GREATEST(0, COALESCE((SELECT s.quantity FROM inventory_stock s
@@ -79,12 +86,15 @@ if ($store) {
 }
 
 $sql = "SELECT p.product_id, p.name, p.code, p.sku, p.barcode, p.description, p.sale_price,
-               p.min_stock_level, p.is_service,
+               p.brand, p.min_stock_level, p.is_service,
                {$stock_expr} total_stock
         FROM products p
-        WHERE p.tenant_id = ? AND p.is_active = 1";
+        WHERE p.tenant_id = ? AND p.is_active = 1{$brand_sql}";
 
 $params[] = $current_user->tenant_id;
+if ($search_shop_brand !== '') {
+    $params[] = $search_shop_brand;
+}
 
 if ($exact && $q !== '') {
     $sql .= " AND (LOWER(p.code) = LOWER(?) OR LOWER(COALESCE(p.sku, '')) = LOWER(?) OR LOWER(COALESCE(p.barcode, '')) = LOWER(?))";

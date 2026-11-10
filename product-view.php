@@ -17,6 +17,10 @@ if (!$product) {
     flash_set('danger', 'Product not found.');
     redirect('products.php');
 }
+if (!brand_scope_allows($product['brand'] ?? '')) {
+    http_response_code(403);
+    die('This product belongs to another brand.');
+}
 
 $can_godown = can('manage_godown');
 $scope_ids = accessible_warehouse_ids(null, true, $can_godown);

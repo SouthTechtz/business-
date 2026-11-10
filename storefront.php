@@ -462,6 +462,45 @@ function storefront_best_sellers($tenant_id, $limit = 4) {
     return storefront_catalogue($tenant_id, ['sort' => 'popular', 'sold_only' => true], $limit, 0);
 }
 
+/**
+ * Popular, in-stock products that are not part of the supplied "new arrivals"
+ * list. Popularity uses the existing order-history signal (units sold), which
+ * also mirrors the products customers search for and view most often. When
+ * there is not enough order history, available catalogue products fill the
+ * remaining slots so the home section can still show up to the limit.
+ */
+function storefront_popular_products($tenant_id, array $exclude_ids = [], $limit = 5) {
+    $limit = max(1, min(20, (int)$limit));
+    $exclude = [];
+    foreach ($exclude_ids as $exclude_id) {
+        $exclude_id = (int)$exclude_id;
+        if ($exclude_id > 0) $exclude[$exclude_id] = true;
+    }
+
+    $picked = [];
+    $popular = storefront_catalogue($tenant_id, ['sort' => 'popular'], max(40, $limit * 6), 0);
+    foreach ($popular as $product) {
+        $product_id = (int)$product['product_id'];
+        if (isset($exclude[$product_id]) || isset($picked[$product_id])) continue;
+        if (!storefront_available($product)) continue;
+        $picked[$product_id] = $product;
+        if (count($picked) >= $limit) return array_values($picked);
+    }
+
+    if (count($picked) < $limit) {
+        $fallback = storefront_catalogue($tenant_id, ['sort' => 'name'], max(60, $limit * 10), 0);
+        foreach ($fallback as $product) {
+            $product_id = (int)$product['product_id'];
+            if (isset($exclude[$product_id]) || isset($picked[$product_id])) continue;
+            if (!storefront_available($product)) continue;
+            $picked[$product_id] = $product;
+            if (count($picked) >= $limit) break;
+        }
+    }
+
+    return array_values($picked);
+}
+
 /** Products from the same category, falling back to the rest of the catalogue. */
 function storefront_related_products($tenant_id, $product, $limit = 4) {
     $filters = ['exclude_id' => (int)($product['product_id'] ?? 0), 'sort' => 'popular'];

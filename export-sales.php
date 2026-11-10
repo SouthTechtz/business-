@@ -9,6 +9,10 @@ $period = report_resolve_period([
     'to' => $_GET['date_to'] ?? date('Y-m-d'),
 ]);
 $warehouse_filter = (int)($_GET['warehouse'] ?? 0);
+$brand_filter = trim((string)($_GET['brand'] ?? ''));
+if ($brand_filter !== '' && !in_array($brand_filter, product_brand_options(), true)) {
+    $brand_filter = '';
+}
 $allowedShopIds = report_accessible_sales_warehouse_ids();
 if ($warehouse_filter > 0 && $allowedShopIds !== null && !in_array($warehouse_filter, $allowedShopIds, true)) {
     $warehouse_filter = 0;
@@ -18,6 +22,7 @@ $orders = report_pos_sale_rows($period['from'], $period['to'], [
     'warehouse_id' => $warehouse_filter,
     'status' => (string)($_GET['status'] ?? ''),
     'customer_id' => (int)($_GET['customer'] ?? 0),
+    'brand' => $brand_filter,
 ]);
 $totalGross = $totalReturns = $totalNet = 0.0;
 foreach ($orders as $order) {
@@ -44,13 +49,14 @@ echo '<?mso-application progid="Excel.Sheet"?>' . "\n";
           xmlns:html="http://www.w3.org/TR/REC-html40">
 <Worksheet ss:Name="Sales">
 <Table>
-<?php echo row([cell('Order #'), cell('Date'), cell('Customer'), cell('Shop'), cell('Items'), cell('Status'), cell('Subtotal', 'Number'), cell('VAT', 'Number'), cell('Discount', 'Number'), cell('Gross Sale', 'Number'), cell('Returned Qty', 'Number'), cell('Resale Qty', 'Number'), cell('Accepted Returns', 'Number'), cell('Net Sale', 'Number')]); ?>
+<?php echo row([cell('Order #'), cell('Date'), cell('Customer'), cell('Shop'), cell('Brand'), cell('Items'), cell('Status'), cell('Subtotal', 'Number'), cell('VAT', 'Number'), cell('Discount', 'Number'), cell('Gross Sale', 'Number'), cell('Returned Qty', 'Number'), cell('Resale Qty', 'Number'), cell('Accepted Returns', 'Number'), cell('Net Sale', 'Number')]); ?>
 <?php foreach ($orders as $o): ?>
 <?php echo row([
     cell($o['order_number']),
     cell(date('Y-m-d H:i', strtotime($o['order_date']))),
     cell(trim(($o['first_name'] ?? '') . ' ' . ($o['last_name'] ?? '')) ?: $o['company_name'] ?: 'Walk-in Customer'),
     cell($o['shop_name'] ?: 'Unattributed (historical)'),
+    cell(sale_brand_info($o['shop_brand'] ?? '', $o['product_brands'] ?? '')['label']),
     cell((float)$o['items_count'], 'Number'),
     cell(pos_sale_payment_status($o['status'], $o['total'], $o['amount_paid'] ?? 0)['label']),
     cell(number_format((float)$o['subtotal'], 2, '.', ''), 'Number'),

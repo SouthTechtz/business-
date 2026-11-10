@@ -7,16 +7,13 @@ $sf_bar_sort = (string)($_GET['sort'] ?? 'name');
 $sf_bar_active = $sf_bar_q !== '' || $sf_bar_category > 0 || $sf_bar_availability !== '';
 $sf_bar_reset = 'index.php?all=1#catalogue';
 ?>
-<section class="sf-filterbar" aria-label="Search and filter products">
+<section class="sf-filterbar" aria-label="Filter products">
     <div class="sf-container">
         <form class="sf-filterbar-form" action="index.php" method="get" role="search">
             <input type="hidden" name="all" value="1">
-            <div class="sf-filterbar-search">
-                <label class="sr-only" for="sf-filterbar-q">Search products</label>
-                <input type="search" id="sf-filterbar-q" name="q" maxlength="100" value="<?php echo e($sf_bar_q); ?>"
-                       placeholder="Search products, codes or SKU" autocomplete="off">
-                <button type="submit"><i class="fa fa-search" aria-hidden="true"></i><span class="sr-only">Search</span></button>
-            </div>
+            <?php if ($sf_bar_q !== ''): ?>
+                <input type="hidden" name="q" value="<?php echo e($sf_bar_q); ?>">
+            <?php endif; ?>
             <div class="sf-filterbar-field">
                 <label for="sf-filterbar-category">Category</label>
                 <select id="sf-filterbar-category" name="category">

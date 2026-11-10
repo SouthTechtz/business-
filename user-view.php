@@ -71,6 +71,13 @@ require_once 'sidebar.php';
                         <tr><th>Email</th><td><?php echo e($user['email']); ?></td></tr>
                         <tr><th>Phone</th><td><?php echo e($user['phone'] ?: '—'); ?></td></tr>
                         <tr><th>Roles</th><td><?php echo e($user['role_names'] ?: 'No role'); ?></td></tr>
+                        <tr><th>Brand Scope</th><td>
+                            <?php if (trim((string)($user['brand_scope'] ?? '')) !== ''): ?>
+                                <span class="badge badge-navy"><?php echo e(brand_label($user['brand_scope'])); ?></span>
+                            <?php else: ?>
+                                <span class="text-muted">All brands</span>
+                            <?php endif; ?>
+                        </td></tr>
                         <tr><th>Last Login</th><td><?php echo $user['last_login'] ? e(date('M d, Y H:i', strtotime($user['last_login']))) : 'Never'; ?></td></tr>
                         <tr><th>Member Since</th><td><?php echo e(date('M d, Y', strtotime($user['created_at']))); ?></td></tr>
                     </tbody>

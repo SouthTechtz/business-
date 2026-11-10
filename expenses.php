@@ -1,6 +1,7 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'capital-helpers.php';
 require_permission_any(['manage_expenses', 'manage_settings']);
 $godown_manager_expenses = is_godown_manager();
 $page_title = $godown_manager_expenses ? 'My Godown Expenses' : 'Expenses';
@@ -10,6 +11,7 @@ $msg = '';
 
 $categories = fetch_all("SELECT * FROM expense_categories WHERE tenant_id = ? ORDER BY name", $current_user->tenant_id);
 $payment_methods = fetch_all("SELECT * FROM payment_methods WHERE tenant_id = ? ORDER BY payment_method_id", $current_user->tenant_id);
+$expense_banks = capital_bank_names($current_user->tenant_id, current_brand_scope());
 
 // ---- Actions ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -23,7 +25,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $expense_date = date('Y-m-d');
         }
         $payment_method_id = (int)($_POST['payment_method_id'] ?? 0) ?: null;
+        $bank_name = trim((string)($_POST['bank_name'] ?? ''));
         $notes = trim($_POST['notes'] ?? '');
+
+        // Expenses default to cash unless the chosen method is a bank method.
+        $expense_account = 'cash';
+        if ($payment_method_id !== null) {
+            foreach ($payment_methods as $pm) {
+                if ((int)$pm['payment_method_id'] === $payment_method_id) {
+                    $expense_account = (string)($pm['account_type'] ?? 'bank') === 'bank' ? 'bank' : 'cash';
+                    break;
+                }
+            }
+        }
+        if ($expense_account !== 'bank') {
+            $bank_name = '';
+        } elseif ($bank_name !== '') {
+            $canonical_bank = bank_canonical_name($current_user->tenant_id, current_brand_scope(), $bank_name);
+            if ($canonical_bank !== '') {
+                $bank_name = $canonical_bank;
+            }
+        }
 
         // Item lines: name, quantity, unit price
         $names = $_POST['item_name'] ?? [];
@@ -40,6 +62,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (!$items) {
             $msg = ['danger', 'Add at least one item with a name and a unit price.'];
+        } elseif ($expense_account === 'bank' && $bank_name === '') {
+            $msg = ['danger', 'Select the bank account that paid this expense.'];
+        } elseif (mb_strlen($bank_name) > 150) {
+            $msg = ['danger', 'The bank name must be 150 characters or fewer.'];
         } elseif (
             $action === 'edit_expense'
             && $godown_manager_expenses
@@ -58,38 +84,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $conn->begin_transaction();
             try {
                 if ($action === 'add_expense') {
+                    $expense_brand = current_brand_scope();
+                    if ($expense_brand === '') {
+                        $posted_brand = trim((string)($_POST['brand'] ?? ''));
+                        $expense_brand = in_array($posted_brand, product_brand_options(), true) ? $posted_brand : '';
+                    }
+                    $expense_brand_db = $expense_brand !== '' ? $expense_brand : null;
                     $stmt = $conn->prepare(
-                        "INSERT INTO expenses (tenant_id, category_id, description, amount, expense_date, payment_method_id, notes, created_by)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                        "INSERT INTO expenses (tenant_id, category_id, description, amount, expense_date, payment_method_id, bank_name, brand, notes, created_by)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     );
-                    $stmt->bind_param('iisdsisi', $current_user->tenant_id, $category_id, $description, $amount, $expense_date, $payment_method_id, $notes, $current_user->user_id);
+                    $bank_db = $bank_name !== '' ? $bank_name : null;
+                    $stmt->bind_param('iisdsisssi', $current_user->tenant_id, $category_id, $description, $amount, $expense_date, $payment_method_id, $bank_db, $expense_brand_db, $notes, $current_user->user_id);
                     $stmt->execute();
                     $eid = $stmt->insert_id;
                     $stmt->close();
                     audit_log('create', 'expense', $eid, 'Expense recorded: ' . $description . ' (' . money($amount, $cur) . ')');
                     $msg = ['success', 'Expense recorded successfully.'];
                 } else {
-                    $owner_filter = $godown_manager_expenses ? ' AND created_by = ?' : '';
-                    $stmt = $conn->prepare(
-                        "UPDATE expenses SET category_id = ?, description = ?, amount = ?, expense_date = ?, payment_method_id = ?, notes = ?
-                         WHERE expense_id = ? AND tenant_id = ?{$owner_filter}"
-                    );
-                    if ($godown_manager_expenses) {
-                        $stmt->bind_param(
-                            'isdsisiii',
-                            $category_id,
-                            $description,
-                            $amount,
-                            $expense_date,
-                            $payment_method_id,
-                            $notes,
-                            $id,
-                            $current_user->tenant_id,
-                            $current_user->user_id
-                        );
-                    } else {
-                        $stmt->bind_param('isdsisii', $category_id, $description, $amount, $expense_date, $payment_method_id, $notes, $id, $current_user->tenant_id);
+                    $expense_brand = current_brand_scope();
+                    if ($expense_brand === '') {
+                        $posted_brand = trim((string)($_POST['brand'] ?? ''));
+                        $expense_brand = in_array($posted_brand, product_brand_options(), true) ? $posted_brand : '';
                     }
+                    $expense_brand_db = $expense_brand !== '' ? $expense_brand : null;
+                    $owner_filter = $godown_manager_expenses ? ' AND created_by = ?' : '';
+                    $brand_filter_sql = $expense_brand !== '' ? ' AND brand = ?' : '';
+                    $stmt = $conn->prepare(
+                        "UPDATE expenses SET category_id = ?, description = ?, amount = ?, expense_date = ?, payment_method_id = ?, bank_name = ?, brand = ?, notes = ?
+                         WHERE expense_id = ? AND tenant_id = ?{$owner_filter}{$brand_filter_sql}"
+                    );
+                    $bank_db = $bank_name !== '' ? $bank_name : null;
+                    $update_params = [$category_id, $description, $amount, $expense_date, $payment_method_id, $bank_db, $expense_brand_db, $notes, $id, $current_user->tenant_id];
+                    $update_types = 'isdsisssii';
+                    if ($godown_manager_expenses) {
+                        $update_params[] = (int)$current_user->user_id;
+                        $update_types .= 'i';
+                    }
+                    if ($expense_brand !== '') {
+                        $update_params[] = $expense_brand;
+                        $update_types .= 's';
+                    }
+                    $stmt->bind_param($update_types, ...$update_params);
                     $stmt->execute();
                     $stmt->close();
                     $stmt = $conn->prepare("DELETE FROM expense_items WHERE expense_id = ? AND tenant_id = ?");
@@ -116,13 +152,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif ($action === 'delete_expense') {
         $id = (int)($_POST['expense_id'] ?? 0);
+        $delete_brand = current_brand_scope();
         $owner_filter = $godown_manager_expenses ? ' AND created_by = ?' : '';
-        $stmt = $conn->prepare("DELETE FROM expenses WHERE expense_id = ? AND tenant_id = ?{$owner_filter}");
+        $brand_filter_sql = $delete_brand !== '' ? ' AND brand = ?' : '';
+        $stmt = $conn->prepare("DELETE FROM expenses WHERE expense_id = ? AND tenant_id = ?{$owner_filter}{$brand_filter_sql}");
+        $delete_params = [$id, $current_user->tenant_id];
+        $delete_types = 'ii';
         if ($godown_manager_expenses) {
-            $stmt->bind_param('iii', $id, $current_user->tenant_id, $current_user->user_id);
-        } else {
-            $stmt->bind_param('ii', $id, $current_user->tenant_id);
+            $delete_params[] = (int)$current_user->user_id;
+            $delete_types .= 'i';
         }
+        if ($delete_brand !== '') {
+            $delete_params[] = $delete_brand;
+            $delete_types .= 's';
+        }
+        $stmt->bind_param($delete_types, ...$delete_params);
         $stmt->execute();
         $deleted = $stmt->affected_rows;
         $stmt->close();
@@ -162,11 +206,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ---- Filters ----
 $month = trim($_GET['month'] ?? '');
 $cat_filter = (int)($_GET['category'] ?? 0);
+$brand_filter = current_brand_scope();
+if ($brand_filter === '') {
+    $requested_brand = trim((string)($_GET['brand'] ?? ''));
+    $brand_filter = in_array($requested_brand, product_brand_options(), true) ? $requested_brand : '';
+}
 $where = "WHERE e.tenant_id = ?";
 $params = [$current_user->tenant_id];
 if ($godown_manager_expenses) {
     $where .= " AND e.created_by = ?";
     $params[] = (int)$current_user->user_id;
+}
+if ($brand_filter !== '') {
+    $where .= " AND e.brand = ?";
+    $params[] = $brand_filter;
 }
 if ($month !== '' && preg_match('/^\d{4}-\d{2}$/', $month)) {
     $where .= " AND DATE_FORMAT(e.expense_date, '%Y-%m') = ?";
@@ -220,7 +273,7 @@ require_once 'sidebar.php';
         <div class="page-sub"><?php echo $godown_manager_expenses ? 'Record and track expenses created by your Godown account.' : 'Record and track all company expenses.'; ?></div>
     </div>
     <button class="btn btn-primary" data-toggle="modal" data-target="#expenseModal"><i class="fa fa-plus mr-1"></i> New Expense</button>
-    <a href="export-expenses.php?<?php echo e(http_build_query(array_filter(['month' => $month, 'category' => $cat_filter > 0 ? $cat_filter : ''], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
+    <a href="export-expenses.php?<?php echo e(http_build_query(array_filter(['month' => $month, 'category' => $cat_filter > 0 ? $cat_filter : '', 'brand' => $brand_filter], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
 </div>
 
 <?php if ($msg): ?>
@@ -246,6 +299,14 @@ require_once 'sidebar.php';
                         <option value="<?php echo $c['expense_category_id']; ?>" <?php echo $cat_filter === (int)$c['expense_category_id'] ? 'selected' : ''; ?>><?php echo e($c['name']); ?></option>
                     <?php endforeach; ?>
                 </select>
+                <?php if (current_brand_scope() === ''): ?>
+                <select name="brand" class="form-control form-control-sm mr-2">
+                    <option value="">All brands</option>
+                    <?php foreach (product_brand_options() as $brand_option): ?>
+                        <option value="<?php echo e($brand_option); ?>" <?php echo $brand_filter === $brand_option ? 'selected' : ''; ?>><?php echo e(brand_label($brand_option)); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <?php endif; ?>
                 <button class="btn btn-sm btn-light"><i class="fa fa-filter mr-1"></i>Filter</button>
             </form>
             <?php if (!$godown_manager_expenses): ?>
@@ -264,6 +325,7 @@ require_once 'sidebar.php';
                     <tr>
                         <th>Date</th>
                         <th>Category</th>
+                        <th>Brand</th>
                         <th>Description (Items)</th>
                         <th>Paid Via</th>
                         <th class="text-right">Total Amount</th>
@@ -276,6 +338,13 @@ require_once 'sidebar.php';
                     <tr>
                         <td class="text-nowrap"><?php echo e(preg_match('/^\d{4}-\d{2}-\d{2}$/', $ex['expense_date']) ? date('M d, Y', strtotime($ex['expense_date'])) : '—'); ?></td>
                         <td><span class="badge badge-secondary"><?php echo e($ex['category_name'] ?? 'Uncategorised'); ?></span></td>
+                        <td>
+                            <?php if (trim((string)($ex['brand'] ?? '')) !== ''): ?>
+                                <span class="badge badge-navy"><?php echo e(brand_label($ex['brand'])); ?></span>
+                            <?php else: ?>
+                                <span class="text-muted small">General</span>
+                            <?php endif; ?>
+                        </td>
                         <td>
                             <?php if ($lines): ?>
                                 <?php foreach ($lines as $li): ?>
@@ -293,7 +362,12 @@ require_once 'sidebar.php';
                             <?php endif; ?>
                             <?php if ($ex['notes']): ?><br><small class="text-muted"><?php echo e($ex['notes']); ?></small><?php endif; ?>
                         </td>
-                        <td><?php echo e($ex['method_name'] ?? '—'); ?></td>
+                        <td>
+                            <?php echo e($ex['method_name'] ?? '—'); ?>
+                            <?php if (!empty($ex['bank_name'])): ?>
+                                <br><small class="text-muted"><?php echo e($ex['bank_name']); ?></small>
+                            <?php endif; ?>
+                        </td>
                         <td class="text-right font-weight-semibold" style="color:var(--danger)"><?php echo e(money($ex['amount'], $cur)); ?></td>
                         <td class="no-print text-right">
                             <?php
@@ -309,6 +383,8 @@ require_once 'sidebar.php';
                                         'data-amount' => $ex['amount'],
                                         'data-date' => $ex['expense_date'],
                                         'data-method' => (int)$ex['payment_method_id'],
+                                        'data-bank' => (string)($ex['bank_name'] ?? ''),
+                                        'data-brand' => (string)($ex['brand'] ?? ''),
                                         'data-notes' => $ex['notes'],
                                         'data-items' => json_encode($lines),
                                     ],
@@ -361,6 +437,21 @@ require_once 'sidebar.php';
                             <label>Date <span class="text-danger">*</span></label>
                             <input type="date" name="expense_date" id="expenseDate" class="form-control" value="<?php echo date('Y-m-d'); ?>" required>
                         </div>
+                        <div class="col-md-6 form-group">
+                            <label>Brand</label>
+                            <?php if (current_brand_scope() === ''): ?>
+                                <select name="brand" id="expenseBrand" class="form-control">
+                                    <option value="">General / company-wide</option>
+                                    <?php foreach (product_brand_options() as $brand_option): ?>
+                                        <option value="<?php echo e($brand_option); ?>"><?php echo e($brand_option); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <small class="text-muted">Assign the expense to a brand for its balance sheet, or leave general.</small>
+                            <?php else: ?>
+                                <input type="text" class="form-control" value="<?php echo e(brand_label(current_brand_scope())); ?>" readonly>
+                                <input type="hidden" name="brand" id="expenseBrand" value="<?php echo e(current_brand_scope()); ?>">
+                            <?php endif; ?>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label>Items <span class="text-danger">*</span></label>
@@ -386,16 +477,30 @@ require_once 'sidebar.php';
                         <div class="col-md-6 form-group">
                             <label>Paid Via</label>
                             <select name="payment_method_id" id="expenseMethod" class="form-control">
-                                <option value="0">— Not selected —</option>
+                                <option value="0">— Not selected (cash) —</option>
                                 <?php foreach ($payment_methods as $pm): ?>
-                                    <option value="<?php echo $pm['payment_method_id']; ?>"><?php echo e($pm['name']); ?></option>
+                                    <option value="<?php echo $pm['payment_method_id']; ?>"
+                                            data-account-type="<?php echo e($pm['account_type'] ?? 'bank'); ?>">
+                                        <?php echo e($pm['name']); ?><?php echo (string)($pm['account_type'] ?? 'bank') === 'cash' ? ' (cash)' : ' (bank)'; ?>
+                                    </option>
                                 <?php endforeach; ?>
                             </select>
+                            <small class="text-muted">Cash methods reduce cash in hand; other methods reduce the bank balance.</small>
                         </div>
                         <div class="col-md-6 form-group">
                             <label>Notes</label>
                             <input type="text" name="notes" id="expenseNotes" class="form-control" placeholder="Optional note">
                         </div>
+                    </div>
+                    <div class="form-group" id="expenseBankGroup">
+                        <label>Bank Account <span class="text-muted font-weight-normal">(optional)</span></label>
+                        <input type="text" name="bank_name" id="expenseBankName" class="form-control" list="expenseBanks" maxlength="150" placeholder="e.g. NMB, CRDB, NBC">
+                        <datalist id="expenseBanks">
+                            <?php foreach ($expense_banks as $expense_bank): ?>
+                                <option value="<?php echo e($expense_bank); ?>"></option>
+                            <?php endforeach; ?>
+                        </datalist>
+                        <small class="text-muted">Choose the bank that paid, so the correct account is reduced. Leave blank to reduce only the brand bank total.</small>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -477,6 +582,19 @@ require_once 'sidebar.php';
         });
         $('#expenseItems').on('input', '.item-qty, .item-price', recalcTotal);
 
+        function updateExpenseBankField() {
+            var select = document.getElementById('expenseMethod');
+            var group = document.getElementById('expenseBankGroup');
+            var input = document.getElementById('expenseBankName');
+            if (!select || !group || !input) return;
+            var option = select.options[select.selectedIndex];
+            var isBank = option && option.value !== '0' && option.getAttribute('data-account-type') === 'bank';
+            group.style.display = isBank ? '' : 'none';
+            if (!isBank) input.value = '';
+        }
+        $('#expenseMethod').on('change', updateExpenseBankField);
+        updateExpenseBankField();
+
         $('.edit-expense').on('click', function () {
             $('#expenseModalTitle').text('Edit Expense');
             $('#expenseAction').val('edit_expense');
@@ -489,6 +607,11 @@ require_once 'sidebar.php';
             }
             $('#expenseDate').val(ed);
             $('#expenseMethod').val($(this).data('method'));
+            $('#expenseBankName').val($(this).data('bank') || '');
+            updateExpenseBankField();
+            if ($('#expenseBrand').is('select')) {
+                $('#expenseBrand').val($(this).data('brand') || '');
+            }
             $('#expenseNotes').val($(this).data('notes') === '0' ? '' : $(this).data('notes'));
             $('#expenseItems').empty();
             var items = $(this).data('items') || [];
@@ -508,6 +631,9 @@ require_once 'sidebar.php';
             addItemRow('', 1, '');
             $('#expenseNotes').val('');
             $('#expenseMethod').val(0);
+            $('#expenseBankName').val('');
+            updateExpenseBankField();
+            if ($('#expenseBrand').is('select')) $('#expenseBrand').val('');
             var now = new Date();
             var localDate = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
             $('#expenseDate').val(localDate);

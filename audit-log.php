@@ -4,15 +4,31 @@ require_once 'auth_check.php';
 require_permission_any(['view_activity_log', 'view_reports']);
 $page_title = 'Activity Log';
 
-$logs = fetch_all(
-    "SELECT l.*, u.first_name, u.last_name, u.username
+// A brand-scoped Mini Admin only sees actions by their brand's staff.
+$logs_sql = "SELECT l.*, u.first_name, u.last_name, u.username
      FROM audit_logs l
      LEFT JOIN users u ON u.user_id = l.user_id
-     WHERE l.tenant_id = ?
-     ORDER BY l.log_id DESC
-     LIMIT 500",
-    $current_user->tenant_id
-);
+     WHERE l.tenant_id = ?";
+$logs_params = [$current_user->tenant_id];
+$logs_brand = current_brand_scope();
+if ($logs_brand !== '') {
+    $logs_sql .= " AND l.user_id IN (
+        SELECT lu.user_id FROM users lu
+         WHERE lu.tenant_id = l.tenant_id
+           AND (
+               lu.brand_scope = ?
+               OR lu.user_id = ?
+               OR EXISTS (
+                   SELECT 1 FROM user_shops lus
+                     JOIN shops ls ON ls.shop_id = lus.shop_id AND ls.tenant_id = lus.tenant_id
+                    WHERE lus.user_id = lu.user_id AND lus.tenant_id = lu.tenant_id AND ls.brand = ?
+               )
+           )
+    )";
+    array_push($logs_params, $logs_brand, (int)$current_user->user_id, $logs_brand);
+}
+$logs_sql .= " ORDER BY l.log_id DESC LIMIT 500";
+$logs = fetch_all($logs_sql, ...$logs_params);
 
 $badges = [
     'login'     => 'badge-success',

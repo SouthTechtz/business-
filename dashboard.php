@@ -1,9 +1,15 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'capital-helpers.php';
 
 $page_title = 'Dashboard';
 $cur = tenant_currency();
+
+// Brand-scoped Mini Admin: every dashboard figure is limited to this brand.
+$brand_scope = current_brand_scope();
+$brand_shop_ids = $brand_scope !== '' ? accessible_shop_ids(null, true) : [];
+$brand_shop_in = $brand_shop_ids ? implode(',', array_map('intval', $brand_shop_ids)) : '0';
 
 if (is_godown_manager()) {
     redirect('godown.php');
@@ -18,7 +24,7 @@ if (is_shop_manager() && !tenant_admin_scope()) {
     redirect('profile.php');
 }
 
-if (!tenant_admin_scope()) {
+if (!tenant_admin_scope() && !is_brand_admin()) {
     $assigned_shops = accessible_shops(null, false);
     if ($assigned_shops) {
         redirect('shop-view.php?id=' . (int)$assigned_shops[0]['shop_id']);
@@ -29,8 +35,9 @@ if (!tenant_admin_scope()) {
     }
 }
 
-// The tenant-wide dashboard is reserved for tenant administrators.
-if (!tenant_admin_scope() || !can('view_dashboard')) {
+// The tenant-wide dashboard is reserved for tenant administrators and the
+// brand-scoped Mini Administrators.
+if ((!tenant_admin_scope() && !is_brand_admin()) || !can('view_dashboard')) {
     foreach ([
         'manage_pos'      => 'sales.php',
         'manage_invoices' => 'invoices.php',
@@ -61,28 +68,76 @@ $counts = [
     'leads'             => 0,
     'pending_requests'  => 0,
 ];
+
+// Brand-scoped lead condition (leads themselves carry no brand column; the
+// requested storefront products do).
+$lead_brand_exists = $brand_scope !== ''
+    ? " AND EXISTS (
+           SELECT 1 FROM storefront_lead_request_items bi
+             JOIN storefront_lead_requests br ON br.request_id = bi.request_id AND br.tenant_id = bi.tenant_id
+             JOIN products bp ON bp.product_id = bi.product_id AND bp.tenant_id = bi.tenant_id
+            WHERE br.lead_id = l.lead_id AND br.tenant_id = l.tenant_id AND bp.brand = ?
+       )"
+    : '';
+$order_brand_scope = $brand_scope !== '' ? " AND o.shop_id IN ({$brand_shop_in})" : '';
+$product_brand_scope = $brand_scope !== '' ? ' AND p.brand = ?' : '';
+$lead_brand_params = $brand_scope !== '' ? [$brand_scope] : [];
+
 $queries = [
-    'users'              => "SELECT COUNT(*) c FROM users u
-                              WHERE u.tenant_id = ? AND u.is_active = 1
-                                AND NOT EXISTS (
-                                    SELECT 1 FROM user_roles wur
-                                    JOIN roles wr ON wr.role_id = wur.role_id
-                                    WHERE wur.user_id = u.user_id AND wur.tenant_id = u.tenant_id
-                                      AND LOWER(wr.name) = 'wholesaler'
-                                )",
-    'retail_customers'   => "SELECT COUNT(*) c FROM contacts WHERE tenant_id = ? AND is_customer = 1 AND customer_type = 'retail'",
-    'wholesale_customers'=> "SELECT COUNT(*) c FROM wholesaler_accounts WHERE tenant_id = ? AND status = 'active'",
-    'products'           => "SELECT COUNT(*) c FROM products WHERE tenant_id = ? AND is_active = 1",
-    'invoices'           => "SELECT COUNT(*) c FROM invoices WHERE tenant_id = ?{$wh_scope}",
-    'orders'             => "SELECT COUNT(*) c FROM orders WHERE tenant_id = ?",
-    'leads'              => "SELECT COUNT(*) c FROM leads WHERE tenant_id = ? AND status NOT IN ('lost')",
-    'pending_requests'   => "SELECT COUNT(*) c FROM storefront_lead_requests r
-                              JOIN leads l ON l.lead_id = r.lead_id AND l.tenant_id = r.tenant_id
-                             WHERE r.tenant_id = ? AND r.converted_order_id IS NULL
-                               AND l.status NOT IN ('converted', 'lost')",
+    'users' => [
+        'sql' => "SELECT COUNT(DISTINCT u.user_id) c FROM users u
+                    WHERE u.tenant_id = ? AND u.is_active = 1" .
+                    ($brand_scope !== ''
+                        ? " AND (u.brand_scope = ? OR EXISTS (
+                               SELECT 1 FROM user_shops bus
+                                 JOIN shops bs ON bs.shop_id = bus.shop_id AND bs.tenant_id = bus.tenant_id
+                                WHERE bus.user_id = u.user_id AND bus.tenant_id = u.tenant_id AND bs.brand = ?
+                           ))"
+                        : '') .
+                    " AND NOT EXISTS (
+                        SELECT 1 FROM user_roles wur
+                        JOIN roles wr ON wr.role_id = wur.role_id
+                        WHERE wur.user_id = u.user_id AND wur.tenant_id = u.tenant_id
+                          AND LOWER(wr.name) = 'wholesaler'
+                    )",
+        'params' => $brand_scope !== ''
+            ? [$current_user->tenant_id, $brand_scope, $brand_scope]
+            : [$current_user->tenant_id],
+    ],
+    'retail_customers' => [
+        'sql' => "SELECT COUNT(*) c FROM contacts WHERE tenant_id = ? AND is_customer = 1 AND customer_type = 'retail'",
+        'params' => [$current_user->tenant_id],
+    ],
+    'wholesale_customers' => [
+        'sql' => "SELECT COUNT(*) c FROM wholesaler_accounts WHERE tenant_id = ? AND status = 'active'",
+        'params' => [$current_user->tenant_id],
+    ],
+    'products' => [
+        'sql' => "SELECT COUNT(*) c FROM products p WHERE p.tenant_id = ? AND p.is_active = 1{$product_brand_scope}",
+        'params' => array_merge([$current_user->tenant_id], $lead_brand_params),
+    ],
+    'invoices' => [
+        'sql' => "SELECT COUNT(*) c FROM invoices WHERE tenant_id = ?{$wh_scope}",
+        'params' => [$current_user->tenant_id],
+    ],
+    'orders' => [
+        'sql' => "SELECT COUNT(*) c FROM orders o WHERE o.tenant_id = ?{$order_brand_scope}",
+        'params' => [$current_user->tenant_id],
+    ],
+    'leads' => [
+        'sql' => "SELECT COUNT(*) c FROM leads l WHERE l.tenant_id = ? AND l.status NOT IN ('lost'){$lead_brand_exists}",
+        'params' => array_merge([$current_user->tenant_id], $lead_brand_params),
+    ],
+    'pending_requests' => [
+        'sql' => "SELECT COUNT(*) c FROM storefront_lead_requests r
+                    JOIN leads l ON l.lead_id = r.lead_id AND l.tenant_id = r.tenant_id
+                   WHERE r.tenant_id = ? AND r.converted_order_id IS NULL
+                     AND l.status NOT IN ('converted', 'lost'){$lead_brand_exists}",
+        'params' => array_merge([$current_user->tenant_id], $lead_brand_params),
+    ],
 ];
-foreach ($queries as $key => $sql) {
-    $row = fetch_one($sql, $current_user->tenant_id);
+foreach ($queries as $key => $query) {
+    $row = fetch_one($query['sql'], ...$query['params']);
     $counts[$key] = $row ? (int)$row['c'] : 0;
 }
 
@@ -93,8 +148,8 @@ $valuation = fetch_one(
             COALESCE(SUM(s.quantity * p.sale_price), 0) expected_sales
        FROM inventory_stock s
        JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
-      WHERE s.tenant_id = ?",
-    $current_user->tenant_id
+      WHERE s.tenant_id = ?{$product_brand_scope}",
+    ...array_merge([$current_user->tenant_id], $lead_brand_params)
 ) ?: [];
 $stock_units = (float)($valuation['units'] ?? 0);
 $capital_valuation = (float)($valuation['capital'] ?? 0);
@@ -111,9 +166,9 @@ $low_stock_total_row = fetch_one(
                             AND sw.is_godown = 0), 0) total_stock,
                p.min_stock_level
           FROM products p
-         WHERE p.tenant_id = ? AND p.is_service = 0
+         WHERE p.tenant_id = ? AND p.is_service = 0{$product_brand_scope}
      ) x WHERE x.total_stock <= x.min_stock_level",
-    $current_user->tenant_id
+    ...array_merge([$current_user->tenant_id], $lead_brand_params)
 );
 $low_stock_total = (int)($low_stock_total_row['c'] ?? 0);
 
@@ -124,9 +179,9 @@ $row = fetch_one(
                    WHERE tenant_id = ? AND status = 'completed'
                      AND MONTH(order_date) = MONTH(NOW()) AND YEAR(order_date) = YEAR(NOW()){$wh_scope}), 0)
       + COALESCE((SELECT SUM(COALESCE(Amount_paid, 0) - COALESCE(returned_amount, 0))
-                    FROM orders
-                   WHERE tenant_id = ? AND status NOT IN ('cancelled', 'rejected')
-                     AND MONTH(created_at) = MONTH(NOW()) AND YEAR(created_at) = YEAR(NOW())), 0)
+                    FROM orders o
+                   WHERE o.tenant_id = ? AND o.status NOT IN ('cancelled', 'rejected'){$order_brand_scope}
+                     AND MONTH(o.created_at) = MONTH(NOW()) AND YEAR(o.created_at) = YEAR(NOW())), 0)
      ) AS t",
     $current_user->tenant_id,
     $current_user->tenant_id
@@ -175,10 +230,10 @@ $low_stock = fetch_all(
                          AND sw.is_godown = 0{$stock_wh_scope}), 0) total_stock,
             p.min_stock_level
      FROM products p
-     WHERE p.tenant_id = ? AND p.is_service = 0
+     WHERE p.tenant_id = ? AND p.is_service = 0{$product_brand_scope}
      HAVING total_stock <= p.min_stock_level
      ORDER BY total_stock ASC LIMIT 5",
-    $current_user->tenant_id
+    ...array_merge([$current_user->tenant_id], $lead_brand_params)
 );
 
 // Recent sales
@@ -201,7 +256,7 @@ $recent_customers = fetch_all(
 // Recent storefront/order records
 $recent_orders = fetch_all(
     "SELECT order_id, order_number, customer_name, status, total, currency_code, created_at
-       FROM orders WHERE tenant_id = ?
+       FROM orders o WHERE o.tenant_id = ?{$order_brand_scope}
       ORDER BY created_at DESC, order_id DESC LIMIT 5",
     $current_user->tenant_id
 );
@@ -257,9 +312,11 @@ $shop_earnings = fetch_all(
                    )
             ), 0) AS refunds
        FROM shops s
-      WHERE s.tenant_id = ?
+      WHERE s.tenant_id = ?" . ($brand_scope !== '' ? ' AND s.brand = ?' : '') . "
       ORDER BY s.is_active DESC, s.name ASC",
-    $current_user->tenant_id
+    ...($brand_scope !== ''
+        ? [$current_user->tenant_id, $brand_scope]
+        : [$current_user->tenant_id])
 );
 
 // Orders not linked to a shop (for example an online order awaiting shop
@@ -288,7 +345,7 @@ $unassigned_earnings = fetch_one(
 ) ?: [];
 $unassigned_orders = (float)($unassigned_earnings['order_payments'] ?? 0);
 $unassigned_refunds = (float)($unassigned_earnings['refunds'] ?? 0);
-if (abs($unassigned_orders) > 0.005 || abs($unassigned_refunds) > 0.005) {
+if ($brand_scope === '' && (abs($unassigned_orders) > 0.005 || abs($unassigned_refunds) > 0.005)) {
     $shop_earnings[] = [
         'shop_id' => 0,
         'name' => 'Unassigned',
@@ -304,15 +361,42 @@ $shop_pos_total = 0.0;
 $shop_order_total = 0.0;
 $shop_refunds_total = 0.0;
 $shop_earnings_total = 0.0;
+
+// Shop opening sales are entered per shop by an administrator.
+$shop_opening_balances = shop_opening_balances($current_user->tenant_id);
+
+foreach ($shop_earnings as &$shop_row) {
+    $opening_shop_id = (int)($shop_row['shop_id'] ?? 0);
+    $shop_row['opening_sales'] = $opening_shop_id > 0
+        ? (float)($shop_opening_balances[$opening_shop_id]['opening_sales'] ?? 0)
+        : 0.0;
+}
+unset($shop_row);
+
+$shop_opening_total = 0.0;
 foreach ($shop_earnings as $shop_row) {
     $shop_pos = (float)($shop_row['pos_sales'] ?? 0);
     $shop_orders = (float)($shop_row['order_payments'] ?? 0);
     $shop_refunds = (float)($shop_row['refunds'] ?? 0);
+    $shop_opening = (float)($shop_row['opening_sales'] ?? 0);
     $shop_pos_total += $shop_pos;
     $shop_order_total += $shop_orders;
     $shop_refunds_total += $shop_refunds;
-    $shop_earnings_total += $shop_pos + $shop_orders - $shop_refunds;
+    $shop_opening_total += $shop_opening;
+    $shop_earnings_total += $shop_pos + $shop_orders - $shop_refunds + $shop_opening;
 }
+$all_time_sales = $shop_earnings_total;
+
+// Dual-tier capital position for this brand (or both brands for an administrator).
+$dashboard_breakdown = can_manage_capital()
+    ? brand_capital_breakdown($current_user->tenant_id, $brand_scope)
+    : ['cash' => 0, 'bank' => 0, 'liquid' => 0, 'stock' => 0, 'total' => 0];
+$dashboard_balance = can_manage_capital()
+    ? capital_balance_sheet($current_user->tenant_id, $brand_scope)
+    : ['cash' => 0, 'net_profit' => 0];
+$dashboard_brand_rows = ($brand_scope === '' && can_manage_capital())
+    ? brand_capital_breakdown_by_brand($current_user->tenant_id)
+    : [];
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
@@ -429,6 +513,7 @@ require_once 'sidebar.php';
             <div class="widget-info">
                 <div class="widget-value" style="font-size:18px;"><?php echo e(money($month_sales, $cur)); ?></div>
                 <div class="widget-label">Sales this month</div>
+                <div class="small text-muted" style="margin-top:4px;">All-time incl. shop opening: <?php echo e(money($all_time_sales, $cur)); ?></div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
     </div>
@@ -437,7 +522,8 @@ require_once 'sidebar.php';
             <div class="widget-icon wi-purple"><i class="fa fa-bank"></i></div>
             <div class="widget-info">
                 <div class="widget-value" style="font-size:18px;"><?php echo e(money($capital_valuation, $cur)); ?></div>
-                <div class="widget-label">Capital Valuation</div>
+                <div class="widget-label">Stock Capital</div>
+                <div class="small text-muted" style="margin-top:4px;">Inventory at purchase price</div>
             </div>
         </div>
     </div>
@@ -462,13 +548,108 @@ require_once 'sidebar.php';
     </div>
 </div>
 
+<?php if (can_manage_capital()): ?>
+<div class="row">
+    <div class="col-md-6 col-xl mb-3">
+        <a href="capital.php" class="widget widget-link">
+            <div class="widget-icon wi-green"><i class="fa fa-money"></i></div>
+            <div class="widget-info">
+                <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['cash'], $cur)); ?></div>
+                <div class="widget-label">Cash in Hand</div>
+                <div class="small text-muted" style="margin-top:4px;"><?php echo e($brand_scope !== '' ? brand_label($brand_scope) : 'Both brands combined'); ?></div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-6 col-xl mb-3">
+        <a href="capital.php" class="widget widget-link">
+            <div class="widget-icon wi-blue"><i class="fa fa-bank"></i></div>
+            <div class="widget-info">
+                <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['bank'], $cur)); ?></div>
+                <div class="widget-label">Bank Balance</div>
+                <div class="small text-muted" style="margin-top:4px;">All brand bank accounts</div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-6 col-xl mb-3">
+        <a href="capital.php" class="widget widget-link">
+            <div class="widget-icon wi-indigo"><i class="fa fa-tint"></i></div>
+            <div class="widget-info">
+                <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['liquid'], $cur)); ?></div>
+                <div class="widget-label">Liquid Capital</div>
+                <div class="small text-muted" style="margin-top:4px;">Cash + bank</div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-6 col-xl mb-3">
+        <a href="capital.php" class="widget widget-link">
+            <div class="widget-icon wi-purple"><i class="fa fa-cubes"></i></div>
+            <div class="widget-info">
+                <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['stock'], $cur)); ?></div>
+                <div class="widget-label">Stock Capital</div>
+                <div class="small text-muted" style="margin-top:4px;">Inventory at purchase price</div>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-6 col-xl mb-3">
+        <a href="capital.php" class="widget widget-link">
+            <div class="widget-icon wi-amber"><i class="fa fa-pie-chart"></i></div>
+            <div class="widget-info">
+                <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['total'], $cur)); ?></div>
+                <div class="widget-label">Total Brand Capital</div>
+                <div class="small text-muted" style="margin-top:4px;">Operating profit: <?php echo e(money($dashboard_balance['net_profit'] ?? 0, $cur)); ?></div>
+            </div>
+        </a>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if ($dashboard_brand_rows): ?>
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap" style="gap:8px;">
+        <div>
+            <h5 class="card-title mb-0">Capital by Brand</h5>
+            <small class="text-muted">Cash in hand, bank balance, liquid capital and stock capital for each brand.</small>
+        </div>
+        <a href="capital.php" class="btn btn-sm btn-light"><i class="fa fa-bank mr-1"></i> Open Capital</a>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Brand</th>
+                        <th class="text-right">Cash in Hand</th>
+                        <th class="text-right">Bank Balance</th>
+                        <th class="text-right">Liquid Capital</th>
+                        <th class="text-right">Stock Capital</th>
+                        <th class="text-right">Total Brand Capital</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($dashboard_brand_rows as $brand_row): ?>
+                    <tr>
+                        <td><a href="capital.php?brand=<?php echo urlencode((string)$brand_row['brand']); ?>" class="badge badge-navy"><?php echo e(brand_label($brand_row['brand'])); ?></a></td>
+                        <td class="text-right"><?php echo e(money($brand_row['cash'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($brand_row['bank'], $cur)); ?></td>
+                        <td class="text-right font-weight-semibold"><?php echo e(money($brand_row['liquid'], $cur)); ?></td>
+                        <td class="text-right"><?php echo e(money($brand_row['stock'], $cur)); ?></td>
+                        <td class="text-right font-weight-semibold"><?php echo e(money($brand_row['total'], $cur)); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="row">
     <div class="col-12 mb-3">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center flex-wrap" style="gap:8px;">
                 <div>
                     <h5 class="card-title mb-0">Total Earned by Shop</h5>
-                    <small class="text-muted">Completed POS sales and order payments, less sales returns and refunds.</small>
+                    <small class="text-muted">Completed POS sales, order payments and shop opening sales, less sales returns and refunds.</small>
                 </div>
                 <span class="badge badge-primary" style="font-size:12px;padding:7px 12px;">
                     <?php echo e(money($shop_earnings_total, $cur)); ?> total
@@ -483,18 +664,20 @@ require_once 'sidebar.php';
                                 <th class="text-right">POS Sales</th>
                                 <th class="text-right">Order Payments</th>
                                 <th class="text-right">Refunds</th>
+                                <th class="text-right">Opening</th>
                                 <th class="text-right">Total Earned</th>
                             </tr>
                         </thead>
                         <tbody>
                         <?php if (!$shop_earnings): ?>
-                            <tr><td colspan="5" class="text-center text-muted py-4">No shops yet.</td></tr>
+                            <tr><td colspan="6" class="text-center text-muted py-4">No shops yet.</td></tr>
                         <?php else: foreach ($shop_earnings as $shop_row): ?>
                             <?php
                             $shop_pos = (float)($shop_row['pos_sales'] ?? 0);
                             $shop_orders = (float)($shop_row['order_payments'] ?? 0);
                             $shop_refunds = (float)($shop_row['refunds'] ?? 0);
-                            $shop_net = $shop_pos + $shop_orders - $shop_refunds;
+                            $shop_opening = (float)($shop_row['opening_sales'] ?? 0);
+                            $shop_net = $shop_pos + $shop_orders - $shop_refunds + $shop_opening;
                             ?>
                             <tr>
                                 <td>
@@ -512,6 +695,7 @@ require_once 'sidebar.php';
                                 <td class="text-right <?php echo $shop_refunds > 0 ? 'text-danger' : 'text-muted'; ?>">
                                     <?php echo $shop_refunds > 0 ? '- ' . e(money($shop_refunds, $cur)) : e(money(0, $cur)); ?>
                                 </td>
+                                <td class="text-right"><?php echo e(money($shop_opening, $cur)); ?></td>
                                 <td class="text-right font-weight-semibold"><?php echo e(money($shop_net, $cur)); ?></td>
                             </tr>
                         <?php endforeach; endif; ?>
@@ -523,6 +707,7 @@ require_once 'sidebar.php';
                                 <th class="text-right"><?php echo e(money($shop_pos_total, $cur)); ?></th>
                                 <th class="text-right"><?php echo e(money($shop_order_total, $cur)); ?></th>
                                 <th class="text-right"><?php echo $shop_refunds_total > 0 ? '- ' . e(money($shop_refunds_total, $cur)) : e(money(0, $cur)); ?></th>
+                                <th class="text-right"><?php echo e(money($shop_opening_total, $cur)); ?></th>
                                 <th class="text-right"><?php echo e(money($shop_earnings_total, $cur)); ?></th>
                             </tr>
                         </tfoot>

@@ -23,7 +23,6 @@ $sf_canonical_url = storefront_absolute_url('help.php');
 require __DIR__ . '/storefront-header.php';
 ?>
 <main class="sf-main" id="sf-main">
-    <?php require __DIR__ . '/storefront-filter-bar.php'; ?>
     <div class="sf-container sf-page">
         <nav aria-label="Breadcrumb">
             <ol class="sf-breadcrumb">

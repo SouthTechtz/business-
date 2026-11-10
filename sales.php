@@ -4,12 +4,18 @@ require_once 'auth_check.php';
 require_permission('manage_pos');
 require_once 'reporting.php';
 $page_title = 'Sales';
+$is_shop_manager_view = is_shop_manager() && !tenant_admin_scope();
+
 
 $status = $_GET['status'] ?? '';
 $customer_id = (int)($_GET['customer'] ?? 0);
 $date_from = (string)($_GET['date_from'] ?? '');
 $date_to = (string)($_GET['date_to'] ?? '');
 $warehouse_filter = (int)($_GET['warehouse'] ?? 0);
+$brand_filter = trim((string)($_GET['brand'] ?? ''));
+if ($brand_filter !== '' && !in_array($brand_filter, product_brand_options(), true)) {
+    $brand_filter = '';
+}
 $accessible_sales_warehouse_ids = report_accessible_sales_warehouse_ids();
 $location_sql = "SELECT w.warehouse_id, w.name, s.name shop_name
                    FROM warehouses w
@@ -33,7 +39,7 @@ if ($warehouse_filter > 0 && !in_array($warehouse_filter, $sales_location_ids, t
 }
 
 $sql = "SELECT o.*, c.first_name, c.last_name, c.company_name,
-               w.name store_name, s.name shop_name,
+               w.name store_name, s.name shop_name, s.brand shop_brand,
                COALESCE(oi.items_total, 0) items_total,
                COALESCE(oi.items_count, 0) items_count,
                COALESCE(pay.amount_paid, 0) amount_paid
@@ -88,6 +94,18 @@ if ($customer_id > 0) {
     $sql .= " AND o.contact_id = ?";
     $params[] = $customer_id;
 }
+if ($brand_filter !== '') {
+    $sql .= " AND (
+        s.brand = ?
+        OR (s.brand IS NULL AND EXISTS (
+            SELECT 1 FROM pos_order_items bfi
+            JOIN products bfp ON bfp.product_id = bfi.product_id AND bfp.tenant_id = o.tenant_id
+            WHERE bfi.order_id = o.order_id AND bfp.brand = ?
+        ))
+    )";
+    $params[] = $brand_filter;
+    $params[] = $brand_filter;
+}
 $sql .= " ORDER BY o.order_date DESC, o.order_id DESC";
 
 $orders = fetch_all($sql, ...$params);
@@ -98,12 +116,13 @@ $total_sales_amount = array_sum(array_map(
 ));
 
 $order_items_by_order = [];
+$order_brands_by_order = [];
 if ($orders) {
     $order_ids = array_map(fn($order) => (int)$order['order_id'], $orders);
     $order_placeholders = implode(',', array_fill(0, count($order_ids), '?'));
     $item_rows = fetch_all(
         "SELECT oi.order_id, COALESCE(NULLIF(TRIM(oi.description), ''), p.name, 'Item') item_name,
-                oi.quantity
+                oi.quantity, p.brand item_brand
            FROM pos_order_items oi
            JOIN pos_orders o ON o.order_id = oi.order_id
            LEFT JOIN products p ON p.product_id = oi.product_id AND p.tenant_id = o.tenant_id
@@ -114,6 +133,10 @@ if ($orders) {
     );
     foreach ($item_rows as $item_row) {
         $order_items_by_order[(int)$item_row['order_id']][] = $item_row;
+        $item_brand = trim((string)($item_row['item_brand'] ?? ''));
+        if ($item_brand !== '') {
+            $order_brands_by_order[(int)$item_row['order_id']][$item_brand] = true;
+        }
     }
 }
 
@@ -122,6 +145,69 @@ $customers = fetch_all(
      WHERE tenant_id = ? AND is_customer = 1 ORDER BY first_name",
     $current_user->tenant_id
 );
+
+// Categorise the visible sales by brand for the summary cards.
+$brand_totals = [];
+foreach ($orders as $order) {
+    $brand_info = sale_brand_info(
+        $order['shop_brand'] ?? '',
+        array_keys($order_brands_by_order[(int)$order['order_id']] ?? [])
+    );
+    $brand_key = $brand_info['key'] !== '' ? $brand_info['key'] : 'unbranded';
+    if (!isset($brand_totals[$brand_key])) {
+        $brand_totals[$brand_key] = ['label' => $brand_info['label'], 'count' => 0, 'total' => 0.0, 'opening' => 0.0];
+    }
+    $brand_totals[$brand_key]['count']++;
+    $brand_totals[$brand_key]['total'] += (float)$order['total'];
+}
+
+// Shop opening balances are all-time amounts. They are included in totals only
+// when the list is not narrowed by date, customer or status. A shop filter
+// includes only that shop's opening.
+$opening_total = 0.0;
+$include_opening = $date_from === '' && $date_to === '' && $customer_id === 0 && $status === '';
+
+// Shop-specific opening balances, attributed to the shop's brand.
+$warehouse_shop_id = 0;
+if ($warehouse_filter > 0) {
+    $warehouse_shop_row = fetch_one(
+        "SELECT shop_id FROM warehouses WHERE warehouse_id = ? AND tenant_id = ?",
+        $warehouse_filter,
+        $current_user->tenant_id
+    );
+    $warehouse_shop_id = (int)($warehouse_shop_row['shop_id'] ?? 0);
+}
+$accessible_shop_ids_for_opening = $is_shop_manager_view
+    ? array_map(fn($s) => (int)$s['shop_id'], accessible_shops(null, false))
+    : null;
+
+foreach (shop_opening_balances($current_user->tenant_id) as $shop_opening_row) {
+    $shop_opening_amount = (float)($shop_opening_row['opening_sales'] ?? 0);
+    if ($warehouse_filter > 0 && (int)$shop_opening_row['shop_id'] !== $warehouse_shop_id) {
+        continue;
+    }
+    if ($is_shop_manager_view && !in_array((int)$shop_opening_row['shop_id'], $accessible_shop_ids_for_opening ?: [], true)) {
+        continue;
+    }
+
+    $shop_opening_brand = trim((string)($shop_opening_row['shop_brand'] ?? ''));
+    if ($brand_filter !== '' && $shop_opening_brand !== $brand_filter) {
+        continue;
+    }
+    $opening_total += $shop_opening_amount;
+    if (!$include_opening || $shop_opening_amount <= 0) {
+        continue;
+    }
+    $shop_brand_info = sale_brand_info($shop_opening_brand, []);
+    $shop_brand_key = $shop_brand_info['key'] !== '' ? $shop_brand_info['key'] : 'unbranded';
+    if (!isset($brand_totals[$shop_brand_key])) {
+        $brand_totals[$shop_brand_key] = ['label' => $shop_brand_info['label'], 'count' => 0, 'total' => 0.0, 'opening' => 0.0];
+    }
+    $brand_totals[$shop_brand_key]['opening'] += $shop_opening_amount;
+    $brand_totals[$shop_brand_key]['total'] += $shop_opening_amount;
+}
+$total_sales_display = $total_sales_amount + ($include_opening ? $opening_total : 0);
+uasort($brand_totals, fn($a, $b) => $b['total'] <=> $a['total']);
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
@@ -134,7 +220,10 @@ $cur = tenant_currency();
         <div class="page-sub"><?php echo count($orders); ?> sale(s) found.</div>
     </div>
     <a href="sale-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> New Sale</a>
-    <a href="export-sales.php?<?php echo e(http_build_query(array_filter(['status' => $status, 'customer' => $customer_id > 0 ? $customer_id : '', 'warehouse' => $warehouse_filter > 0 ? $warehouse_filter : '', 'date_from' => $date_from, 'date_to' => $date_to], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
+    <?php if (can_manage_capital()): ?>
+    <a href="close-business.php" class="btn btn-success ml-2"><i class="fa fa-check-circle mr-1"></i> Close Business</a>
+    <?php endif; ?>
+    <a href="export-sales.php?<?php echo e(http_build_query(array_filter(['status' => $status, 'customer' => $customer_id > 0 ? $customer_id : '', 'warehouse' => $warehouse_filter > 0 ? $warehouse_filter : '', 'brand' => $brand_filter, 'date_from' => $date_from, 'date_to' => $date_to], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
 </div>
 
 <?php if ($f = flash_get()): ?>
@@ -142,23 +231,55 @@ $cur = tenant_currency();
 <?php endif; ?>
 
 <div class="row mb-3">
-    <div class="col-md-6 mb-3 mb-md-0">
+    <?php if (!$is_shop_manager_view): ?>
+    <div class="col-md-4 mb-3 mb-md-0">
         <div class="card border-left-primary shadow-sm h-100 py-2">
             <div class="card-body">
                 <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Total Sales</div>
                 <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo number_format($total_sales_count); ?></div>
+                <div class="small text-muted">Sale records shown</div>
             </div>
         </div>
     </div>
-    <div class="col-md-6">
+    <div class="col-md-4 mb-3 mb-md-0">
         <div class="card border-left-success shadow-sm h-100 py-2">
             <div class="card-body">
                 <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Total Amount Sold</div>
-                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($total_sales_amount, tenant_currency())); ?></div>
+                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($total_sales_display, tenant_currency())); ?></div>
+                <div class="small text-muted"><?php echo $include_opening ? 'Includes shop opening balance' : 'Actual sales only (filtered view)'; ?></div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+    <div class="col-md-4">
+        <div class="card border-left-secondary shadow-sm h-100 py-2">
+            <div class="card-body">
+                <div class="text-xs font-weight-bold text-secondary text-uppercase mb-1">Opening Sales</div>
+                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($opening_total, tenant_currency())); ?></div>
+                <div class="small text-muted"><?php echo $include_opening ? 'Included in amounts above' : 'Not included in filtered totals'; ?></div>
             </div>
         </div>
     </div>
 </div>
+
+<?php if (!$is_shop_manager_view && $brand_totals): ?>
+<div class="row mb-3">
+    <?php foreach ($brand_totals as $brand_total): ?>
+    <div class="col-md-4 mb-3 mb-md-0">
+        <div class="card border-left-primary shadow-sm h-100 py-2">
+            <div class="card-body">
+                <div class="text-xs font-weight-bold text-primary text-uppercase mb-1"><?php echo e($brand_total['label']); ?> Sales</div>
+                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($brand_total['total'], tenant_currency())); ?></div>
+                <div class="small text-muted"><?php echo number_format($brand_total['count']); ?> sale(s)</div>
+                <?php if (!empty($brand_total['opening'])): ?>
+                    <div class="small text-muted">Opening: <?php echo e(money($brand_total['opening'], tenant_currency())); ?></div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    <?php endforeach; ?>
+</div>
+<?php endif; ?>
 
 <div class="card">
     <div class="card-header">
@@ -183,6 +304,12 @@ $cur = tenant_currency();
                     <option value="<?php echo (int)$location['warehouse_id']; ?>" <?php echo $warehouse_filter === (int)$location['warehouse_id'] ? 'selected' : ''; ?>><?php echo e(store_label($location)); ?></option>
                 <?php endforeach; ?>
             </select>
+            <select name="brand" class="form-control form-control-sm mr-2 mb-1">
+                <option value="">All Brands</option>
+                <?php foreach (brand_filter_options() as $brand_option): ?>
+                    <option value="<?php echo e($brand_option); ?>" <?php echo $brand_filter === $brand_option ? 'selected' : ''; ?>><?php echo e(brand_label($brand_option)); ?></option>
+                <?php endforeach; ?>
+            </select>
             <input type="date" name="date_from" class="form-control form-control-sm mr-2 mb-1" value="<?php echo e($date_from); ?>">
             <span class="mr-2 mb-1">to</span>
             <input type="date" name="date_to" class="form-control form-control-sm mr-2 mb-1" value="<?php echo e($date_to); ?>">
@@ -198,7 +325,7 @@ $cur = tenant_currency();
             <table class="table table-hover data-table" data-page-length="20">
                 <thead>
                     <tr>
-                        <th>Order #</th><th>Customer</th><th>Store</th><th>Date</th><th>Items</th><th>Status</th><th class="text-right">Total</th><th class="text-right">Actions</th>
+                        <th>Order #</th><th>Customer</th><th>Store</th><th>Brand</th><th>Date</th><th>Items</th><th>Status</th><th class="text-right">Total</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -207,6 +334,8 @@ $cur = tenant_currency();
                         <td class="font-weight-semibold"><?php echo e($o['order_number']); ?></td>
                         <td><?php echo e(trim(($o['first_name'] ?? '') . ' ' . ($o['last_name'] ?? '')) ?: $o['company_name'] ?: 'Walk-in Customer'); ?></td>
                         <td><?php echo e($o['store_name'] ? trim(($o['shop_name'] ?? '') . ' / ' . $o['store_name'], ' /') : '—'); ?></td>
+                        <?php $sale_brand = sale_brand_info($o['shop_brand'] ?? '', array_keys($order_brands_by_order[(int)$o['order_id']] ?? [])); ?>
+                        <td><span class="badge badge-navy"><?php echo e($sale_brand['label']); ?></span></td>
                         <td><?php echo e(date('M d, Y H:i', strtotime($o['order_date']))); ?></td>
                         <td>
                             <?php $sold_items = $order_items_by_order[(int)$o['order_id']] ?? []; ?>
@@ -249,7 +378,7 @@ $cur = tenant_currency();
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$orders): ?>
-                    <tr><td colspan="8" class="text-center text-muted py-4">No sales found for the selected filters.</td></tr>
+                    <tr><td colspan="9" class="text-center text-muted py-4">No sales found for the selected filters.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>

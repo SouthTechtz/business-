@@ -47,25 +47,30 @@ $sf_tab_catalogue = $sf_is_catalogue && !$sf_tab_home;
 <a class="sf-skip-link" href="#sf-main">Skip to content</a>
 
 <header class="sf-header">
-    <div class="sf-topbar">
-        <div class="sf-container sf-topbar-inner">
-            <span>Order requests only. No online payment is taken.</span>
-            <nav class="sf-company-links" aria-label="About our company">
-                <a href="index.php#about-us"><?php echo e($sf_company); ?></a>
-            </nav>
-        </div>
-    </div>
-
     <div class="sf-header-inner">
         <a class="sf-brand" href="index.php" aria-label="<?php echo e($sf_company); ?> Online shop home">
             <?php if ($sf_logo !== ''): ?>
                 <img src="<?php echo e($sf_logo); ?>" alt="" class="sf-brand-logo">
             <?php endif; ?>
             <span class="sf-brand-text">
-                <strong><?php echo e($sf_company); ?></strong>
-                <small>Online shop</small>
+                <strong title="<?php echo e($sf_company); ?>"><?php echo e($sf_company); ?></strong>
+                <small>Online shop &middot; Order requests only</small>
             </span>
         </a>
+
+        <div class="sf-search-wrap">
+            <form class="sf-search" action="index.php" method="get" role="search"
+                  data-suggest-url="<?php echo e(storefront_url('storefront-suggest.php')); ?>" autocomplete="off">
+                <input type="hidden" name="all" value="1">
+                <label class="sr-only" for="sf-search-input">Search products</label>
+                <input type="search" id="sf-search-input" name="q" maxlength="100"
+                       value="<?php echo e($sf_search_q); ?>"
+                       placeholder="Search products, codes or SKU"
+                       aria-autocomplete="list" aria-controls="sf-search-suggest" aria-expanded="false">
+                <button type="submit" aria-label="Search products"><i class="fa fa-search" aria-hidden="true"></i></button>
+            </form>
+            <div class="sf-suggest" id="sf-search-suggest" role="listbox" hidden></div>
+        </div>
 
         <div class="sf-actions">
             <a class="sf-header-link" href="login.php" aria-label="Log in" title="Log in">
@@ -89,7 +94,7 @@ $sf_tab_catalogue = $sf_is_catalogue && !$sf_tab_home;
                     <i class="fa fa-home" aria-hidden="true"></i><span>Home</span>
                 </a>
                 <a class="sf-tab" href="index.php?all=1#catalogue" <?php echo $sf_tab_catalogue ? 'aria-current="page"' : ''; ?>>
-                    <i class="fa fa-th-large" aria-hidden="true"></i><span>Catalogue</span>
+                    <i class="fa fa-th-large" aria-hidden="true"></i><span>All Products</span>
                 </a>
                 <a class="sf-tab" href="categories.php" <?php echo $sf_current_script === 'categories.php' ? 'aria-current="page"' : ''; ?>>
                     <i class="fa fa-tags" aria-hidden="true"></i><span>Categories</span>

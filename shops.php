@@ -15,11 +15,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'add_shop') {
         $name = trim($_POST['name'] ?? '');
         $code = strtoupper(trim($_POST['code'] ?? ''));
+        $brand = trim($_POST['brand'] ?? '');
         $address = trim($_POST['address'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
 
         if ($name === '') {
             flash_set('danger', 'Shop name is required.');
+            redirect('shops.php');
+        }
+        if ($brand !== '' && !in_array($brand, product_brand_options(), true)) {
+            flash_set('danger', 'Select a valid shop brand.');
             redirect('shops.php');
         }
         if ($code === '') {
@@ -46,6 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'tenant_id' => $current_user->tenant_id,
                 'name' => $name,
                 'code' => $code,
+                'brand' => $brand !== '' ? $brand : null,
                 'address' => $address !== '' ? $address : null,
                 'phone' => $phone !== '' ? $phone : null,
                 'is_active' => 1,
@@ -79,12 +85,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $shop = assert_shop_access($shop_id);
         $name = trim($_POST['name'] ?? '');
         $code = strtoupper(trim($_POST['code'] ?? ''));
+        $brand = trim($_POST['brand'] ?? '');
         $address = trim($_POST['address'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
 
         if ($name === '') {
             flash_set('danger', 'Shop name is required.');
+            redirect('shops.php');
+        }
+        if ($brand !== '' && !in_array($brand, product_brand_options(), true)) {
+            flash_set('danger', 'Select a valid shop brand.');
             redirect('shops.php');
         }
         $code = preg_replace('/[^A-Z0-9_-]/', '', $code);
@@ -103,12 +114,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $stmt = $conn->prepare(
-            "UPDATE shops SET name = ?, code = ?, address = ?, phone = ?, is_active = ?
+            "UPDATE shops SET name = ?, code = ?, brand = ?, address = ?, phone = ?, is_active = ?
              WHERE shop_id = ? AND tenant_id = ?"
         );
         $address_db = $address !== '' ? $address : null;
         $phone_db = $phone !== '' ? $phone : null;
-        $stmt->bind_param('ssssiii', $name, $code, $address_db, $phone_db, $is_active, $shop_id, $current_user->tenant_id);
+        $brand_db = $brand !== '' ? $brand : null;
+        $stmt->bind_param('sssssiii', $name, $code, $brand_db, $address_db, $phone_db, $is_active, $shop_id, $current_user->tenant_id);
         $stmt->execute();
         $stmt->close();
 
@@ -285,7 +297,7 @@ require_once 'sidebar.php';
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Shop</th><th>Code</th><th>Address</th><th>Phone</th><th>Stores</th><th>Users</th><th>Status</th><th class="text-right">Actions</th>
+                        <th>Shop</th><th>Code</th><th>Brand</th><th>Address</th><th>Phone</th><th>Stores</th><th>Users</th><th>Status</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -294,6 +306,13 @@ require_once 'sidebar.php';
                     <tr>
                         <td class="font-weight-semibold"><?php echo e($shop['name']); ?></td>
                         <td><span class="badge badge-secondary"><?php echo e($shop['code']); ?></span></td>
+                        <td>
+                            <?php if (!empty($shop['brand'])): ?>
+                                <span class="badge badge-navy"><?php echo e(brand_label($shop['brand'])); ?></span>
+                            <?php else: ?>
+                                <span class="text-muted small">All brands</span>
+                            <?php endif; ?>
+                        </td>
                         <td><?php echo e($shop['address'] ?: '—'); ?></td>
                         <td><?php echo e($shop['phone'] ?: '—'); ?></td>
                         <td><?php echo (int)$stats['store_count']; ?></td>
@@ -318,7 +337,7 @@ require_once 'sidebar.php';
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$shops): ?>
-                    <tr><td colspan="8" class="text-center text-muted py-4">No shops yet.</td></tr>
+                    <tr><td colspan="9" class="text-center text-muted py-4">No shops yet.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
@@ -339,6 +358,16 @@ require_once 'sidebar.php';
                     <input type="hidden" name="action" value="add_shop">
                     <div class="form-group"><label>Shop Name <span class="text-danger">*</span></label><input type="text" name="name" class="form-control" required></div>
                     <div class="form-group"><label>Shop Code</label><input type="text" name="code" class="form-control" placeholder="Auto-generated (SHOP-###)"><small class="text-muted">Letters, numbers, dashes and underscores only.</small></div>
+                    <div class="form-group">
+                        <label>Brand</label>
+                        <select name="brand" class="form-control">
+                            <option value="">All brands (unrestricted)</option>
+                            <?php foreach (product_brand_options() as $brand): ?>
+                                <option value="<?php echo e($brand); ?>"><?php echo e(brand_label($brand)); ?> (<?php echo e($brand); ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                        <small class="text-muted">A shop only sells products carrying its brand. Leave as "All brands" to sell every brand.</small>
+                    </div>
                     <div class="form-group"><label>Address</label><textarea name="address" class="form-control" rows="2"></textarea></div>
                     <div class="form-group"><label>Phone</label><input type="text" name="phone" class="form-control"></div>
                 </div>
@@ -367,6 +396,16 @@ require_once 'sidebar.php';
                     <input type="hidden" name="shop_id" value="<?php echo (int)$shop['shop_id']; ?>">
                     <div class="form-group"><label>Shop Name <span class="text-danger">*</span></label><input type="text" name="name" class="form-control" required value="<?php echo e($shop['name']); ?>"></div>
                     <div class="form-group"><label>Shop Code</label><input type="text" name="code" class="form-control" value="<?php echo e($shop['code']); ?>"></div>
+                    <div class="form-group">
+                        <label>Brand</label>
+                        <select name="brand" class="form-control">
+                            <option value="">All brands (unrestricted)</option>
+                            <?php foreach (product_brand_options() as $brand_option): ?>
+                                <option value="<?php echo e($brand_option); ?>" <?php echo (string)($shop['brand'] ?? '') === $brand_option ? 'selected' : ''; ?>><?php echo e(brand_label($brand_option)); ?> (<?php echo e($brand_option); ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                        <small class="text-muted">Changing the brand does not move stock. Products from other brands will no longer be sellable from this shop.</small>
+                    </div>
                     <div class="form-group"><label>Address</label><textarea name="address" class="form-control" rows="2"><?php echo e($shop['address']); ?></textarea></div>
                     <div class="form-group"><label>Phone</label><input type="text" name="phone" class="form-control" value="<?php echo e($shop['phone']); ?>"></div>
                     <div class="custom-control custom-switch">

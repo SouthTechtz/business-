@@ -6,6 +6,11 @@ $page_title = 'Add User';
 
 $error = '';
 $can_assign_locations = can('manage_users');
+$brand_scope_options = product_brand_options();
+$selected_brand_scope = trim((string)($_POST['brand_scope'] ?? ''));
+if ($selected_brand_scope !== '' && !in_array($selected_brand_scope, $brand_scope_options, true)) {
+    $selected_brand_scope = '';
+}
 $roles = fetch_all("SELECT * FROM roles WHERE tenant_id = ? ORDER BY name", $current_user->tenant_id);
 $all_role_ids = array_map('intval', array_column($roles, 'role_id'));
 $role_permissions = role_permissions_for_ids($all_role_ids, (int)$current_user->tenant_id);
@@ -48,6 +53,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $first_name = trim($_POST['first_name'] ?? '');
     $last_name = trim($_POST['last_name'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
+    $brand_scope = trim($_POST['brand_scope'] ?? '');
+    if ($brand_scope !== '' && !in_array($brand_scope, $brand_scope_options, true)) {
+        $brand_scope = '';
+    }
     $valid_role_ids = array_map('intval', array_column($roles, 'role_id'));
     $role_ids = array_values(array_intersect($selected_role_ids, $valid_role_ids));
     $selected_role_permissions = role_permissions_for_ids($role_ids, (int)$current_user->tenant_id);
@@ -100,6 +109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'first_name'    => $first_name,
                     'last_name'     => $last_name,
                     'phone'         => $phone,
+                    'brand_scope'   => $brand_scope !== '' ? $brand_scope : null,
                     'is_active'     => 1,
                 ]);
                 if (!$id) throw new RuntimeException('Could not create the user.');
@@ -201,6 +211,16 @@ require_once 'sidebar.php';
                         <div class="col-md-6 form-group">
                             <label>Phone</label>
                             <input type="text" name="phone" class="form-control" value="<?php echo e($_POST['phone'] ?? ''); ?>">
+                        </div>
+                        <div class="col-md-6 form-group">
+                            <label>Brand Scope</label>
+                            <select name="brand_scope" class="form-control">
+                                <option value="">— No brand restriction —</option>
+                                <?php foreach ($brand_scope_options as $brand_option): ?>
+                                    <option value="<?php echo e($brand_option); ?>" <?php echo $selected_brand_scope === $brand_option ? 'selected' : ''; ?>><?php echo e($brand_option); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="text-muted">Set a brand only for a Mini Admin. That account will see just this brand's shops, products, stock, sales and orders.</small>
                         </div>
                         <div class="col-md-6 form-group">
                             <label>Roles</label>

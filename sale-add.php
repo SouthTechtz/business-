@@ -42,6 +42,11 @@ if ($selected_shop_id > 0) {
     }
 }
 
+// A branded shop sells only products carrying that brand. An empty brand means
+// the shop is unrestricted and may sell every brand.
+$selected_shop_brand = $selected_shop_id > 0 ? shop_brand($selected_shop_id) : '';
+$brand_scope_sql = $selected_shop_brand !== '' ? " AND p.brand = ?" : '';
+
 // ---- Cart actions ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
@@ -82,6 +87,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $selected_store_id, $selected_store_id, $pid, $current_user->tenant_id
         );
         if ($product && $qty > 0) {
+            if ($selected_shop_brand !== '' && trim((string)($product['brand'] ?? '')) !== $selected_shop_brand) {
+                flash_set('danger', 'This shop only sells ' . brand_label($selected_shop_brand) . ' products. ' . $product['name'] . ' belongs to another brand.');
+                redirect('sale-add.php');
+            }
             if (!$product['is_service'] && $qty > (float)$product['total_stock']) {
                 flash_set('danger', 'Not enough stock for ' . $product['name'] . ' at ' . store_label($selected_store) . ' (available: ' . (float)$product['total_stock'] . ').');
                 redirect('sale-add.php');
@@ -229,6 +238,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new Exception('No shop inventory warehouse is selected.');
             }
 
+            // Revalidate the shop brand so a cart built before a brand change
+            // cannot sell products the shop is no longer allowed to sell.
+            if ($selected_shop_brand !== '') {
+                foreach ($line_items as $li) {
+                    $brand_row = fetch_one(
+                        "SELECT brand FROM products WHERE product_id = ? AND tenant_id = ?",
+                        $li['pid'], $current_user->tenant_id
+                    );
+                    if (!$brand_row || trim((string)($brand_row['brand'] ?? '')) !== $selected_shop_brand) {
+                        throw new Exception('This shop only sells ' . brand_label($selected_shop_brand) . ' products. Remove ' . $li['name'] . ' from the cart.');
+                    }
+                }
+            }
+
             // Lock and re-check store stock inside the transaction. Active
             // order reservations are not sellable by POS.
             $stock_lines = $line_items;
@@ -339,8 +362,11 @@ $products = fetch_all(
                            WHERE s.product_id = p.product_id AND s.warehouse_id = ? AND s.tenant_id = p.tenant_id), 0)
                            - COALESCE((SELECT SUM(r.quantity) FROM order_stock_reservations r
                            WHERE r.tenant_id = p.tenant_id AND r.product_id = p.product_id AND r.warehouse_id = ? AND r.status = 'active'), 0)) total_stock
-     FROM products p WHERE p.tenant_id = ? AND p.is_active = 1 ORDER BY p.name",
-    $selected_store_id, $selected_store_id, $current_user->tenant_id
+     FROM products p WHERE p.tenant_id = ? AND p.is_active = 1{$brand_scope_sql} ORDER BY p.name",
+    ...array_merge(
+        [$selected_store_id, $selected_store_id, $current_user->tenant_id],
+        $selected_shop_brand !== '' ? [$selected_shop_brand] : []
+    )
 );
 $customers = fetch_all(
     "SELECT contact_id, first_name, last_name, company_name, customer_type FROM contacts

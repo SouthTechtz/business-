@@ -42,7 +42,7 @@ if ($order_id > 0) {
         redirect('order-view.php?id=' . $order_id);
     }
     $linked_order_items = fetch_all(
-        "SELECT oi.*, p.is_service, p.is_active product_active, p.name current_name, p.code current_code
+        "SELECT oi.*, p.is_service, p.is_active product_active, p.name current_name, p.code current_code, p.brand product_brand
            FROM order_items oi
            LEFT JOIN products p ON p.product_id = oi.product_id AND p.tenant_id = oi.tenant_id
           WHERE oi.order_id = ? AND oi.tenant_id = ?
@@ -92,6 +92,12 @@ if (!$linked_order) {
     $_SESSION['invoice_warehouse_id'] = $selected_store_id;
 }
 
+// A branded shop may only invoice products carrying that brand.
+$invoice_shop_brand = (int)($selected_store['shop_id'] ?? 0) > 0
+    ? shop_brand((int)$selected_store['shop_id'])
+    : '';
+$invoice_brand_sql = $invoice_shop_brand !== '' ? " AND p.brand = ?" : '';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
     $contact_id = $linked_order
@@ -134,6 +140,9 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
     } else {
         $invoice_store = find_accessible_store($warehouse_id, false, is_godown_manager());
     }
+    $invoice_shop_brand = (int)($invoice_store['shop_id'] ?? 0) > 0
+        ? shop_brand((int)$invoice_store['shop_id'])
+        : '';
     $issue_date = $_POST['issue_date'] ?? date('Y-m-d');
     $due_date = $_POST['due_date'] ?? '';
     $status_id = (int)($_POST['status_id'] ?? 0);
@@ -173,6 +182,10 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                         $error = 'A product on this order was deleted or deactivated. Update the order before invoicing.';
                         break;
                     }
+                    if ($invoice_shop_brand !== '' && trim((string)($oi['product_brand'] ?? '')) !== $invoice_shop_brand) {
+                        $error = 'This shop only sells ' . brand_label($invoice_shop_brand) . ' products. ' . ($oi['current_name'] ?: 'An order line') . ' belongs to another brand.';
+                        break;
+                    }
                     if ($qty <= 0) {
                         $error = 'An order line has an invalid quantity.';
                         break;
@@ -203,6 +216,10 @@ $shop_id = $linked_order ? null : (!empty($_POST['shop_id']) ? (int)$_POST['shop
                     if (!$pid || $qty <= 0) continue;
                     $product = fetch_one("SELECT * FROM products WHERE product_id = ? AND tenant_id = ?", $pid, $current_user->tenant_id);
                     if (!$product) continue;
+                    if ($invoice_shop_brand !== '' && trim((string)($product['brand'] ?? '')) !== $invoice_shop_brand) {
+                        $error = 'This shop only sells ' . brand_label($invoice_shop_brand) . ' products. ' . $product['name'] . ' belongs to another brand.';
+                        break;
+                    }
                     $line_total = $price * $qty;
                     $line_tax = $tax_enabled ? $line_total * ((float)$product['tax_rate'] / 100) : 0;
                     $subtotal += $line_total;
@@ -454,8 +471,11 @@ $products = fetch_all(
                            WHERE s.product_id = p.product_id AND s.warehouse_id = ? AND s.tenant_id = p.tenant_id), 0)
                            - COALESCE((SELECT SUM(r.quantity) FROM order_stock_reservations r
                            WHERE r.tenant_id = p.tenant_id AND r.product_id = p.product_id AND r.warehouse_id = ? AND r.status = 'active'), 0)) total_stock
-     FROM products p WHERE p.tenant_id = ? AND p.is_active = 1 ORDER BY p.name",
-    $selected_store_id, $selected_store_id, $current_user->tenant_id
+     FROM products p WHERE p.tenant_id = ? AND p.is_active = 1{$invoice_brand_sql} ORDER BY p.name",
+    ...array_merge(
+        [$selected_store_id, $selected_store_id, $current_user->tenant_id],
+        $invoice_shop_brand !== '' ? [$invoice_shop_brand] : []
+    )
 );
 $preset_customer = $linked_order
     ? (int)$linked_order['contact_id']

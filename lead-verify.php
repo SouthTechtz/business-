@@ -24,8 +24,20 @@ if (!$lead || !$request || !in_array((string)$lead['source'], ['storefront', 'wh
     flash_set('danger', 'That lead does not have an active online or wholesale order request to verify.');
     redirect('leads.php');
 }
+if (!lead_is_visible($lead)) {
+    http_response_code(403);
+    die('This lead belongs to another brand.');
+}
 
 $shops = accessible_shops(null, false);
+// Restrict the supplying shop to those that sell the requested brands. A shop
+// with no brand is unrestricted and may fulfil any brand.
+$lead_brands = lead_product_brands($id);
+if ($lead_brands) {
+    $shops = array_values(array_filter($shops, function ($s) use ($lead_brands) {
+        return shop_can_fulfil_brands((string)($s['brand'] ?? ''), $lead_brands);
+    }));
+}
 $shop_id = (int)($_GET['shop_id'] ?? 0);
 $warehouse_id = (int)($_GET['warehouse_id'] ?? 0);
 if ($shop_id > 0 && !shop_is_accessible($shop_id, false)) $shop_id = 0;
@@ -57,7 +69,7 @@ foreach ($shops as $shop_row) {
 $show_shop_selector = count($shops) > 1;
 
 $items = fetch_all(
-    "SELECT ri.*, p.sale_price AS current_price, p.is_service,
+    "SELECT ri.*, p.sale_price AS current_price, p.is_service, p.brand AS product_brand,
             COALESCE(s.quantity, 0) AS on_hand_stock,
             COALESCE(r.reserved_qty, 0) AS reserved_stock,
             GREATEST(0, COALESCE(s.quantity, 0) - COALESCE(r.reserved_qty, 0)) AS available_stock
@@ -103,12 +115,15 @@ require_once 'sidebar.php';
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f['type']); ?>"><?php echo e($f['message']); ?></div>
 <?php endif; ?>
+<?php if ($lead_brands && !$shops): ?>
+    <div class="alert alert-warning"><strong>No accessible shop sells the requested brand(s):</strong> <?php echo e(implode(', ', array_map('brand_label', $lead_brands))); ?>. Assign the brand to a shop or ask an administrator to grant access.</div>
+<?php endif; ?>
 <div class="row"><div class="col-lg-8 mb-3">
     <div class="card"><div class="card-header"><h5 class="card-title">Requested Products</h5></div><div class="card-body p-0"><div class="table-responsive"><table class="table mb-0">
         <thead><tr><th>Product</th><th class="text-right">Qty</th><th class="text-right">Request Price</th><th class="text-right">Current Price</th><th class="text-right">Available in Selected Inventory</th></tr></thead>
         <tbody><?php foreach ($items as $item): ?>
             <?php $low = $warehouse_id > 0 && !(int)$item['is_service'] && isset($short_products[(int)$item['product_id']]); ?>
-            <tr><td><?php echo e($item['product_name_snapshot']); ?><small class="text-muted d-block"><?php echo e($item['product_code_snapshot']); ?></small></td>
+            <tr><td><?php echo e($item['product_name_snapshot']); ?><small class="text-muted d-block"><?php echo e($item['product_code_snapshot']); ?><?php if (!empty($item['product_brand'])): ?> · <span class="badge badge-navy"><?php echo e(brand_label($item['product_brand'])); ?></span><?php endif; ?></small></td>
                 <td class="text-right"><?php echo e((float)$item['quantity']); ?></td><td class="text-right"><?php echo e(money($item['unit_price'], $request['currency_code'])); ?></td>
                 <td class="text-right"><?php echo $item['current_price'] === null ? '—' : e(money($item['current_price'], $request['currency_code'])); ?></td>
                 <td class="text-right <?php echo $low ? 'text-danger font-weight-bold' : ''; ?>"><?php echo $warehouse_id ? e((float)($item['available_stock'] ?? 0)) : '—'; ?>

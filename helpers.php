@@ -291,6 +291,11 @@ function sidebar_notification_counts($tenant_id = null) {
                       JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
                      WHERE s.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0";
         $params = [$tenant_id];
+        $sidebar_brand = current_brand_scope();
+        if ($sidebar_brand !== '') {
+            $sql .= ' AND p.brand = ?';
+            $params[] = $sidebar_brand;
+        }
         if ($warehouse_ids !== null) {
             $sql .= ' AND s.warehouse_id IN (' . implode(',', array_map('intval', $warehouse_ids)) . ')';
         }
@@ -575,6 +580,7 @@ function godown_manager_page_allowed($page) {
         'purchase-edit.php',
         'purchase-view.php',
         'purchase-delete.php',
+        'purchase-status.php',
         'suppliers.php',
         'invoices.php',
         'invoice-add.php',
@@ -605,6 +611,128 @@ function godown_manager_page_allowed($page) {
 function tenant_admin_scope() {
     return can('manage_users') || can('manage_settings');
 }
+
+/**
+ * Brand a user account is restricted to ('' when the account is not scoped).
+ * The stored users.brand_scope value wins; role names provide a fallback so a
+ * Mini Admin is always restricted even if the column was cleared by mistake.
+ */
+function user_brand_scope($user = null) {
+    if ($user === null) {
+        global $current_user;
+        $user = $current_user;
+    }
+    if (!$user) return '';
+
+    $scope = trim((string)($user->brand_scope ?? ''));
+    if ($scope === '' && is_array($user->roles ?? null)) {
+        foreach ($user->roles as $role) {
+            $key = strtolower(trim((string)$role));
+            if ($key === 'mini admin - gsp') return 'GSP GROUP';
+            if ($key === 'mini admin - techdokta') return 'TECHDOKTA INVESTMENT';
+        }
+    }
+    if ($scope === '') return '';
+    return in_array($scope, product_brand_options(), true) ? $scope : '';
+}
+
+/**
+ * Brand scope of the signed-in user. Full administrators (manage_users or
+ * manage_settings) are never restricted, even if a brand value is stored.
+ */
+function current_brand_scope() {
+    global $current_user;
+    if (!$current_user) return '';
+    // Only the built-in Administrator role is exempt. A Mini Admin who is
+    // accidentally given an administrative permission stays brand-scoped.
+    if (is_array($current_user->roles)) {
+        foreach ($current_user->roles as $role) {
+            if (strtolower(trim((string)$role)) === 'administrator') return '';
+        }
+    }
+    return user_brand_scope($current_user);
+}
+
+/** True when the signed-in account is a brand-scoped Mini Admin. */
+function is_brand_admin() {
+    global $current_user;
+    if (!$current_user) return false;
+    if (is_godown_manager() || is_wholesaler($current_user)) return false;
+    return current_brand_scope() !== '';
+}
+
+/**
+ * SQL condition restricting a query to the signed-in user's brand.
+ * Returns ['sql' => '', 'params' => []] for unrestricted accounts.
+ * Pass $include_unbranded for records where an empty brand means "shared".
+ */
+function brand_scope_condition($column, $include_unbranded = false) {
+    $scope = current_brand_scope();
+    if ($scope === '') return ['sql' => '', 'params' => []];
+    $column = preg_replace('/[^a-zA-Z0-9_.]/', '', (string)$column);
+    if ($column === '') return ['sql' => ' AND 1 = 0', 'params' => []];
+    if ($include_unbranded) {
+        return [
+            'sql' => " AND ({$column} = ? OR {$column} IS NULL OR {$column} = '')",
+            'params' => [$scope],
+        ];
+    }
+    return ['sql' => " AND {$column} = ?", 'params' => [$scope]];
+}
+
+/** Whether a record brand is visible to the signed-in user. */
+function brand_scope_allows($brand) {
+    $scope = current_brand_scope();
+    if ($scope === '') return true;
+    return trim((string)$brand) === $scope;
+}
+
+/** Brand options for filter dropdowns: a Mini Admin only sees their brand. */
+function brand_filter_options() {
+    $scope = current_brand_scope();
+    return $scope !== '' ? [$scope] : product_brand_options();
+}
+
+/** Whether the current user may manage capital funding. */
+function can_manage_capital() {
+    return can('manage_capital') || is_brand_admin();
+}
+
+/**
+ * Resolve the capital brand filter. A Mini Admin is always locked to their
+ * brand; a full administrator may choose one brand or all brands ('').
+ */
+function capital_resolve_brand($requested = '') {
+    $scope = current_brand_scope();
+    if ($scope !== '') return $scope;
+    $requested = trim((string)$requested);
+    return in_array($requested, product_brand_options(), true) ? $requested : '';
+}
+
+/** Brands visible on capital screens (both for a full administrator). */
+function capital_visible_brands() {
+    return brand_filter_options();
+}
+
+
+/**
+ * Whether a lead is visible to the signed-in user. Leads with no product brand
+ * information stay visible so older leads are never hidden.
+ */
+function lead_is_visible($lead) {
+    global $current_user;
+    if (!$current_user || !$lead) return false;
+    if ((int)($lead['tenant_id'] ?? 0) !== (int)$current_user->tenant_id) return false;
+    $scope = current_brand_scope();
+    if ($scope === '') return true;
+    $lead_id = (int)($lead['lead_id'] ?? 0);
+    if ($lead_id <= 0) return true;
+    if ((int)($lead['created_by'] ?? 0) === (int)$current_user->user_id) return true;
+    $brands = lead_product_brands($lead_id);
+    if (!$brands) return true;
+    return in_array($scope, $brands, true);
+}
+
 
 /**
  * Count rows that refer to a tenant-owned shop or inventory location.
@@ -701,7 +829,9 @@ function is_shop_manager() {
 /** Whether the current user can verify storefront order requests. */
 function can_verify_storefront_order_requests() {
     return can('manage_orders')
-        && (tenant_admin_scope() || (is_shop_manager() && count(accessible_shops(null, false)) > 0));
+        && (tenant_admin_scope()
+            || is_brand_admin()
+            || (is_shop_manager() && count(accessible_shops(null, false)) > 0));
 }
 
 /** Whether the current account uses the restricted Godown Manager role. */
@@ -736,14 +866,14 @@ function is_system_administrator() {
  * and the Godown Manager. Shop and store managers must not see or use it.
  */
 function can_manage_product_catalogue() {
-    return is_system_administrator() || is_godown_manager();
+    return is_system_administrator() || is_godown_manager() || is_brand_admin();
 }
 
 /** Guard helper: 403 unless the current user may manage the product catalogue. */
 function require_product_catalogue_access() {
     if (!can_manage_product_catalogue()) {
         http_response_code(403);
-        die('Only the system administrator and the Godown Manager can access products.');
+        die('Only the system administrator, the Godown Manager and a brand Mini Admin can access products.');
     }
 }
 
@@ -974,6 +1104,18 @@ function accessible_shops($tenant_id = null, $include_inactive = false) {
     if ($tenant_id !== (int)$current_user->tenant_id) return [];
     if (is_godown_manager()) return [];
     $active_sql = $include_inactive ? '' : ' AND s.is_active = 1';
+    // A brand-scoped Mini Admin sees every shop of their brand, regardless of
+    // per-user shop mappings.
+    $brand_scope = current_brand_scope();
+    if ($brand_scope !== '') {
+        return fetch_all(
+            "SELECT s.* FROM shops s
+              WHERE s.tenant_id = ? AND s.brand = ?{$active_sql}
+              ORDER BY s.name",
+            $tenant_id,
+            $brand_scope
+        );
+    }
     if (tenant_admin_scope()) {
         return fetch_all(
             "SELECT s.* FROM shops s WHERE s.tenant_id = ?{$active_sql} ORDER BY s.name",
@@ -1056,15 +1198,20 @@ function accessible_stores($shop_id = null, $include_inactive = false, $tenant_i
             $rows_by_id[(int)$row['warehouse_id']] = $row;
         }
         $active_sql = $include_inactive ? '' : " AND w.is_active = 1 AND s.is_active = 1";
+        $brand_scope = current_brand_scope();
+        $brand_sql = $brand_scope !== '' ? ' AND s.brand = ?' : '';
+        $assigned_params = [$tenant_id, (int)$current_user->user_id];
+        if ($brand_scope !== '') {
+            $assigned_params[] = $brand_scope;
+        }
         $assigned_stores = fetch_all(
             "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
                FROM user_inventory_locations uil
                JOIN warehouses w ON w.warehouse_id = uil.location_id AND w.tenant_id = uil.tenant_id
                JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
-              WHERE uil.tenant_id = ? AND uil.user_id = ? AND w.location_type = 'store'{$active_sql}
+              WHERE uil.tenant_id = ? AND uil.user_id = ? AND w.location_type = 'store'{$active_sql}{$brand_sql}
               ORDER BY s.name, w.name",
-            $tenant_id,
-            $current_user->user_id
+            ...$assigned_params
         );
         foreach ($assigned_stores as $assigned_store) {
             if ($shop_id !== null && (int)$assigned_store['shop_id'] !== (int)$shop_id) continue;
@@ -1117,6 +1264,38 @@ function accessible_warehouse_ids($tenant_id = null, $include_inactive = true, $
             : [];
     }
     if (tenant_admin_scope()) return null;
+
+    // A brand Mini Admin can use every location belonging to their brand's
+    // shops (both the shop inventory location and its stores), plus the shared
+    // Central Godown when the caller asks for Godown access.
+    $brand_scope = current_brand_scope();
+    if ($brand_scope !== '') {
+        global $current_user;
+        $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+        $ids = [];
+        foreach (accessible_shops($tenant_id, $include_inactive) as $shop) {
+            $location_id = shop_inventory_warehouse_id((int)$shop['shop_id'], $tenant_id);
+            if ($location_id) {
+                $ids[] = (int)$location_id;
+            }
+        }
+        foreach (accessible_stores(null, $include_inactive, $tenant_id, false) as $store) {
+            $ids[] = (int)$store['warehouse_id'];
+        }
+        if ($include_godown) {
+            $active_sql = $include_inactive ? '' : ' AND is_active = 1';
+            $godowns = fetch_all(
+                "SELECT warehouse_id FROM warehouses
+                  WHERE tenant_id = ? AND location_type = 'godown'{$active_sql}",
+                $tenant_id
+            );
+            foreach ($godowns as $godown) {
+                $ids[] = (int)$godown['warehouse_id'];
+            }
+        }
+        return array_values(array_unique($ids));
+    }
+
     return array_map(
         fn($row) => (int)$row['warehouse_id'],
         accessible_stores(null, $include_inactive, $tenant_id, $include_godown)
@@ -1136,6 +1315,10 @@ function shop_is_accessible($shop_id, $include_inactive = true) {
     if (!$shop) return false;
     if (!$include_inactive && !(int)$shop['is_active']) return false;
     if (is_godown_manager()) return false;
+    $brand_scope = current_brand_scope();
+    if ($brand_scope !== '') {
+        return trim((string)($shop['brand'] ?? '')) === $brand_scope;
+    }
     if (tenant_admin_scope()) return true;
     $mapped = fetch_one(
         "SELECT 1 FROM user_shops WHERE tenant_id = ? AND user_id = ? AND shop_id = ?",
@@ -1743,16 +1926,31 @@ function current_user_id() {
 function users_with_permission($permission, $tenant_id = null) {
     global $current_user;
     $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $brand_scope = current_brand_scope();
+    $brand_sql = '';
+    $params = [$tenant_id, $permission];
+    if ($brand_scope !== '') {
+        // A brand Mini Admin only sees staff who belong to their brand.
+        $brand_sql = " AND (
+            u.user_id = ?
+            OR u.brand_scope = ?
+            OR EXISTS (
+                SELECT 1 FROM user_shops bus
+                  JOIN shops bs ON bs.shop_id = bus.shop_id AND bs.tenant_id = bus.tenant_id
+                 WHERE bus.user_id = u.user_id AND bus.tenant_id = u.tenant_id AND bs.brand = ?
+            )
+        )";
+        array_push($params, current_user_id(), $brand_scope, $brand_scope);
+    }
     return fetch_all(
         "SELECT DISTINCT u.user_id, u.first_name, u.last_name, u.username
          FROM users u
          JOIN user_roles ur ON ur.user_id = u.user_id AND ur.tenant_id = u.tenant_id
          JOIN role_permissions rp ON rp.role_id = ur.role_id
          JOIN permissions p ON p.permission_id = rp.permission_id
-         WHERE u.tenant_id = ? AND u.is_active = 1 AND p.name = ?
+         WHERE u.tenant_id = ? AND u.is_active = 1 AND p.name = ?{$brand_sql}
          ORDER BY u.first_name, u.last_name",
-        $tenant_id,
-        $permission
+        ...$params
     );
 }
 
@@ -1761,6 +1959,30 @@ function user_has_tenant_permission($user_id, $permission, $tenant_id) {
     $user_id = (int)$user_id;
     $tenant_id = (int)$tenant_id;
     if ($user_id <= 0 || $tenant_id <= 0) return false;
+
+    // A brand Mini Admin may only assign work to staff of their own brand.
+    $brand_scope = current_brand_scope();
+    if ($brand_scope !== '') {
+        $visible = fetch_one(
+            "SELECT 1 FROM users u
+              WHERE u.user_id = ? AND u.tenant_id = ? AND u.is_active = 1
+                AND (
+                    u.brand_scope = ?
+                    OR EXISTS (
+                        SELECT 1 FROM user_shops bus
+                          JOIN shops bs ON bs.shop_id = bus.shop_id AND bs.tenant_id = bus.tenant_id
+                         WHERE bus.user_id = u.user_id AND bus.tenant_id = u.tenant_id AND bs.brand = ?
+                    )
+                )
+              LIMIT 1",
+            $user_id,
+            $tenant_id,
+            $brand_scope,
+            $brand_scope
+        );
+        if (!$visible) return false;
+    }
+
     return (bool)fetch_one(
         "SELECT 1 FROM users u
          JOIN user_roles ur ON ur.user_id = u.user_id AND ur.tenant_id = u.tenant_id
@@ -2156,6 +2378,27 @@ function order_is_visible($order) {
     if (!$current_user || !$order) return false;
     if ((int)$order['tenant_id'] !== (int)$current_user->tenant_id) return false;
     if (tenant_admin_scope()) return true;
+
+    // Brand-scoped Mini Admin: only their brand's shops and brand orders.
+    $brand_scope = current_brand_scope();
+    if ($brand_scope !== '') {
+        $shop_id = (int)($order['shop_id'] ?? 0);
+        if ($shop_id > 0) return shop_is_accessible($shop_id, true);
+        if ((int)($order['created_by'] ?? 0) === (int)$current_user->user_id) return true;
+        if (($order['source'] ?? '') === 'storefront' && empty($order['created_by'])) {
+            $match = fetch_one(
+                "SELECT 1 FROM order_items oi
+                   JOIN products p ON p.product_id = oi.product_id AND p.tenant_id = ?
+                  WHERE oi.order_id = ? AND p.brand = ? LIMIT 1",
+                $current_user->tenant_id,
+                (int)$order['order_id'],
+                $brand_scope
+            );
+            return (bool)$match;
+        }
+        return false;
+    }
+
     if ((int)($order['created_by'] ?? 0) === (int)$current_user->user_id) return true;
     if ((int)($order['assigned_to'] ?? 0) === (int)$current_user->user_id) return true;
     // Unassigned storefront requests are a tenant-level intake queue until a
@@ -2168,6 +2411,30 @@ function order_is_visible($order) {
 /** SQL fragment + params restricting an order query to what the user may see. */
 function order_visibility_clause($alias = 'o') {
     if (tenant_admin_scope()) return ['', []];
+
+    // Brand-scoped Mini Admin: their brand's shops, plus storefront requests
+    // that contain their brand's products and are not yet linked to a shop.
+    $brand_scope = current_brand_scope();
+    if ($brand_scope !== '') {
+        $conn = $GLOBALS['conn'] ?? null;
+        if (!$conn) return [' AND 1 = 0', []];
+        $brand = $conn->real_escape_string($brand_scope);
+        $parts = [
+            "{$alias}.shop_id IN (
+                SELECT bs.shop_id FROM shops bs
+                 WHERE bs.tenant_id = {$alias}.tenant_id AND bs.brand = '{$brand}'
+            )",
+            "({$alias}.shop_id IS NULL AND {$alias}.source = 'storefront' AND {$alias}.created_by IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM order_items boi
+                    JOIN products bp ON bp.product_id = boi.product_id AND bp.tenant_id = {$alias}.tenant_id
+                   WHERE boi.order_id = {$alias}.order_id AND bp.brand = '{$brand}'
+              ))",
+            "{$alias}.created_by = " . (int)current_user_id(),
+        ];
+        return [' AND (' . implode(' OR ', $parts) . ')', []];
+    }
+
     $current_uid = current_user_id();
     $shop_ids = accessible_shop_ids(null, true);
     $parts = ["{$alias}.created_by = ?", "{$alias}.assigned_to = ?", "({$alias}.source = 'storefront' AND {$alias}.created_by IS NULL)"];
@@ -2774,9 +3041,213 @@ function order_invoice_matches($order_id, $tenant_id, $invoice_id) {
     return true;
 }
 
-/** Brands offered in the product forms. Extend this list as new brands are added. */
+/** Brands offered in the product and shop forms. Extend this list as new brands are added. */
 function product_brand_options() {
     return ['GSP GROUP', 'TECHDOKTA INVESTMENT'];
+}
+
+/** Short display labels for the stored brand values. */
+function product_brand_labels() {
+    return [
+        'GSP GROUP'          => 'GSP',
+        'TECHDOKTA INVESTMENT' => 'TECHDOKTA',
+    ];
+}
+
+/** Human label for a stored brand value. */
+function brand_label($brand) {
+    $brand = trim((string)$brand);
+    if ($brand === '') return 'No brand';
+    $labels = product_brand_labels();
+    return $labels[$brand] ?? $brand;
+}
+
+/** The brand assigned to a shop, or '' when the shop sells every brand. */
+function shop_brand($shop_id, $tenant_id = null) {
+    global $current_user;
+    $shop_id = (int)$shop_id;
+    if ($shop_id <= 0) return '';
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $row = fetch_one(
+        "SELECT brand FROM shops WHERE shop_id = ? AND tenant_id = ? LIMIT 1",
+        $shop_id,
+        $tenant_id
+    );
+    return trim((string)($row['brand'] ?? ''));
+}
+
+/**
+ * Brand scope for the signed-in user.
+ *   null  = unrestricted (tenant administrator, or a shop with no brand)
+ *   []    = no shop/brand access
+ *   [...] = the brands sold by the user's shops
+ */
+function shop_brand_scope_for_user() {
+    global $current_user;
+    if (!$current_user) return [];
+    if (tenant_admin_scope()) return null;
+    $shops = accessible_shops(null, false);
+    if (!$shops) return [];
+    $brands = [];
+    foreach ($shops as $shop) {
+        $brand = trim((string)($shop['brand'] ?? ''));
+        if ($brand === '') return null;
+        $brands[$brand] = true;
+    }
+    return array_keys($brands);
+}
+
+/** Whether a lead/product brand list falls inside a brand scope. */
+function brand_scope_matches($scope, array $brands) {
+    $brands = array_values(array_filter(array_map(
+        fn($b) => trim((string)$b),
+        $brands
+    ), fn($b) => $b !== ''));
+    if ($scope === null) return true;
+    if (!$brands) return true; // No brand information: keep it visible.
+    if (!$scope) return false;
+    return (bool)array_intersect($scope, $brands);
+}
+
+/** Whether a shop may sell/fulfil a set of product brands. */
+function shop_can_fulfil_brands($shop_brand, array $brands) {
+    $shop_brand = trim((string)$shop_brand);
+    $brands = array_values(array_filter(array_map(
+        fn($b) => trim((string)$b),
+        $brands
+    ), fn($b) => $b !== ''));
+    if ($shop_brand === '') return true; // Unrestricted shop.
+    if (!$brands) return true;           // No brand information.
+    return in_array($shop_brand, $brands, true);
+}
+
+/** Distinct product brands requested on a lead (empty when unknown). */
+function lead_product_brands($lead_id, $tenant_id = null) {
+    global $current_user;
+    $lead_id = (int)$lead_id;
+    if ($lead_id <= 0) return [];
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $rows = fetch_all(
+        "SELECT DISTINCT p.brand
+           FROM storefront_lead_request_items ri
+           JOIN storefront_lead_requests r ON r.request_id = ri.request_id AND r.tenant_id = ri.tenant_id
+           JOIN products p ON p.product_id = ri.product_id AND p.tenant_id = ri.tenant_id
+          WHERE r.lead_id = ? AND r.tenant_id = ?
+            AND p.brand IS NOT NULL AND p.brand <> ''",
+        $lead_id,
+        $tenant_id
+    );
+    return array_values(array_filter(array_map(
+        fn($row) => trim((string)($row['brand'] ?? '')),
+        $rows
+    ), fn($brand) => $brand !== ''));
+}
+
+/**
+ * Resolve how a sale should be categorised by brand.
+ * A branded shop determines the brand; otherwise the brands of the sold
+ * products are used, with "Mixed" when several brands appear.
+ *
+ * @return array{key:string,label:string}
+ */
+function sale_brand_info($shop_brand, $product_brands) {
+    $shop_brand = trim((string)$shop_brand);
+    if ($shop_brand !== '') {
+        return ['key' => $shop_brand, 'label' => brand_label($shop_brand)];
+    }
+    if (is_string($product_brands)) {
+        $product_brands = explode(',', $product_brands);
+    }
+    $brands = array_values(array_unique(array_filter(array_map(
+        fn($b) => trim((string)$b),
+        is_array($product_brands) ? $product_brands : []
+    ), fn($b) => $b !== '')));
+    if (count($brands) === 1) {
+        return ['key' => $brands[0], 'label' => brand_label($brands[0])];
+    }
+    if (count($brands) > 1) {
+        return ['key' => 'mixed', 'label' => 'Mixed'];
+    }
+    return ['key' => 'unbranded', 'label' => 'Unbranded'];
+}
+
+/**
+ * Opening sales balance per shop, keyed by shop_id, with the shop's brand.
+ */
+function shop_opening_balances($tenant_id = null) {
+    global $current_user;
+    $tenant_id = $tenant_id === null
+        ? (int)($current_user->tenant_id ?? 0)
+        : (int)$tenant_id;
+    if ($tenant_id <= 0) return [];
+    $rows = fetch_all(
+        "SELECT sob.shop_id, sob.opening_sales, sob.notes, sob.updated_by, sob.updated_at,
+                s.name shop_name, s.code shop_code, s.brand shop_brand, s.is_active shop_is_active
+           FROM shop_opening_balances sob
+           JOIN shops s ON s.shop_id = sob.shop_id AND s.tenant_id = sob.tenant_id
+          WHERE sob.tenant_id = ?
+          ORDER BY s.name",
+        $tenant_id
+    );
+    $out = [];
+    foreach ($rows as $row) {
+        $out[(int)$row['shop_id']] = [
+            'shop_id' => (int)$row['shop_id'],
+            'shop_name' => $row['shop_name'],
+            'shop_code' => $row['shop_code'],
+            'shop_brand' => $row['shop_brand'],
+            'shop_is_active' => (int)$row['shop_is_active'],
+            'opening_sales' => (float)($row['opening_sales'] ?? 0),
+            'notes' => $row['notes'] ?? null,
+            'updated_by' => $row['updated_by'] ?? null,
+            'updated_at' => $row['updated_at'] ?? null,
+        ];
+    }
+    return $out;
+}
+
+/** Opening sales for one shop. */
+function shop_opening_sales($shop_id, $tenant_id = null) {
+    $balances = shop_opening_balances($tenant_id);
+    return (float)($balances[(int)$shop_id]['opening_sales'] ?? 0);
+}
+
+/** Total opening sales across all shops. */
+function shop_opening_total($tenant_id = null) {
+    $total = 0.0;
+    foreach (shop_opening_balances($tenant_id) as $row) {
+        $total += (float)($row['opening_sales'] ?? 0);
+    }
+    return $total;
+}
+
+/** Goods lifecycle statuses for a purchase record. */
+function purchase_goods_statuses() {
+    return [
+        'ordered'        => 'Ordered',
+        'in_production'  => 'In Production',
+        'in_transport'   => 'In Transport',
+        'arrived_godown' => 'Arrived at Godown',
+        'cancelled'      => 'Cancelled',
+    ];
+}
+
+/** Human label for a purchase goods status. */
+function purchase_goods_status_label($status) {
+    $statuses = purchase_goods_statuses();
+    return $statuses[(string)$status] ?? ucwords(str_replace('_', ' ', (string)$status));
+}
+
+/** Bootstrap badge class for a purchase goods status. */
+function purchase_goods_status_class($status) {
+    $map = [
+        'ordered'        => 'secondary',
+        'in_production'  => 'warning',
+        'in_transport'   => 'info',
+        'arrived_godown' => 'success',
+        'cancelled'      => 'navy',
+    ];
+    return $map[(string)$status] ?? 'secondary';
 }
 
 /** Human-readable quotation statuses. */

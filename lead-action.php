@@ -21,6 +21,10 @@ if (!$lead) {
     flash_set('danger', 'Lead not found.');
     redirect('leads.php');
 }
+if (!lead_is_visible($lead)) {
+    http_response_code(403);
+    die('This lead belongs to another brand.');
+}
 
 $back = 'lead-view.php?id=' . $id;
 
@@ -226,6 +230,10 @@ try {
             $back = 'lead-verify.php?id=' . $id . '&shop_id=' . $shop_id;
             if ($shop_id <= 0 || !shop_is_accessible($shop_id, false)) {
                 lead_action_redirect($back, 'danger', 'Select an active shop you are authorized to manage.');
+            }
+            $request_brands = lead_product_brands($id);
+            if (!shop_can_fulfil_brands(shop_brand($shop_id), $request_brands)) {
+                lead_action_redirect($back, 'danger', 'The selected shop does not sell the requested brand(s): ' . implode(', ', array_map('brand_label', $request_brands)) . '.');
             }
             // Keep the posted inventory location only when it belongs to the
             // selected shop; otherwise use that shop's own inventory location.

@@ -12,6 +12,11 @@ $status = (string)($_GET['status'] ?? '');
 if ($status !== '' && !in_array($status, ['paid', 'partial', 'unpaid'], true)) {
     $status = '';
 }
+$goods_statuses = purchase_goods_statuses();
+$goods_status = (string)($_GET['goods_status'] ?? '');
+if ($goods_status !== '' && !isset($goods_statuses[$goods_status])) {
+    $goods_status = '';
+}
 $date_from = trim((string)($_GET['from'] ?? ''));
 $date_to = trim((string)($_GET['to'] ?? ''));
 $valid_date = function (string $value): bool {
@@ -44,11 +49,23 @@ if (is_godown_manager()) {
     $params[] = (int)$current_user->user_id;
     $types .= 'i';
 }
+// Brand-scoped Mini Admin: only purchases of their brand's products.
+$purchase_brand_scope = current_brand_scope();
+if ($purchase_brand_scope !== '') {
+    $sql .= " AND pr.brand = ?";
+    $params[] = $purchase_brand_scope;
+    $types .= 's';
+}
 
 if ($supplier_filter > 0) {
     $sql .= " AND pu.supplier_id = ?";
     $params[] = $supplier_filter;
     $types .= 'i';
+}
+if ($goods_status !== '') {
+    $sql .= " AND pu.status = ?";
+    $params[] = $goods_status;
+    $types .= 's';
 }
 if ($date_from !== '') {
     $sql .= " AND pu.purchase_date >= ?";
@@ -106,7 +123,7 @@ $cur = tenant_currency();
 <div class="page-head">
     <div>
         <h1 class="page-title">Purchases</h1>
-        <div class="page-sub"><?php echo count($purchases); ?> purchase(s) match current filters.</div>
+        <div class="page-sub"><?php echo count($purchases); ?> purchase(s) match current filters. Purchases record supplier goods and do not change stock automatically.</div>
     </div>
     <a href="purchase-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> New Purchase</a>
 </div>
@@ -168,10 +185,16 @@ $cur = tenant_currency();
                 <option value="partial" <?php echo $status === 'partial' ? 'selected' : ''; ?>>Partially Paid</option>
                 <option value="unpaid" <?php echo $status === 'unpaid' ? 'selected' : ''; ?>>Unpaid</option>
             </select>
+            <select name="goods_status" class="form-control form-control-sm mr-2 mb-1">
+                <option value="">All Goods Statuses</option>
+                <?php foreach ($goods_statuses as $status_key => $status_label): ?>
+                    <option value="<?php echo e($status_key); ?>" <?php echo $goods_status === $status_key ? 'selected' : ''; ?>><?php echo e($status_label); ?></option>
+                <?php endforeach; ?>
+            </select>
             <input type="date" name="from" class="form-control form-control-sm mr-2 mb-1" value="<?php echo e($date_from); ?>" title="From date">
             <input type="date" name="to" class="form-control form-control-sm mr-2 mb-1" value="<?php echo e($date_to); ?>" title="To date">
             <button type="submit" class="btn btn-sm btn-primary mb-1"><i class="fa fa-filter mr-1"></i> Filter</button>
-            <?php if ($q !== '' || $supplier_filter > 0 || $status !== '' || $date_from !== '' || $date_to !== ''): ?>
+            <?php if ($q !== '' || $supplier_filter > 0 || $status !== '' || $goods_status !== '' || $date_from !== '' || $date_to !== ''): ?>
                 <a href="purchases.php" class="btn btn-sm btn-light mb-1 ml-2">Clear</a>
             <?php endif; ?>
         </form>
@@ -188,6 +211,7 @@ $cur = tenant_currency();
                         <th>Product Name</th>
                         <th class="text-right">Quantity</th>
                         <th>Supplier Name</th>
+                        <th>Goods Status</th>
                         <th class="text-right">Amount Paid</th>
                         <th class="text-right">Amount Remained</th>
                         <th class="text-right">Total</th>
@@ -196,7 +220,7 @@ $cur = tenant_currency();
                 </thead>
                 <tbody>
                     <tr class="table-top-summary">
-                        <td colspan="3" class="text-dark font-weight-bold">
+                        <td colspan="4" class="text-dark font-weight-bold">
                             <i class="fa fa-calculator mr-1 text-muted"></i> Summary (<span id="purchaseListCount"><?php echo count($purchases); ?></span> purchases shown):
                         </td>
                         <td class="text-right text-success font-weight-bold" id="topTotalPaid">
@@ -223,6 +247,10 @@ $cur = tenant_currency();
                             </td>
                             <td class="text-right"><?php echo e(format_quantity($row['quantity'])); ?></td>
                             <td><?php echo e($row['supplier_name'] ?: '—'); ?></td>
+                            <td>
+                                <?php $row_goods_status = (string)($row['status'] ?? 'in_production'); ?>
+                                <span class="badge badge-<?php echo e(purchase_goods_status_class($row_goods_status)); ?>"><?php echo e(purchase_goods_status_label($row_goods_status)); ?></span>
+                            </td>
                             <td class="text-right text-success"><?php echo e(money($paid, $cur)); ?></td>
                             <td class="text-right text-danger"><?php echo e(money($remained, $cur)); ?></td>
                             <td class="text-right font-weight-semibold"><?php echo e(money($total, $cur)); ?></td>
@@ -231,6 +259,17 @@ $cur = tenant_currency();
                                 echo row_action_menu([
                                     ['label' => 'View purchase', 'icon' => 'fa-eye', 'href' => 'purchase-view.php?id=' . (int)$row['purchase_id']],
                                     ['label' => 'Edit purchase', 'icon' => 'fa-pencil', 'href' => 'purchase-edit.php?id=' . (int)$row['purchase_id']],
+                                    [
+                                        'label' => 'Update goods status',
+                                        'icon' => 'fa-truck',
+                                        'attrs' => [
+                                            'data-toggle' => 'modal',
+                                            'data-target' => '#purchaseStatusModal',
+                                            'data-purchase-id' => (int)$row['purchase_id'],
+                                            'data-purchase-label' => 'Purchase #' . (int)$row['purchase_id'],
+                                            'data-status' => $row_goods_status,
+                                        ],
+                                    ],
                                     ['type' => 'divider'],
                                     [
                                         'label' => 'Delete purchase',
@@ -245,7 +284,7 @@ $cur = tenant_currency();
                         </tr>
                     <?php endforeach; ?>
                     <?php if (!$purchases): ?>
-                        <tr><td colspan="7" class="text-center text-muted py-4">No purchases recorded yet. <a href="purchase-add.php">Record the first purchase</a>.</td></tr>
+                        <tr><td colspan="8" class="text-center text-muted py-4">No purchases recorded yet. <a href="purchase-add.php">Record the first purchase</a>.</td></tr>
                     <?php endif; ?>
                 </tbody>
             </table>
@@ -290,6 +329,47 @@ $cur = tenant_currency();
 
         $table.on('init.dt draw.dt', recalcTopSummary);
         recalcTopSummary();
+    });
+</script>
+
+<div class="modal fade" id="purchaseStatusModal" tabindex="-1" role="dialog" aria-labelledby="purchaseStatusModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <form method="POST" action="purchase-status.php">
+                <?php echo csrf_field(); ?>
+                <input type="hidden" name="action" value="update_status">
+                <input type="hidden" name="purchase_id" id="purchaseStatusId" value="">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="purchaseStatusModalLabel"><i class="fa fa-truck mr-1"></i> Update Goods Status</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Purchase <strong id="purchaseStatusLabel"></strong></p>
+                    <div class="form-group mb-0">
+                        <label for="purchaseStatusSelect">Goods Status</label>
+                        <select name="status" id="purchaseStatusSelect" class="form-control" required>
+                            <?php foreach ($goods_statuses as $status_key => $status_label): ?>
+                                <option value="<?php echo e($status_key); ?>"><?php echo e($status_label); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fa fa-save mr-1"></i> Save Status</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+    $('#purchaseStatusModal').on('show.bs.modal', function (event) {
+        var $button = $(event.relatedTarget);
+        $('#purchaseStatusId').val($button.data('purchase-id'));
+        $('#purchaseStatusLabel').text($button.data('purchase-label'));
+        $('#purchaseStatusSelect').val($button.data('status'));
     });
 </script>
 

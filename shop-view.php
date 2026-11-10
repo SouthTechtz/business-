@@ -16,19 +16,23 @@ if ($requested_shop_id <= 0) {
 }
 $shop_id = $requested_shop_id;
 $shop = assert_shop_access($shop_id, !is_shop_manager());
+$shop_brand_value = trim((string)($shop['brand'] ?? ''));
+$shop_opening_sales = shop_opening_sales($shop_id, $tenant_id);
 $_SESSION['active_request_destination'] = ['type' => 'shop', 'id' => $shop_id];
 $request_stock_enabled = (int)$shop['is_active'] === 1 && can('request_godown_transfers');
 $request_source_locations = [];
 if ($request_stock_enabled) {
+    $request_brand_scope = current_brand_scope();
+    $request_brand_sql = $request_brand_scope !== '' ? " AND (w.location_type = 'godown' OR s.brand = ?)" : '';
     $request_source_locations = fetch_all(
         "SELECT w.warehouse_id, w.name warehouse_name, w.code warehouse_code,
                 w.location_type, s.shop_id, s.name shop_name, s.code shop_code
            FROM warehouses w
            LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
           WHERE w.tenant_id = ? AND w.location_type IN ('godown', 'store') AND w.is_active = 1
-            AND (w.location_type = 'godown' OR s.is_active = 1)
+            AND (w.location_type = 'godown' OR s.is_active = 1){$request_brand_sql}
           ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, s.name, w.name",
-        $tenant_id
+        ...($request_brand_scope !== '' ? [$tenant_id, $request_brand_scope] : [$tenant_id])
     );
     $request_transfer_action = 'godown-transfer-add.php?' . http_build_query(['request_shop_id' => $shop_id]);
     $request_transfer_context = ['request_shop_id' => $shop_id];
@@ -54,42 +58,118 @@ $capital = 0.0;
 $expected_sales_value = 0.0;
 $low_stock = 0;
 $out_of_stock = 0;
+
+/* Stock held in this shop's inventory locations, grouped by product. */
+$stock_by_product = [];
 if ($warehouse_ids) {
     $ph = implode(",", array_fill(0, count($warehouse_ids), "?"));
     $params = array_merge([$tenant_id], $warehouse_ids);
-    $stock_rows = fetch_all(
-        "SELECT s.warehouse_id, w.name warehouse_name, p.product_id, p.name product_name, p.code product_code,
-                p.sku, p.purchase_price, p.sale_price, p.min_stock_level, s.quantity, s.reorder_level, s.last_counted_at
+    $raw_stock_rows = fetch_all(
+        "SELECT s.warehouse_id, w.name warehouse_name, w.location_type, s.product_id,
+                s.quantity, s.reorder_level, s.last_counted_at
            FROM inventory_stock s
-           JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
            JOIN warehouses w ON w.warehouse_id = s.warehouse_id AND w.tenant_id = s.tenant_id
           WHERE s.tenant_id = ? AND s.warehouse_id IN ($ph)
-          ORDER BY w.name, p.name",
+          ORDER BY w.name",
         ...$params
     );
 
-    $agg = [];
-    foreach ($stock_rows as $r) {
-        $pid = (int)$r["product_id"];
-        if (!isset($agg[$pid])) {
-            $agg[$pid] = [
-                "qty" => 0.0,
-                "min" => (float)$r["min_stock_level"],
-                "sale_price" => (float)$r["sale_price"],
+    // The shop may hold the same product in both its Store and Shop Inventory
+    // locations. Combine those rows so the product is listed only once, with
+    // the total quantity across every location in this shop.
+    foreach ($raw_stock_rows as $r) {
+        $pid = (int)$r['product_id'];
+        if (!isset($stock_by_product[$pid])) {
+            $stock_by_product[$pid] = [
+                'quantity' => 0.0,
+                'reorder_level' => 0.0,
+                'last_counted_at' => null,
+                'locations' => [],
             ];
         }
-        $agg[$pid]["qty"] += (float)$r["quantity"];
-        $capital += (float)$r["quantity"] * (float)$r["purchase_price"];
-    }
-    $total_products = count($agg);
-    foreach ($agg as $a) {
-        $total_qty += $a["qty"];
-        $expected_sales_value += max(0, $a["qty"]) * $a["sale_price"];
-        if ($a["qty"] <= 0) {
-            $out_of_stock++;
-        } elseif ($a["qty"] <= $a["min"]) {
-            $low_stock++;
+        $grouped = &$stock_by_product[$pid];
+        $grouped['quantity'] += (float)$r['quantity'];
+        $grouped['reorder_level'] += (float)$r['reorder_level'];
+        if (!empty($r['last_counted_at'])) {
+            $counted_at = strtotime($r['last_counted_at']);
+            $current_counted_at = $grouped['last_counted_at'] ? strtotime($grouped['last_counted_at']) : null;
+            if ($current_counted_at === null || $counted_at > $current_counted_at) {
+                $grouped['last_counted_at'] = $r['last_counted_at'];
+            }
         }
+        $location_name = ($r['location_type'] === 'shop') ? 'Shop Inventory' : (string)$r['warehouse_name'];
+        if ($location_name !== '' && !in_array($location_name, $grouped['locations'], true)) {
+            $grouped['locations'][] = $location_name;
+        }
+        unset($grouped);
+    }
+    foreach ($stock_by_product as &$stock_row) {
+        usort($stock_row['locations'], function ($a, $b) {
+            if ($a === 'Shop Inventory') return -1;
+            if ($b === 'Shop Inventory') return 1;
+            return strcasecmp($a, $b);
+        });
+        $stock_row['warehouse_name'] = implode(', ', $stock_row['locations']);
+    }
+    unset($stock_row);
+}
+
+/*
+ * List every active product for this shop's brand, even when this shop has no
+ * inventory_stock row yet. Products from other brands stay hidden on a
+ * branded shop; an unbranded shop continues to show every product.
+ */
+$product_params = [$tenant_id];
+$product_sql = "SELECT p.product_id, p.name product_name, p.code product_code, p.sku,
+                       p.purchase_price, p.sale_price, p.min_stock_level
+                  FROM products p
+                 WHERE p.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0";
+if ($shop_brand_value !== '') {
+    $product_sql .= " AND p.brand = ?";
+    $product_params[] = $shop_brand_value;
+}
+$product_sql .= " ORDER BY p.name, p.product_id";
+$shop_products = fetch_all($product_sql, ...$product_params);
+
+foreach ($shop_products as $product_row) {
+    $pid = (int)$product_row['product_id'];
+    $stock = $stock_by_product[$pid] ?? [];
+    $stock_rows[] = [
+        'warehouse_name' => (string)($stock['warehouse_name'] ?? ''),
+        'product_id' => $pid,
+        'product_name' => $product_row['product_name'],
+        'product_code' => $product_row['product_code'],
+        'sku' => $product_row['sku'],
+        'purchase_price' => $product_row['purchase_price'],
+        'sale_price' => $product_row['sale_price'],
+        'min_stock_level' => $product_row['min_stock_level'],
+        'quantity' => (float)($stock['quantity'] ?? 0),
+        'reorder_level' => (float)($stock['reorder_level'] ?? 0),
+        'last_counted_at' => $stock['last_counted_at'] ?? null,
+    ];
+}
+
+$agg = [];
+foreach ($stock_rows as $r) {
+    $pid = (int)$r["product_id"];
+    if (!isset($agg[$pid])) {
+        $agg[$pid] = [
+            "qty" => 0.0,
+            "min" => (float)$r["min_stock_level"],
+            "sale_price" => (float)$r["sale_price"],
+        ];
+    }
+    $agg[$pid]["qty"] += (float)$r["quantity"];
+    $capital += (float)$r["quantity"] * (float)$r["purchase_price"];
+}
+$total_products = count($agg);
+foreach ($agg as $a) {
+    $total_qty += $a["qty"];
+    $expected_sales_value += max(0, $a["qty"]) * $a["sale_price"];
+    if ($a["qty"] <= 0) {
+        $out_of_stock++;
+    } elseif ($a["qty"] <= $a["min"]) {
+        $low_stock++;
     }
 }
 
@@ -130,7 +210,7 @@ $cur = tenant_currency();
 <div class="page-head">
     <div>
         <h1 class="page-title"><?php echo e($shop['name']); ?> — Shop Dashboard</h1>
-        <div class="page-sub">Shop code: <?php echo e($shop['code']); ?> &middot; <?php echo count($warehouses); ?> inventory location(s) &middot; <?php echo count($stock_rows); ?> stock row(s)</div>
+        <div class="page-sub">Shop code: <?php echo e($shop['code']); ?> &middot; Brand: <?php echo e(!empty($shop['brand']) ? brand_label($shop['brand']) : 'All brands'); ?> &middot; <?php echo count($warehouses); ?> inventory location(s) &middot; <?php echo count($stock_rows); ?> stock row(s)</div>
     </div>
     <?php if ($request_stock_enabled): ?>
         <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#requestStockModal">
@@ -181,6 +261,12 @@ $cur = tenant_currency();
             <div class="h4 mb-0"><?php echo $active_transfers; ?></div>
         </div></div>
     </div>
+    <div class="col-md-3 col-sm-6 mb-2">
+        <div class="card"><div class="card-body">
+            <div class="text-muted small">Opening Sales</div>
+            <div class="h4 mb-0"><?php echo e(money($shop_opening_sales, $cur)); ?></div>
+        </div></div>
+    </div>
 </div>
 
 <div class="card mb-3">
@@ -196,7 +282,13 @@ $cur = tenant_currency();
                 <tbody>
                     <?php foreach ($stock_rows as $r): ?>
                         <tr>
-                            <td><?php echo e($r['warehouse_name']); ?></td>
+                            <td>
+                                <?php if ($r['warehouse_name'] !== ''): ?>
+                                    <?php echo e($r['warehouse_name']); ?>
+                                <?php else: ?>
+                                    <span class="text-muted">No stock</span>
+                                <?php endif; ?>
+                            </td>
                             <td class="font-weight-semibold"><?php echo e($r['product_name']); ?></td>
                             <td><small class="text-muted"><?php echo e($r['product_code']); ?><?php echo $r['sku'] ? ' / ' . e($r['sku']) : ''; ?></small></td>
                             <td class="text-right"><?php echo e(format_quantity($r['quantity'])); ?></td>

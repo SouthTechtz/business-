@@ -1,9 +1,20 @@
 ﻿<?php
 require_once "header.php";
 require_once "auth_check.php";
+require_once "capital-helpers.php";
 require_permission_any(["manage_pos", "manage_invoices"]);
 $page_title = "Sales Returns";
 $tenant_id = (int)$current_user->tenant_id;
+
+$refund_methods = fetch_all("SELECT * FROM payment_methods WHERE tenant_id = ? ORDER BY payment_method_id", $tenant_id);
+$default_refund_method = 0;
+foreach ($refund_methods as $rm) {
+    if ((string)($rm["account_type"] ?? "bank") === "cash") {
+        $default_refund_method = (int)$rm["payment_method_id"];
+        break;
+    }
+}
+$refund_banks = capital_bank_names($tenant_id, current_brand_scope());
 
 $receipt = trim((string)($_GET["receipt"] ?? ""));
 $sale = null;
@@ -93,7 +104,7 @@ $return_token = bin2hex(random_bytes(16));
     <div class="card-header"><h5 class="card-title mb-0">Original Sale: <?php echo e($sale_type === "pos" ? $sale["order_number"] : $sale["invoice_number"]); ?></h5></div>
     <div class="card-body">
         <p>Customer: <?php echo e(trim(($sale["first_name"] ?? "") . " " . ($sale["last_name"] ?? "") . " " . ($sale["company_name"] ?? ""))); ?> | Shop/Store: <?php echo e(trim(($sale["shop_name"] ?? "") . " / " . ($sale["store_name"] ?? ""), " /")); ?> | Date: <?php echo e($sale_type === "pos" ? $sale["order_date"] : $sale["issue_date"]); ?></p>
-        <form method="POST" action="sales-return-add.php" onsubmit="return confirm("Process this return?");">
+        <form method="POST" action="sales-return-add.php" onsubmit="return confirm('Process this return?');">
             <?php echo csrf_field(); ?>
             <input type="hidden" name="source_type" value="<?php echo e($sale_type); ?>">
             <input type="hidden" name="source_id" value="<?php echo (int)($sale_type === "pos" ? $sale["order_id"] : $sale["invoice_id"]); ?>">
@@ -130,6 +141,32 @@ $return_token = bin2hex(random_bytes(16));
                 </tbody>
             </table>
             <small class="text-muted d-block mb-2">Returned quantities are recorded as returned stock. They are not added back to sellable inventory, and the refund amount reduces sales.</small>
+            <div class="row">
+                <div class="col-md-6 form-group">
+                    <label>Refund Method</label>
+                    <select name="refund_method_id" id="refundMethod" class="form-control">
+                        <option value="0" <?php echo $default_refund_method === 0 ? "selected" : ""; ?>>Cash (default)</option>
+                        <?php foreach ($refund_methods as $rm): ?>
+                            <option value="<?php echo (int)$rm["payment_method_id"]; ?>"
+                                    data-account-type="<?php echo e($rm["account_type"] ?? "bank"); ?>"
+                                    <?php echo $default_refund_method === (int)$rm["payment_method_id"] ? "selected" : ""; ?>>
+                                <?php echo e($rm["name"]); ?><?php echo (string)($rm["account_type"] ?? "bank") === "cash" ? " (cash)" : " (bank)"; ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small class="text-muted">Cash refunds reduce cash in hand; bank refunds reduce the bank balance.</small>
+                </div>
+                <div class="col-md-6 form-group" id="refundBankGroup" style="display:none;">
+                    <label>Refund Bank Account <span class="text-muted font-weight-normal">(optional)</span></label>
+                    <input type="text" name="refund_bank_name" id="refundBankName" class="form-control" list="refundBanks" maxlength="150" placeholder="e.g. NMB, CRDB, NBC">
+                    <datalist id="refundBanks">
+                        <?php foreach ($refund_banks as $refund_bank): ?>
+                            <option value="<?php echo e($refund_bank); ?>"></option>
+                        <?php endforeach; ?>
+                    </datalist>
+                    <small class="text-muted">Choose the bank that paid the refund. Leave blank to reduce only the brand bank total.</small>
+                </div>
+            </div>
             <button type="submit" class="btn btn-primary"><i class="fa fa-undo mr-1"></i> Process Return</button>
         </form>
     </div>
@@ -175,4 +212,20 @@ $return_token = bin2hex(random_bytes(16));
     </div>
 </div>
 
+<script>
+    $(function () {
+        var method = document.getElementById('refundMethod');
+        var group = document.getElementById('refundBankGroup');
+        var input = document.getElementById('refundBankName');
+        if (!method || !group || !input) return;
+        function updateRefundBankField() {
+            var option = method.options[method.selectedIndex];
+            var isBank = option && option.value !== '0' && option.getAttribute('data-account-type') === 'bank';
+            group.style.display = isBank ? '' : 'none';
+            if (!isBank) input.value = '';
+        }
+        method.addEventListener('change', updateRefundBankField);
+        updateRefundBankField();
+    });
+</script>
 <?php require_once "footer.php"; ?>

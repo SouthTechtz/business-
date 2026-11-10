@@ -40,6 +40,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Delete product
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $pid = (int)$_GET['delete'];
+    $delete_row = fetch_one(
+        "SELECT brand FROM products WHERE product_id = ? AND tenant_id = ?",
+        $pid,
+        $current_user->tenant_id
+    );
+    if (!$delete_row || !brand_scope_allows($delete_row['brand'] ?? '')) {
+        http_response_code(403);
+        die('This product is not available to your brand.');
+    }
     if (fetch_one(
         "SELECT 1 FROM information_schema.tables
           WHERE table_schema = DATABASE() AND table_name = 'product_variants'"
@@ -60,6 +69,11 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
 $filter_brand = trim((string)($_GET['brand'] ?? ''));
 if ($filter_brand !== '' && $filter_brand !== '__none' && !in_array($filter_brand, product_brand_options(), true)) {
     $filter_brand = '';
+}
+// A brand-scoped Mini Admin can only list their own brand.
+$product_brand_scope = current_brand_scope();
+if ($product_brand_scope !== '') {
+    $filter_brand = $product_brand_scope;
 }
 $filter_category = (int)($_GET['category'] ?? 0);
 $filter_stock = (string)($_GET['stock'] ?? '');
@@ -205,7 +219,7 @@ require_once 'sidebar.php';
                         <label class="small mb-1">Brand</label>
                         <select name="brand" class="form-control form-control-sm">
                             <option value="">All brands</option>
-                            <?php foreach (product_brand_options() as $brand): ?>
+                            <?php foreach (brand_filter_options() as $brand): ?>
                                 <option value="<?php echo e($brand); ?>" <?php echo $filter_brand === $brand ? 'selected' : ''; ?>><?php echo e($brand); ?></option>
                             <?php endforeach; ?>
                             <option value="__none" <?php echo $filter_brand === '__none' ? 'selected' : ''; ?>>No brand</option>

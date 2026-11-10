@@ -30,6 +30,8 @@ $request_stock_enabled = (int)$store['is_active'] === 1
     && can('request_godown_transfers');
 $request_source_locations = [];
 if ($request_stock_enabled) {
+    $request_brand_scope = current_brand_scope();
+    $request_brand_sql = $request_brand_scope !== '' ? " AND (w.location_type = 'godown' OR s.brand = ?)" : '';
     $request_source_locations = fetch_all(
         "SELECT w.warehouse_id, w.name warehouse_name, w.code warehouse_code,
                 w.location_type, s.name shop_name, s.code shop_code
@@ -37,10 +39,9 @@ if ($request_stock_enabled) {
            LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
           WHERE w.tenant_id = ? AND w.warehouse_id <> ? AND w.is_active = 1
             AND w.location_type IN ('godown', 'store')
-            AND (w.location_type = 'godown' OR s.is_active = 1)
+            AND (w.location_type = 'godown' OR s.is_active = 1){$request_brand_sql}
           ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, s.name, w.name",
-        $tenant_id,
-        $warehouse_id
+        ...($request_brand_scope !== '' ? [$tenant_id, $warehouse_id, $request_brand_scope] : [$tenant_id, $warehouse_id])
     );
     $request_transfer_action = 'godown-transfer-add.php?' . http_build_query(['request_store_id' => $warehouse_id]);
     $request_transfer_context = ['request_store_id' => $warehouse_id];

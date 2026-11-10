@@ -42,6 +42,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ];
     // The barcode is always generated from the manually entered product code.
     $data['barcode'] = $data['code'];
+    // A brand-scoped Mini Admin may only create products for their own brand.
+    $brand_scope = current_brand_scope();
+    if ($brand_scope !== '') {
+        $data['brand'] = $brand_scope;
+    }
     $initial_stock = (float)($_POST['initial_stock'] ?? 0);
 
     $duplicate_code = $data['code'] !== ''
@@ -168,12 +173,17 @@ require_once 'sidebar.php';
                         </div>
                         <div class="col-md-4 form-group">
                             <label>Product Brand</label>
-                            <select name="brand" class="form-control">
+                            <?php $form_brand_scope = current_brand_scope(); ?>
+                            <select name="brand" class="form-control" <?php echo $form_brand_scope !== '' ? 'disabled' : ''; ?>>
                                 <option value="">— Select Brand —</option>
-                                <?php foreach (product_brand_options() as $brand): ?>
-                                    <option value="<?php echo e($brand); ?>" <?php echo (($_POST['brand'] ?? '') === $brand) ? 'selected' : ''; ?>><?php echo e($brand); ?></option>
+                                <?php foreach (($form_brand_scope !== '' ? [$form_brand_scope] : product_brand_options()) as $brand): ?>
+                                    <option value="<?php echo e($brand); ?>" <?php echo ((($_POST['brand'] ?? '') === $brand) || $form_brand_scope === $brand) ? 'selected' : ''; ?>><?php echo e($brand); ?></option>
                                 <?php endforeach; ?>
                             </select>
+                            <?php if ($form_brand_scope !== ''): ?>
+                                <input type="hidden" name="brand" value="<?php echo e($form_brand_scope); ?>">
+                                <small class="text-muted">Locked to your brand: <?php echo e(brand_label($form_brand_scope)); ?>.</small>
+                            <?php endif; ?>
                         </div>
                         <div class="col-md-4 form-group">
                             <label>Main Category</label>

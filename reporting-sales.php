@@ -330,6 +330,154 @@ function report_sales_by_product($from = '', $to = '') {
 }
 
 
+/**
+ * Sales grouped by product brand (GSP, TECHDOKTA, Unbranded).
+ * POS and invoice line items are categorised by the product's brand.
+ */
+function report_sales_by_brand($from = '', $to = '') {
+    $tenantId = report_tenant_id();
+    $rows = [];
+
+    $add = function ($key, array $values) use (&$rows) {
+        $key = trim((string)$key);
+        if ($key === '') $key = 'Unbranded';
+        if (!isset($rows[$key])) {
+            $rows[$key] = [
+                'brand_key' => $key,
+                'brand_label' => $key === 'Unbranded' ? 'Unbranded' : brand_label($key),
+                'sale_count' => 0,
+                'gross_sales' => 0.0,
+                'returned_qty' => 0.0,
+                'accepted_returns' => 0.0,
+                'opening_sales' => 0.0,
+            ];
+        }
+        foreach ($values as $field => $value) {
+            $rows[$key][$field] += $value;
+        }
+    };
+
+    // POS gross by product brand.
+    $posScope = report_sales_warehouse_condition('o', 'warehouse_id');
+    $posDate = report_date_condition('o.order_date', $from, $to);
+    $posGross = fetch_all(
+        "SELECT COALESCE(NULLIF(TRIM(p.brand), ''), 'Unbranded') brand_key,
+                COUNT(DISTINCT o.order_id) sale_count,
+                COALESCE(SUM(oi.total), 0) gross_sales
+           FROM pos_order_items oi
+           JOIN pos_orders o ON o.order_id = oi.order_id AND o.tenant_id = ?
+           LEFT JOIN products p ON p.product_id = oi.product_id AND p.tenant_id = o.tenant_id
+          WHERE o.tenant_id = ? AND o.status = 'completed'" . $posScope['sql'] . $posDate['sql'] . "
+          GROUP BY brand_key",
+        $tenantId, $tenantId, ...array_merge($posScope['params'], $posDate['params'])
+    );
+    foreach ($posGross as $row) {
+        $add($row['brand_key'], [
+            'sale_count' => (int)$row['sale_count'],
+            'gross_sales' => (float)$row['gross_sales'],
+        ]);
+    }
+
+    // POS returns by product brand.
+    $posReturnDate = report_date_condition('sr.return_date', $from, $to);
+    $posReturns = fetch_all(
+        "SELECT COALESCE(NULLIF(TRIM(p.brand), ''), 'Unbranded') brand_key,
+                COALESCE(SUM(sri.quantity), 0) returned_qty,
+                COALESCE(SUM(sri.refund_amount), 0) accepted_returns
+           FROM sales_returns sr
+           JOIN sales_return_items sri ON sri.return_id = sr.return_id AND sri.tenant_id = sr.tenant_id
+           JOIN pos_orders o ON o.order_id = sr.source_id AND o.tenant_id = sr.tenant_id
+           LEFT JOIN products p ON p.product_id = sri.product_id AND p.tenant_id = sr.tenant_id
+          WHERE sr.tenant_id = ? AND sr.source_type = 'pos' AND sr.status = 'completed'"
+            . $posScope['sql'] . $posReturnDate['sql'] . "
+          GROUP BY brand_key",
+        $tenantId, ...array_merge($posScope['params'], $posReturnDate['params'])
+    );
+    foreach ($posReturns as $row) {
+        $add($row['brand_key'], [
+            'returned_qty' => (float)$row['returned_qty'],
+            'accepted_returns' => (float)$row['accepted_returns'],
+        ]);
+    }
+
+    // Invoice gross by product brand.
+    $invScope = report_sales_warehouse_condition('i', 'warehouse_id');
+    $invDate = report_date_condition('i.issue_date', $from, $to);
+    $eligible = report_invoice_eligibility_sql('i', 'ds');
+    $invGross = fetch_all(
+        "SELECT COALESCE(NULLIF(TRIM(p.brand), ''), 'Unbranded') brand_key,
+                COUNT(DISTINCT i.invoice_id) sale_count,
+                COALESCE(SUM(ii.total), 0) gross_sales
+           FROM invoice_items ii
+           JOIN invoices i ON i.invoice_id = ii.invoice_id AND i.tenant_id = ?
+           LEFT JOIN document_statuses ds ON ds.status_id = i.status_id AND ds.tenant_id = i.tenant_id
+           LEFT JOIN products p ON p.product_id = ii.product_id AND p.tenant_id = i.tenant_id
+          WHERE i.tenant_id = ? AND $eligible" . $invScope['sql'] . $invDate['sql'] . "
+          GROUP BY brand_key",
+        $tenantId, $tenantId, ...array_merge($invScope['params'], $invDate['params'])
+    );
+    foreach ($invGross as $row) {
+        $add($row['brand_key'], [
+            'sale_count' => (int)$row['sale_count'],
+            'gross_sales' => (float)$row['gross_sales'],
+        ]);
+    }
+
+    // Invoice returns by product brand.
+    $invReturnDate = report_date_condition('sr.return_date', $from, $to);
+    $invReturns = fetch_all(
+        "SELECT COALESCE(NULLIF(TRIM(p.brand), ''), 'Unbranded') brand_key,
+                COALESCE(SUM(sri.quantity), 0) returned_qty,
+                COALESCE(SUM(sri.refund_amount), 0) accepted_returns
+           FROM sales_returns sr
+           JOIN sales_return_items sri ON sri.return_id = sr.return_id AND sri.tenant_id = sr.tenant_id
+           JOIN invoices i ON i.invoice_id = sr.source_id AND i.tenant_id = sr.tenant_id
+           LEFT JOIN products p ON p.product_id = sri.product_id AND p.tenant_id = sr.tenant_id
+          WHERE sr.tenant_id = ? AND sr.source_type = 'invoice' AND sr.status = 'completed'"
+            . $invScope['sql'] . $invReturnDate['sql'] . "
+          GROUP BY brand_key",
+        $tenantId, ...array_merge($invScope['params'], $invReturnDate['params'])
+    );
+    foreach ($invReturns as $row) {
+        $add($row['brand_key'], [
+            'returned_qty' => (float)$row['returned_qty'],
+            'accepted_returns' => (float)$row['accepted_returns'],
+        ]);
+    }
+
+    // Shop-specific opening balances are grouped under the shop's brand.
+    foreach (shop_opening_balances($tenantId) as $shopOpeningRow) {
+        $shopOpeningAmount = (float)($shopOpeningRow['opening_sales'] ?? 0);
+        if ($shopOpeningAmount <= 0) {
+            continue;
+        }
+        $shopOpeningBrand = trim((string)($shopOpeningRow['shop_brand'] ?? ''));
+        $shopOpeningKey = $shopOpeningBrand !== '' ? $shopOpeningBrand : 'Unbranded';
+        if (!isset($rows[$shopOpeningKey])) {
+            $rows[$shopOpeningKey] = [
+                'brand_key' => $shopOpeningKey,
+                'brand_label' => $shopOpeningKey === 'Unbranded' ? 'Unbranded' : brand_label($shopOpeningKey),
+                'sale_count' => 0,
+                'gross_sales' => 0.0,
+                'returned_qty' => 0.0,
+                'accepted_returns' => 0.0,
+                'opening_sales' => 0.0,
+            ];
+        }
+        $rows[$shopOpeningKey]['opening_sales'] = (float)($rows[$shopOpeningKey]['opening_sales'] ?? 0) + $shopOpeningAmount;
+    }
+
+    foreach ($rows as &$row) {
+        $row['opening_sales'] = (float)($row['opening_sales'] ?? 0);
+        $row['net_sales'] = $row['gross_sales'] - $row['accepted_returns'];
+        $row['total_sales'] = $row['net_sales'] + $row['opening_sales'];
+    }
+    unset($row);
+    uasort($rows, fn($a, $b) => $b['total_sales'] <=> $a['total_sales'] ?: strcmp($a['brand_label'], $b['brand_label']));
+    return array_values($rows);
+}
+
+
 function report_pos_sale_rows($from = '', $to = '', array $filters = []) {
     $tenantId = report_tenant_id();
     $scope = report_sales_warehouse_condition('o', 'warehouse_id');
@@ -337,7 +485,11 @@ function report_pos_sale_rows($from = '', $to = '', array $filters = []) {
     $returnDate = report_date_condition('sr.return_date', $from, $to);
 
     $sql = "SELECT o.*, c.first_name, c.last_name, c.company_name,
-                   w.name location_name, s.name shop_name,
+                   w.name location_name, s.name shop_name, s.brand shop_brand,
+                   (SELECT GROUP_CONCAT(DISTINCT bp.brand SEPARATOR ',')
+                      FROM pos_order_items boi
+                      JOIN products bp ON bp.product_id = boi.product_id AND bp.tenant_id = o.tenant_id
+                     WHERE boi.order_id = o.order_id AND bp.brand IS NOT NULL AND bp.brand <> '') product_brands,
                    COALESCE(oi.items_total, 0) items_total,
                    COALESCE(oi.items_count, 0) items_count,
                    COALESCE(pay.amount_paid, 0) amount_paid,
@@ -387,6 +539,18 @@ function report_pos_sale_rows($from = '', $to = '', array $filters = []) {
     if (!empty($filters['customer_id'])) {
         $sql .= ' AND o.contact_id = ?';
         $params[] = (int)$filters['customer_id'];
+    }
+    if (!empty($filters['brand'])) {
+        $sql .= " AND (
+            s.brand = ?
+            OR (s.brand IS NULL AND EXISTS (
+                SELECT 1 FROM pos_order_items bfi
+                JOIN products bfp ON bfp.product_id = bfi.product_id AND bfp.tenant_id = o.tenant_id
+                WHERE bfi.order_id = o.order_id AND bfp.brand = ?
+            ))
+        )";
+        $params[] = (string)$filters['brand'];
+        $params[] = (string)$filters['brand'];
     }
     $sql .= ' ORDER BY o.order_date DESC, o.order_id DESC';
     return fetch_all($sql, ...$params);

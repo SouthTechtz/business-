@@ -17,6 +17,10 @@ if (!$product) {
     http_response_code(404);
     die('Product not found.');
 }
+if (!brand_scope_allows($product['brand'] ?? '')) {
+    http_response_code(403);
+    die('This product belongs to another brand.');
+}
 
 $labels = (int)($_GET['labels'] ?? 1);
 $labels = max(1, min(60, $labels));

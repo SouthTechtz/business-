@@ -23,6 +23,10 @@ if (!$lead) {
     flash_set('danger', 'Lead not found.');
     redirect('leads.php');
 }
+if (!lead_is_visible($lead)) {
+    http_response_code(403);
+    die('This lead belongs to another brand.');
+}
 
 $can_orders = can('manage_orders');
 $lead_customer_name = lead_customer_display_name($lead);

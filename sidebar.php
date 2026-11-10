@@ -48,7 +48,7 @@ $is_shop_manager = is_shop_manager();
             </li>
             <?php endif; ?>
             <?php if (can("manage_purchases")): ?>
-            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["purchases.php", "purchase-add.php", "purchase-edit.php", "purchase-view.php", "purchase-delete.php"]) ? "active" : ""; ?>">
+            <li class="<?php echo in_array(basename($_SERVER["PHP_SELF"]), ["purchases.php", "purchase-add.php", "purchase-edit.php", "purchase-view.php", "purchase-delete.php", "purchase-status.php"]) ? "active" : ""; ?>">
                 <a href="purchases.php"><i class="fa fa-shopping-cart"></i><span>Purchases</span></a>
             </li>
             <?php endif; ?>
@@ -67,7 +67,7 @@ $is_shop_manager = is_shop_manager();
             <?php endif; ?>
         </ul>
         <?php else: ?>
-        <?php if (tenant_admin_scope() && can("view_dashboard")): ?>
+        <?php if ((tenant_admin_scope() || is_brand_admin()) && can("view_dashboard")): ?>
         <div class="sidebar-menu-title">Overview</div>
         <ul class="sidebar-menu">
             <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "dashboard.php" ? "active" : ""; ?>">
@@ -209,7 +209,21 @@ $is_shop_manager = is_shop_manager();
                 <a href="reports.php"><i class="fa fa-bar-chart"></i><span>Reports</span></a>
             </li>
             <?php endif; ?>
+            <?php if (tenant_admin_scope() && can("manage_settings")): ?>
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "shop-opening-balances.php" ? "active" : ""; ?>">
+                <a href="shop-opening-balances.php"><i class="fa fa-balance-scale"></i><span>Shop Opening Balances</span></a>
+            </li>
+            <?php endif; ?>
         </ul>
+
+        <?php if (can_manage_capital()): ?>
+        <div class="sidebar-menu-title">Capital</div>
+        <ul class="sidebar-menu">
+            <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "capital.php" ? "active" : ""; ?>">
+                <a href="capital.php"><i class="fa fa-bank"></i><span>Capital</span></a>
+            </li>
+        </ul>
+        <?php endif; ?>
 
         <div class="sidebar-menu-title">Administration &amp; System</div>
         <ul class="sidebar-menu">

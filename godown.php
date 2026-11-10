@@ -561,11 +561,16 @@ foreach (fetch_all(
 }
 
 $store_stock = [];
-foreach (fetch_all(
-    "SELECT warehouse_id, COUNT(*) line_count, COALESCE(SUM(quantity), 0) qty FROM inventory_stock
-      WHERE tenant_id = ? GROUP BY warehouse_id",
-    $tenant_id
-) as $row) {
+$godown_brand_cond = brand_scope_condition('p.brand');
+$store_stock_sql = "SELECT s.warehouse_id, COUNT(*) line_count, COALESCE(SUM(s.quantity), 0) qty
+                      FROM inventory_stock s";
+$store_stock_params = [$tenant_id];
+if ($godown_brand_cond['sql'] !== '') {
+    $store_stock_sql .= " JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id";
+}
+$store_stock_sql .= " WHERE s.tenant_id = ?" . $godown_brand_cond['sql'] . " GROUP BY s.warehouse_id";
+$store_stock_params = array_merge($store_stock_params, $godown_brand_cond['params']);
+foreach (fetch_all($store_stock_sql, ...$store_stock_params) as $row) {
     $store_stock[(int)$row['warehouse_id']] = [
         'lines' => (int)$row['line_count'],
         'qty' => (float)$row['qty'],
@@ -574,15 +579,15 @@ foreach (fetch_all(
 
 $stock_summary = ['qty' => 0.0, 'products' => 0, 'expected_sales_value' => 0.0];
 if ($godown) {
+    $summary_brand = brand_scope_condition('p.brand');
     $row = fetch_one(
         "SELECT COALESCE(SUM(s.quantity), 0) qty,
                 COUNT(DISTINCT CASE WHEN s.quantity <> 0 THEN s.product_id END) products,
                 COALESCE(SUM(CASE WHEN s.quantity > 0 THEN s.quantity * p.sale_price ELSE 0 END), 0) expected_sales_value
            FROM inventory_stock s
            JOIN products p ON p.product_id = s.product_id AND p.tenant_id = s.tenant_id
-          WHERE s.tenant_id = ? AND s.warehouse_id = ?",
-        $tenant_id,
-        (int)$godown['warehouse_id']
+          WHERE s.tenant_id = ? AND s.warehouse_id = ?{$summary_brand['sql']}",
+        ...array_merge([$tenant_id, (int)$godown['warehouse_id']], $summary_brand['params'])
     ) ?: [];
     $stock_summary['qty'] = (float)($row['qty'] ?? 0);
     $stock_summary['products'] = (int)($row['products'] ?? 0);
@@ -621,6 +626,13 @@ $product_from = " FROM products p
         AND s.tenant_id = p.tenant_id AND s.warehouse_id = ?";
 $product_where = " WHERE p.tenant_id = ? AND p.is_service = 0";
 $product_params = [$godown ? (int)$godown['warehouse_id'] : 0, $tenant_id];
+
+// Brand-scoped Mini Admin: the shared Godown shows only their brand's stock.
+$godown_brand_scope = current_brand_scope();
+if ($godown_brand_scope !== '') {
+    $product_where .= ' AND p.brand = ?';
+    $product_params[] = $godown_brand_scope;
+}
 
 if ($q !== '') {
     $like = '%' . $q . '%';

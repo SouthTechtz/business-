@@ -11,6 +11,11 @@ $purchase_params = [$id, $tenant_id];
 if (is_godown_manager()) {
     $purchase_params[] = (int)$current_user->user_id;
 }
+$purchase_brand_scope = current_brand_scope();
+if ($purchase_brand_scope !== '') {
+    $purchase_scope .= ' AND pr.brand = ?';
+    $purchase_params[] = $purchase_brand_scope;
+}
 $row = fetch_one("SELECT pu.*, pr.name product_name, pr.code product_code, s.company_name supplier_name
                    FROM purchases pu
                    JOIN products pr ON pr.product_id = pu.product_id AND pr.tenant_id = pu.tenant_id
@@ -49,6 +54,10 @@ $remained = $total - $paid;
             <dd class="col-sm-9"><?php echo e(money($total, $cur)); ?></dd>
             <dt class="col-sm-3">Purchase Date</dt>
             <dd class="col-sm-9"><?php echo e($row['purchase_date'] ?: '—'); ?></dd>
+            <dt class="col-sm-3">Goods Status</dt>
+            <dd class="col-sm-9">
+                <span class="badge badge-<?php echo e(purchase_goods_status_class($row['status'] ?? 'in_production')); ?>"><?php echo e(purchase_goods_status_label($row['status'] ?? 'in_production')); ?></span>
+            </dd>
             <dt class="col-sm-3">Notes</dt>
             <dd class="col-sm-9"><?php echo e($row['notes'] ?: '—'); ?></dd>
         </dl>

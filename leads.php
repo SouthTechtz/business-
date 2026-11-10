@@ -12,12 +12,23 @@ if ($status !== '' && !isset($statuses[$status])) {
 $assigned = (string)($_GET['assigned'] ?? '');
 $q = trim((string)($_GET['q'] ?? ''));
 $follow = (string)($_GET['follow'] ?? '');
+$brand_filter = trim((string)($_GET['brand'] ?? ''));
+if ($brand_filter !== '' && !in_array($brand_filter, product_brand_options(), true)) {
+    $brand_filter = '';
+}
+$brand_scope = shop_brand_scope_for_user();
 
 $sql = "SELECT l.*,
                (SELECT GROUP_CONCAT(DISTINCT sli.product_name_snapshot SEPARATOR ', ')
                   FROM storefront_lead_request_items sli
                   JOIN storefront_lead_requests slr ON slr.request_id = sli.request_id AND slr.tenant_id = sli.tenant_id
                  WHERE slr.lead_id = l.lead_id AND slr.tenant_id = l.tenant_id) product_names,
+               (SELECT GROUP_CONCAT(DISTINCT p.brand SEPARATOR ', ')
+                  FROM storefront_lead_request_items sli
+                  JOIN storefront_lead_requests slr ON slr.request_id = sli.request_id AND slr.tenant_id = sli.tenant_id
+                  JOIN products p ON p.product_id = sli.product_id AND p.tenant_id = sli.tenant_id
+                 WHERE slr.lead_id = l.lead_id AND slr.tenant_id = l.tenant_id
+                   AND p.brand IS NOT NULL AND p.brand <> '') product_brands,
                (SELECT COALESCE(SUM(sli.quantity), 0)
                   FROM storefront_lead_request_items sli
                   JOIN storefront_lead_requests slr ON slr.request_id = sli.request_id AND slr.tenant_id = sli.tenant_id
@@ -60,6 +71,38 @@ if ($q !== '') {
     $sql .= " AND (l.lead_number LIKE ? OR l.contact_name LIKE ? OR l.company_name LIKE ?
                   OR l.phone LIKE ? OR l.email LIKE ? OR l.location LIKE ?)";
     array_push($params, $like, $like, $like, $like, $like, $like);
+}
+
+// Branded leads are only visible to shops selling the same brand. Leads with no
+// brand information stay visible so older leads are not hidden.
+$branded_lead_exists = "EXISTS (SELECT 1 FROM storefront_lead_request_items bi
+                                 JOIN storefront_lead_requests br ON br.request_id = bi.request_id AND br.tenant_id = bi.tenant_id
+                                 JOIN products bp ON bp.product_id = bi.product_id AND bp.tenant_id = bi.tenant_id
+                                WHERE br.lead_id = l.lead_id AND br.tenant_id = l.tenant_id
+                                  AND bp.brand IS NOT NULL AND bp.brand <> '')";
+if ($brand_filter !== '') {
+    $sql .= " AND EXISTS (SELECT 1 FROM storefront_lead_request_items fi
+                           JOIN storefront_lead_requests fr ON fr.request_id = fi.request_id AND fr.tenant_id = fi.tenant_id
+                           JOIN products fp ON fp.product_id = fi.product_id AND fp.tenant_id = fi.tenant_id
+                          WHERE fr.lead_id = l.lead_id AND fr.tenant_id = l.tenant_id
+                            AND fp.brand = ?)";
+    $params[] = $brand_filter;
+}
+if ($brand_scope !== null) {
+    if (!$brand_scope) {
+        $sql .= " AND NOT $branded_lead_exists";
+    } else {
+        $brand_placeholders = implode(',', array_fill(0, count($brand_scope), '?'));
+        $sql .= " AND (NOT $branded_lead_exists OR EXISTS (
+                            SELECT 1 FROM storefront_lead_request_items si
+                              JOIN storefront_lead_requests sr ON sr.request_id = si.request_id AND sr.tenant_id = si.tenant_id
+                              JOIN products sp ON sp.product_id = si.product_id AND sp.tenant_id = si.tenant_id
+                             WHERE sr.lead_id = l.lead_id AND sr.tenant_id = l.tenant_id
+                               AND sp.brand IN ($brand_placeholders)))";
+        foreach ($brand_scope as $scope_brand) {
+            $params[] = $scope_brand;
+        }
+    }
 }
 $sql .= " ORDER BY
             CASE WHEN l.next_follow_up_at IS NOT NULL AND l.next_follow_up_at < CURDATE()
@@ -110,9 +153,15 @@ require_once 'sidebar.php';
                 <option value="today" <?php echo $follow === 'today' ? 'selected' : ''; ?>>Due today</option>
                 <option value="upcoming" <?php echo $follow === 'upcoming' ? 'selected' : ''; ?>>Upcoming</option>
             </select>
+            <select name="brand" class="form-control form-control-sm mr-2 mb-1">
+                <option value="">All Brands</option>
+                <?php foreach (brand_filter_options() as $brand_option): ?>
+                    <option value="<?php echo e($brand_option); ?>" <?php echo $brand_filter === $brand_option ? 'selected' : ''; ?>><?php echo e(brand_label($brand_option)); ?></option>
+                <?php endforeach; ?>
+            </select>
             <input type="text" name="q" class="form-control form-control-sm mr-2 mb-1" value="<?php echo e($q); ?>" placeholder="Lead, name, phone...">
             <button type="submit" class="btn btn-sm btn-primary mb-1"><i class="fa fa-filter mr-1"></i> Filter</button>
-            <?php if ($status !== '' || $assigned !== '' || $follow !== '' || $q !== ''): ?>
+            <?php if ($status !== '' || $assigned !== '' || $follow !== '' || $q !== '' || $brand_filter !== ''): ?>
                 <a href="leads.php" class="btn btn-sm btn-light mb-1 ml-2">Clear</a>
             <?php endif; ?>
         </form>
@@ -126,7 +175,7 @@ require_once 'sidebar.php';
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Customer Name</th><th>Phone</th><th>Requested Products</th><th>Quantity</th><th>Location</th>
+                        <th>Customer Name</th><th>Phone</th><th>Requested Products</th><th>Brand</th><th>Quantity</th><th>Location</th>
                         <th>Status</th><th>Orders Placed</th><th>Next Follow-up</th><th>Date</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
@@ -141,6 +190,7 @@ require_once 'sidebar.php';
                     $contact_phone = $l['phone'] ?: ($l['contact_phone'] ?: $l['contact_mobile']);
                     $product_name = trim((string)($l['product_names'] ?? ''));
                     if ($product_name === '') $product_name = '—';
+                    $lead_brands = array_values(array_filter(array_map('trim', explode(',', (string)($l['product_brands'] ?? '')))));
                     ?>
                     <tr>
                         <td>
@@ -152,6 +202,15 @@ require_once 'sidebar.php';
                         </td>
                         <td><?php echo e($contact_phone ?: 'Phone not recorded'); ?></td>
                         <td><?php echo e($product_name); ?></td>
+                        <td>
+                            <?php if ($lead_brands): ?>
+                                <?php foreach ($lead_brands as $lead_brand): ?>
+                                    <span class="badge badge-navy"><?php echo e(brand_label($lead_brand)); ?></span>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <span class="text-muted small">—</span>
+                            <?php endif; ?>
+                        </td>
                         <td><?php echo (float)$l['requested_quantity'] > 0 ? e(format_quantity((float)$l['requested_quantity'])) : '—'; ?></td>
                         <td><?php echo e($l['location'] ?: '—'); ?></td>
                         <td><span class="badge badge-<?php echo e(lead_status_class($l['status'])); ?>"><?php echo e($statuses[$l['status']] ?? $l['status']); ?></span></td>
@@ -193,7 +252,7 @@ require_once 'sidebar.php';
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$leads): ?>
-                    <tr><td colspan="10" class="text-center text-muted py-4">No leads match the current filters. <a href="lead-add.php">Record the first lead</a>.</td></tr>
+                    <tr><td colspan="11" class="text-center text-muted py-4">No leads match the current filters. <a href="lead-add.php">Record the first lead</a>.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>

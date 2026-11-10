@@ -75,6 +75,7 @@ if (mb_strlen($query) < 2) {
 }
 
 $like = '%' . $query . '%';
+$transfer_brand = brand_scope_condition('p.brand');
 $products = fetch_all(
     "SELECT p.product_id, p.name, p.code, COALESCE(u.is_decimal, 0) is_decimal,
             COALESCE(stock.quantity, 0) available_quantity
@@ -83,17 +84,14 @@ $products = fetch_all(
        LEFT JOIN inventory_stock stock
          ON stock.tenant_id = p.tenant_id AND stock.product_id = p.product_id
         AND stock.warehouse_id = ?
-      WHERE p.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0
+      WHERE p.tenant_id = ? AND p.is_active = 1 AND p.is_service = 0{$transfer_brand['sql']}
         AND (p.name LIKE ? OR p.code LIKE ? OR COALESCE(p.sku, '') LIKE ?
              OR COALESCE(p.barcode, '') LIKE ?)
       ORDER BY p.name
       LIMIT 25",
     $source_warehouse_id,
     $tenant_id,
-    $like,
-    $like,
-    $like,
-    $like
+    ...array_merge($transfer_brand['params'], [$like, $like, $like, $like])
 );
 
 foreach ($products as &$product) {

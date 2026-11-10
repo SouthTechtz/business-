@@ -14,6 +14,10 @@ if (!$lead) {
     flash_set('danger', 'Lead not found.');
     redirect('leads.php');
 }
+if (!lead_is_visible($lead)) {
+    http_response_code(403);
+    die('This lead belongs to another brand.');
+}
 
 $error = '';
 $sources = ['staff' => 'Staff entry', 'phone' => 'Phone', 'whatsapp' => 'WhatsApp', 'email' => 'Email', 'referral' => 'Referral', 'walk_in' => 'Walk-in', 'storefront' => 'Storefront'];

@@ -5,6 +5,11 @@ require_permission('manage_expenses');
 
 $month = trim($_GET['month'] ?? '');
 $cat_filter = (int)($_GET['category'] ?? 0);
+$brand_filter = current_brand_scope();
+if ($brand_filter === '') {
+    $requested_brand = trim((string)($_GET['brand'] ?? ''));
+    $brand_filter = in_array($requested_brand, product_brand_options(), true) ? $requested_brand : '';
+}
 $where = "WHERE e.tenant_id = ?";
 $params = [$current_user->tenant_id];
 $types = 'i';
@@ -12,6 +17,11 @@ if (is_godown_manager()) {
     $where .= " AND e.created_by = ?";
     $params[] = (int)$current_user->user_id;
     $types .= 'i';
+}
+if ($brand_filter !== '') {
+    $where .= " AND e.brand = ?";
+    $params[] = $brand_filter;
+    $types .= 's';
 }
 if ($month !== '' && preg_match('/^\d{4}-\d{2}$/', $month)) {
     $where .= " AND DATE_FORMAT(e.expense_date, '%Y-%m') = ?";
@@ -64,7 +74,7 @@ echo '<?mso-application progid="Excel.Sheet"?>' . "\n";
           xmlns:html="http://www.w3.org/TR/REC-html40">
 <Worksheet ss:Name="Expenses">
 <Table>
-<?php echo row([cell('Date'), cell('Category'), cell('Items (name x qty @ unit price)'), cell('Method'), cell('Notes'), cell('Total', 'Number')]); ?>
+<?php echo row([cell('Date'), cell('Brand'), cell('Category'), cell('Items (name x qty @ unit price)'), cell('Method'), cell('Notes'), cell('Total', 'Number')]); ?>
 <?php foreach ($expenses as $e): ?>
 <?php
     $lines = $items_by_expense[(int)$e['expense_id']] ?? [];
@@ -73,6 +83,7 @@ echo '<?mso-application progid="Excel.Sheet"?>' . "\n";
         : $e['description'];
     echo row([
         cell($e['expense_date']),
+        cell(trim((string)($e['brand'] ?? '')) !== '' ? brand_label($e['brand']) : 'General'),
         cell($e['category_name'] ?? ''),
         cell($detail),
         cell($e['method_name'] ?? ''),

@@ -3,6 +3,7 @@ require_once 'config.php';
 require_once 'auth_check.php';
 require_permission('view_reports');
 require_once 'reporting.php';
+require_once 'capital-helpers.php';
 
 $cur = tenant_currency();
 $type = $_GET['type'] ?? 'income';
@@ -48,11 +49,14 @@ switch ($type) {
             $current_user->tenant_id, $current_user->tenant_id, ...array_merge($payment_scope['params'], $payment_date['params'])
         );
         $expense_date = report_date_condition('e.expense_date', $from, $to);
+        $report_brand_scope = current_brand_scope();
+        $expense_brand_sql = $report_brand_scope !== '' ? ' AND e.brand = ?' : '';
+        $expense_brand_params = $report_brand_scope !== '' ? [$report_brand_scope] : [];
         $expenses = fetch_all(
             "SELECT COALESCE(c.name, 'Uncategorised') category_name, SUM(e.amount) total
              FROM expenses e LEFT JOIN expense_categories c ON c.expense_category_id = e.category_id
-             WHERE e.tenant_id = ?" . $expense_date['sql'] . " GROUP BY e.category_id ORDER BY total DESC",
-            $current_user->tenant_id, ...$expense_date['params']
+             WHERE e.tenant_id = ?" . $expense_date['sql'] . $expense_brand_sql . " GROUP BY e.category_id ORDER BY total DESC",
+            $current_user->tenant_id, ...array_merge($expense_date['params'], $expense_brand_params)
         );
         $exp_total = 0;
         foreach ($expenses as $ex) $exp_total += (float)$ex['total'];
@@ -78,7 +82,24 @@ switch ($type) {
         $rows[] = ['NET INCOME', money($net, $cur), 'net'];
         $rows[] = ['', '', ''];
         $rows[] = ['VAT COLLECTED (on sales)', money($vat_total, $cur), ''];
+        $capital_memo = capital_summary($current_user->tenant_id, $report_brand_scope);
+        $capital_position = capital_balance_sheet($current_user->tenant_id, $report_brand_scope);
+        $rows[] = ['', '', ''];
+        $rows[] = ['MEMO: Capital introduced (equity, not income)', money($capital_memo['net'], $cur), ''];
+        $rows[] = ['MEMO: Cash in hand', money($capital_position['cash_in_hand'] ?? 0, $cur), ''];
+        $rows[] = ['MEMO: Bank balance', money($capital_position['bank_balance'] ?? 0, $cur), ''];
+        $rows[] = ['MEMO: Liquid capital', money($capital_position['liquid_capital'] ?? 0, $cur), ''];
+        $rows[] = ['MEMO: Stock capital', money($capital_position['stock_capital'] ?? 0, $cur), ''];
+        $rows[] = ['MEMO: Total brand capital', money($capital_position['total_capital'] ?? 0, $cur), ''];
         $totals = ['net' => $net];
+        break;
+
+    case 'balance-sheet':
+        $title = 'Balance Sheet';
+        $bs = capital_balance_sheet($current_user->tenant_id, $_GET['brand'] ?? '');
+        $bs_brand_label = ($bs['brand'] ?? '') !== '' ? brand_label($bs['brand']) : 'All Brands';
+        $range_label = 'As at ' . date('F d, Y');
+        $totals = ['assets' => $bs['total_assets'], 'funding' => $bs['total_funding']];
         break;
 
     case 'sales':
@@ -120,13 +141,16 @@ switch ($type) {
     case 'expenses':
         $title = 'Expenses Report';
         $expense_date = report_date_condition('e.expense_date', $from, $to);
+        $report_brand_scope = current_brand_scope();
+        $expense_brand_sql = $report_brand_scope !== '' ? ' AND e.brand = ?' : '';
+        $expense_brand_params = $report_brand_scope !== '' ? [$report_brand_scope] : [];
         $rows = fetch_all(
             "SELECT e.expense_date, e.description, e.amount, COALESCE(c.name,'Uncategorised') category_name, m.name method_name
              FROM expenses e
              LEFT JOIN expense_categories c ON c.expense_category_id = e.category_id
              LEFT JOIN payment_methods m ON m.payment_method_id = e.payment_method_id
-             WHERE e.tenant_id = ?" . $expense_date['sql'] . " ORDER BY e.expense_date DESC",
-            $current_user->tenant_id, ...$expense_date['params']
+             WHERE e.tenant_id = ?" . $expense_date['sql'] . $expense_brand_sql . " ORDER BY e.expense_date DESC",
+            $current_user->tenant_id, ...array_merge($expense_date['params'], $expense_brand_params)
         );
         $totals['total'] = array_sum(array_map(fn($r) => (float)$r['amount'], $rows));
         $totals['count'] = count($rows);
@@ -148,15 +172,16 @@ switch ($type) {
 
     case 'stock':
         $title = 'Stock / Inventory Report';
+        $stock_brand = brand_scope_condition('p.brand');
         $rows = fetch_all(
             "SELECT p.code, p.name, p.sale_price, COALESCE(SUM(s.quantity),0) quantity, p.min_stock_level,
                     w.name warehouse, MAX(COALESCE(w.is_godown, 0)) is_godown
              FROM products p
              LEFT JOIN inventory_stock s ON s.product_id = p.product_id AND s.tenant_id = p.tenant_id
              LEFT JOIN warehouses w ON w.warehouse_id = s.warehouse_id
-             WHERE p.tenant_id = ? AND p.is_service = 0" . $stock_scope['sql'] . "
+             WHERE p.tenant_id = ? AND p.is_service = 0" . $stock_scope['sql'] . $stock_brand['sql'] . "
              GROUP BY p.product_id, s.warehouse_id ORDER BY p.name",
-            $current_user->tenant_id, ...$stock_scope['params']
+            $current_user->tenant_id, ...array_merge($stock_scope['params'], $stock_brand['params'])
         );
         $totals['count'] = count($rows);
         break;
@@ -244,6 +269,85 @@ switch ($type) {
             <?php endforeach; ?>
             </tbody>
         </table>
+    <?php elseif ($type === 'balance-sheet'): ?>
+        <div class="report-meta"><strong>Brand:</strong> <?php echo e($bs_brand_label); ?></div>
+        <div class="row">
+            <div class="col-6">
+                <h4>Assets</h4>
+                <table class="table table-bordered">
+                    <tbody>
+                        <tr><td>Cash in hand</td><td class="text-right"><?php echo e(money($bs['cash_in_hand'], $cur)); ?></td></tr>
+                        <tr><td>Bank balance (available / overdraft)</td><td class="text-right"><?php echo e(money($bs['bank_balance'], $cur)); ?></td></tr>
+                        <tr><td>Stock capital (inventory at cost)</td><td class="text-right"><?php echo e(money($bs['inventory'], $cur)); ?></td></tr>
+                        <tr><td>Accounts receivable</td><td class="text-right"><?php echo e(money($bs['receivables'], $cur)); ?></td></tr>
+                        <tr class="strong"><td>Total assets</td><td class="text-right"><?php echo e(money($bs['total_assets'], $cur)); ?></td></tr>
+                    </tbody>
+                </table>
+                <table class="table table-bordered" style="margin-top:8px;">
+                    <tbody>
+                        <tr><td>Liquid capital (cash + bank)</td><td class="text-right"><?php echo e(money($bs['liquid_capital'], $cur)); ?></td></tr>
+                        <tr><td>Stock capital</td><td class="text-right"><?php echo e(money($bs['stock_capital'], $cur)); ?></td></tr>
+                        <tr class="strong"><td>Total brand capital</td><td class="text-right"><?php echo e(money($bs['total_capital'], $cur)); ?></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="col-6">
+                <h4>Capital &amp; Liabilities</h4>
+                <table class="table table-bordered">
+                    <tbody>
+                        <tr><td>Capital introduced (net)</td><td class="text-right"><?php echo e(money($bs['capital_net'], $cur)); ?></td></tr>
+                        <tr><td>Retained earnings</td><td class="text-right"><?php echo e(money($bs['net_profit'], $cur)); ?></td></tr>
+                        <tr><td>Supplier payables</td><td class="text-right"><?php echo e(money($bs['payables'], $cur)); ?></td></tr>
+                        <tr><td>Recorded capital &amp; liabilities</td><td class="text-right"><?php echo e(money($bs['total_funding'], $cur)); ?></td></tr>
+                        <?php if (abs((float)$bs['difference']) > 0.005): ?>
+                            <tr><td>Assets not yet matched by recorded capital</td><td class="text-right"><?php echo e(money($bs['difference'], $cur)); ?></td></tr>
+                        <?php endif; ?>
+                        <tr class="strong"><td>Total capital &amp; liabilities</td><td class="text-right"><?php echo e(money($bs['total_assets'], $cur)); ?></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <h4>Bank Accounts</h4>
+        <table class="table table-bordered">
+            <thead><tr><th>Bank</th><th class="text-right">Opening</th><th class="text-right">Capital In</th><th class="text-right">Withdrawn</th><th class="text-right">Cash Banked</th><th class="text-right">Money Out</th><th class="text-right">Transfers</th><th class="text-right">Available</th></tr></thead>
+            <tbody>
+            <?php foreach ($bs['banks'] as $bank): ?>
+                <?php
+                $bank_out = (float)$bank['expenses_out'] + (float)$bank['purchases_out'] + (float)$bank['refunds_out'];
+                $bank_transfers = (float)$bank['transfers_in'] - (float)$bank['transfers_out'];
+                ?>
+                <tr>
+                    <td><?php echo e($bank['bank_name']); ?></td>
+                    <td class="text-right"><?php echo e(money($bank['opening_in'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($bank['capital_in'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($bank['capital_out'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($bank['sales_banked'], $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($bank_out, $cur)); ?></td>
+                    <td class="text-right"><?php echo e(money($bank_transfers, $cur)); ?></td>
+                    <td class="text-right font-weight-bold"><?php echo e(money($bank['available'], $cur)); ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$bs['banks']): ?><tr><td colspan="8" class="text-center">No bank accounts yet.</td></tr><?php endif; ?>
+            </tbody>
+        </table>
+
+        <h4>Operating Result</h4>
+        <table class="table table-bordered">
+            <tbody>
+                <tr><td>POS sales</td><td class="text-right"><?php echo e(money($bs['pos_sales'], $cur)); ?></td></tr>
+                <tr><td>Invoice payments received</td><td class="text-right"><?php echo e(money($bs['invoice_payments'], $cur)); ?></td></tr>
+                <tr><td>Storefront order sales (net of returns)</td><td class="text-right"><?php echo e(money($bs['order_sales'], $cur)); ?></td></tr>
+                <tr><td>Less: accepted POS/invoice returns</td><td class="text-right"><?php echo e(money($bs['returns'], $cur)); ?></td></tr>
+                <tr><td>Less: expenses</td><td class="text-right"><?php echo e(money($bs['expenses'], $cur)); ?></td></tr>
+                <tr class="strong"><td>Retained earnings</td><td class="text-right"><?php echo e(money($bs['net_profit'], $cur)); ?></td></tr>
+            </tbody>
+        </table>
+        <p class="text-muted" style="font-size:11.5px;">
+            Liquid capital is cash in hand plus bank balance. Stock capital is inventory at purchase price.
+            Total brand capital is liquid plus stock. Capital is equity, not sales revenue.
+            Enter capital movements on the Capital page.
+        </p>
     <?php elseif ($type === 'sales'): ?>
         <table class="table table-bordered">
             <thead><tr><th>Channel</th><th class="text-right">Gross Sales</th><th class="text-right">Accepted Returns</th><th class="text-right">Net Sales</th><th class="text-right">Transactions</th></tr></thead>

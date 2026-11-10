@@ -1,6 +1,7 @@
 ﻿<?php
 require_once "header.php";
 require_once "auth_check.php";
+require_once "capital-helpers.php";
 require_permission_any(["manage_pos", "manage_invoices"]);
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST") { redirect("sales-returns.php"); }
@@ -131,6 +132,42 @@ try {
         throw new RuntimeException("No items to return.");
     }
 
+    // Refund account: cash by default, bank when a bank payment method is chosen.
+    $return_brand = current_brand_scope();
+    if ($return_brand === "" && $shop_id) {
+        $shop_row = fetch_one("SELECT brand FROM shops WHERE shop_id = ? AND tenant_id = ?", $shop_id, $tenant_id);
+        $return_brand = (string)($shop_row["brand"] ?? "");
+    }
+    $refund_method_id = (int)($_POST["refund_method_id"] ?? 0) ?: null;
+    $refund_bank_name = trim((string)($_POST["refund_bank_name"] ?? ""));
+    $refund_account = "cash";
+    if ($refund_method_id !== null) {
+        $refund_method = fetch_one(
+            "SELECT account_type FROM payment_methods WHERE payment_method_id = ? AND tenant_id = ?",
+            $refund_method_id,
+            $tenant_id
+        );
+        if ($refund_method) {
+            $refund_account = (string)($refund_method["account_type"] ?? "bank") === "bank" ? "bank" : "cash";
+        } else {
+            $refund_method_id = null;
+        }
+    }
+    if ($refund_account !== "bank") {
+        $refund_bank_name = "";
+    } elseif ($refund_bank_name !== "" && $return_brand !== "") {
+        $canonical_bank = bank_canonical_name($tenant_id, $return_brand, $refund_bank_name);
+        if ($canonical_bank !== "") {
+            $refund_bank_name = $canonical_bank;
+        }
+    }
+    if ($refund_account === "bank" && $refund_bank_name === "") {
+        throw new RuntimeException("Select the bank account that paid this refund.");
+    }
+    if (mb_strlen($refund_bank_name) > 150) {
+        throw new RuntimeException("The refund bank name must be 150 characters or fewer.");
+    }
+
     $return_number = "RET-" . date("Ymd") . "-" . time() . "-" . mt_rand(10, 99);
     $return_id = db_insert("sales_returns", [
         "tenant_id" => $tenant_id,
@@ -141,6 +178,8 @@ try {
         "shop_id" => $shop_id,
         "warehouse_id" => $warehouse_id > 0 ? $warehouse_id : null,
         "refund_amount" => $total_refund,
+        "refund_method_id" => $refund_method_id,
+        "refund_bank_name" => $refund_bank_name !== "" ? $refund_bank_name : null,
         "status" => "completed",
         "submission_token" => $submission_token,
         "created_by" => $current_user->user_id,

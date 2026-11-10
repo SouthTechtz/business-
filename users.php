@@ -91,7 +91,7 @@ require_once 'sidebar.php';
             <table class="table table-hover data-table">
                 <thead>
                     <tr>
-                        <th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>Roles</th><th>Status</th><th>Last Login</th><th class="text-right">Actions</th>
+                        <th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>Roles</th><th>Brand</th><th>Status</th><th>Last Login</th><th class="text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -107,6 +107,13 @@ require_once 'sidebar.php';
                         <td><?php echo e($row['email']); ?></td>
                         <td><?php echo e($row['phone'] ?: '—'); ?></td>
                         <td><?php echo e($row['role_names'] ?: 'No role'); ?></td>
+                        <td>
+                            <?php if (trim((string)($row['brand_scope'] ?? '')) !== ''): ?>
+                                <span class="badge badge-navy"><?php echo e(brand_label($row['brand_scope'])); ?></span>
+                            <?php else: ?>
+                                <span class="text-muted">All brands</span>
+                            <?php endif; ?>
+                        </td>
                         <td>
                             <?php if ($row['is_active']): ?>
                                 <span class="badge badge-success">Active</span>

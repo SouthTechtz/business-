@@ -13,11 +13,12 @@ if (mb_strlen($q) >= 2) {
     $like = '%' . $q . '%';
 
     if ($inScope('products') && can('manage_products')) {
+        $product_brand = brand_scope_condition('p.brand');
         $rows = fetch_all(
-            "SELECT product_id, name, code, sku, barcode, sale_price FROM products
-             WHERE tenant_id = ? AND (name LIKE ? OR code LIKE ? OR sku LIKE ? OR barcode LIKE ?)
-             ORDER BY name LIMIT 6",
-            $current_user->tenant_id, $like, $like, $like, $like
+            "SELECT p.product_id, p.name, p.code, p.sku, p.barcode, p.sale_price FROM products p
+             WHERE p.tenant_id = ? AND (p.name LIKE ? OR p.code LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?){$product_brand['sql']}
+             ORDER BY p.name LIMIT 6",
+            $current_user->tenant_id, $like, $like, $like, $like, ...$product_brand['params']
         );
         foreach ($rows as $p) {
             $results[] = [
@@ -105,11 +106,12 @@ if (mb_strlen($q) >= 2) {
     }
 
     if ($inScope('expenses') && can('manage_expenses')) {
+        $expense_brand = brand_scope_condition('e.brand');
         $rows = fetch_all(
-            "SELECT expense_id, description, amount, expense_date FROM expenses
-             WHERE tenant_id = ? AND description LIKE ?
-             ORDER BY expense_id DESC LIMIT 5",
-            $current_user->tenant_id, $like
+            "SELECT e.expense_id, e.description, e.amount, e.expense_date FROM expenses e
+             WHERE e.tenant_id = ? AND e.description LIKE ?{$expense_brand['sql']}
+             ORDER BY e.expense_id DESC LIMIT 5",
+            $current_user->tenant_id, $like, ...$expense_brand['params']
         );
         foreach ($rows as $e) {
             $results[] = [
@@ -142,13 +144,25 @@ if (mb_strlen($q) >= 2) {
     }
 
     if ($inScope('activity') && (can('view_activity_log') || can('view_reports'))) {
-        $rows = fetch_all(
-            "SELECT l.log_id, l.action, l.entity_type, l.entity_id, l.details, u.first_name, u.last_name, u.username
+        $activity_sql = "SELECT l.log_id, l.action, l.entity_type, l.entity_id, l.details, u.first_name, u.last_name, u.username
              FROM audit_logs l LEFT JOIN users u ON u.user_id = l.user_id
-             WHERE l.tenant_id = ? AND (l.action LIKE ? OR l.entity_type LIKE ? OR l.details LIKE ? OR u.username LIKE ?)
-             ORDER BY l.log_id DESC LIMIT 6",
-            $current_user->tenant_id, $like, $like, $like, $like
-        );
+             WHERE l.tenant_id = ? AND (l.action LIKE ? OR l.entity_type LIKE ? OR l.details LIKE ? OR u.username LIKE ?)";
+        $activity_params = [$current_user->tenant_id, $like, $like, $like, $like];
+        $activity_brand = current_brand_scope();
+        if ($activity_brand !== '') {
+            $activity_sql .= " AND l.user_id IN (
+                SELECT lu.user_id FROM users lu
+                 WHERE lu.tenant_id = l.tenant_id
+                   AND (lu.brand_scope = ? OR lu.user_id = ? OR EXISTS (
+                       SELECT 1 FROM user_shops lus
+                         JOIN shops ls ON ls.shop_id = lus.shop_id AND ls.tenant_id = lus.tenant_id
+                        WHERE lus.user_id = lu.user_id AND lus.tenant_id = lu.tenant_id AND ls.brand = ?
+                   ))
+            )";
+            array_push($activity_params, $activity_brand, (int)$current_user->user_id, $activity_brand);
+        }
+        $activity_sql .= " ORDER BY l.log_id DESC LIMIT 6";
+        $rows = fetch_all($activity_sql, ...$activity_params);
         foreach ($rows as $a) {
             $results[] = [
                 'group' => 'Activity',

@@ -92,15 +92,17 @@ if (!$is_location_request
 }
 
 if ($is_location_request) {
+    $source_brand_scope = current_brand_scope();
+    $source_brand_sql = $source_brand_scope !== '' ? ' AND (w.location_type = \'godown\' OR s.brand = ?)' : '';
     $source_options = fetch_all(
         "SELECT w.*, s.name shop_name, s.code shop_code, s.is_active shop_is_active
            FROM warehouses w
            LEFT JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
           WHERE w.tenant_id = ? AND w.is_active = 1
             AND w.location_type IN ('godown', 'store')
-            AND (w.location_type = 'godown' OR s.is_active = 1)
+            AND (w.location_type = 'godown' OR s.is_active = 1){$source_brand_sql}
           ORDER BY CASE w.location_type WHEN 'godown' THEN 0 ELSE 1 END, s.name, w.name",
-        $tenant_id
+        ...($source_brand_scope !== '' ? [$tenant_id, $source_brand_scope] : [$tenant_id])
     );
     $source_options = array_values(array_filter(
         $source_options,
@@ -284,6 +286,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ) {
             throw new RuntimeException('Select an active eligible supplying location.');
         }
+        if (
+            (string)$source_row['location_type'] !== 'godown'
+            && current_brand_scope() !== ''
+            && !find_accessible_store($source_warehouse_id, false, true)
+        ) {
+            throw new RuntimeException('That supplying location belongs to another brand.');
+        }
         $source_label = trim(($source_row['shop_name'] ?? '') . ' / ' . $source_row['name'], ' /');
         if ($is_location_request) {
             $destination_warehouse = $request_destination;
@@ -410,6 +419,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             || !in_array((string)$locked_source['location_type'], ['godown', 'store', 'shop'], true)
         ) {
             throw new RuntimeException('The source location is no longer active.');
+        }
+        if (
+            (string)$locked_source['location_type'] !== 'godown'
+            && current_brand_scope() !== ''
+            && !find_accessible_store($source_warehouse_id, false, true)
+        ) {
+            throw new RuntimeException('That supplying location belongs to another brand.');
         }
         if ($is_location_request && !stock_transfer_destination_allowed((string)$locked_source['location_type'], $request_destination_type)) {
             throw new RuntimeException('The supplying location is no longer eligible for this request.');

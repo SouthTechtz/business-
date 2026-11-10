@@ -12,6 +12,11 @@ class User
     public $first_name;
     public $last_name;
     public $phone;
+    /**
+     * Brand this account is restricted to (Mini Admin). Empty means the
+     * account is not brand-scoped. Full administrators are never restricted.
+     */
+    public $brand_scope;
     public $is_active;
     public $last_login;
     public $created_at;

@@ -125,7 +125,7 @@ if ($tab === 'godown' && $godown_id > 0 && isset($godown_by_id[$godown_id])) {
     $location_name = store_label($store_by_id[$store_id]);
 } elseif ($tab === 'shops' && $shop_id > 0 && isset($shop_by_id[$shop_id])) {
     $location_name = $shop_by_id[$shop_id]['name'];
-    if ($shop_manager_inventory) {
+    if ($shop_manager_inventory || is_brand_admin()) {
         $inventory_warehouse_id = shop_inventory_warehouse_id($shop_id, $tenant_id);
         if ($inventory_warehouse_id) {
             $scope_ids[] = $inventory_warehouse_id;
@@ -146,6 +146,9 @@ $stock_filter = (string)($_GET['stock'] ?? '');
 if (!in_array($stock_filter, ['in', 'low', 'out'], true)) {
     $stock_filter = '';
 }
+// Brand-scoped Mini Admin: only their brand's products and stock.
+$inventory_brand_scope = current_brand_scope();
+$inventory_brand_sql = $inventory_brand_scope !== '' ? ' AND p.brand = ?' : '';
 $categories = $scope_ids
     ? fetch_all(
         "SELECT DISTINCT c.category_id, c.name
@@ -153,9 +156,9 @@ $categories = $scope_ids
            JOIN products p ON p.category_id = c.category_id AND p.tenant_id = c.tenant_id
            JOIN inventory_stock stock ON stock.product_id = p.product_id
                 AND stock.tenant_id = p.tenant_id
-          WHERE c.tenant_id = ? AND stock.warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . ")
+          WHERE c.tenant_id = ? AND stock.warehouse_id IN (" . implode(',', array_map('intval', $scope_ids)) . "){$inventory_brand_sql}
           ORDER BY c.name",
-        $tenant_id
+        ...($inventory_brand_scope !== '' ? [$tenant_id, $inventory_brand_scope] : [$tenant_id])
     )
     : [];
 if ($category_id > 0 && !in_array($category_id, array_map('intval', array_column($categories, 'category_id')), true)) {
@@ -178,15 +181,27 @@ if ($scope_ids) {
                      WHERE tenant_id = ? AND warehouse_id IN ({$in_list})
                      GROUP BY product_id
               ) st ON st.product_id = p.product_id
-             WHERE p.tenant_id = ? AND p.is_service = 0";
+             WHERE p.tenant_id = ? AND p.is_service = 0{$inventory_brand_sql}";
     $params = [$tenant_id, $tenant_id];
-    if ($shop_manager_inventory || $godown_manager_inventory) {
+    if ($inventory_brand_scope !== '') {
+        $params[] = $inventory_brand_scope;
+    }
+    if ($godown_manager_inventory) {
         $sql .= " AND EXISTS (
                     SELECT 1 FROM inventory_stock own_stock
                      WHERE own_stock.tenant_id = p.tenant_id
                        AND own_stock.product_id = p.product_id
                        AND own_stock.warehouse_id IN ({$in_list})
                   )";
+    }
+    // A branded shop lists every active product for its brand, including
+    // products that currently have no inventory_stock row.
+    $inventory_shop_brand = ($tab === 'shops' && $shop_id > 0)
+        ? trim((string)($shop_by_id[$shop_id]['brand'] ?? ''))
+        : '';
+    if ($inventory_shop_brand !== '') {
+        $sql .= " AND p.brand = ?";
+        $params[] = $inventory_shop_brand;
     }
 
     if ($q !== '') {
