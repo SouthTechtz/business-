@@ -1,10 +1,12 @@
 <?php
 require_once 'header.php';
 require_once 'auth_check.php';
+require_once 'capital-helpers.php';
 require_permission_any(['manage_shops', 'manage_inventory', 'manage_pos', 'manage_orders', 'manage_products']);
 $page_title = 'Shop Dashboard';
 
 $tenant_id = (int)$current_user->tenant_id;
+$msg = '';
 $accessible_shops = accessible_shops(null, !is_shop_manager());
 $shop_ids = array_map(fn($s) => (int)$s["shop_id"], $accessible_shops);
 $requested_shop_id = (int)($_GET['id'] ?? 0);
@@ -17,7 +19,15 @@ if ($requested_shop_id <= 0) {
 $shop_id = $requested_shop_id;
 $shop = assert_shop_access($shop_id, !is_shop_manager());
 $shop_brand_value = trim((string)($shop['brand'] ?? ''));
-$shop_opening_sales = shop_opening_sales($shop_id, $tenant_id);
+
+$shop_sales_row = null;
+foreach (shop_sales_totals($tenant_id, $shop_brand_value) as $sales_row) {
+    if ((int)$sales_row['shop_id'] === $shop_id) {
+        $shop_sales_row = $sales_row;
+        break;
+    }
+}
+$shop_total_sales = (float)($shop_sales_row['total_sales'] ?? 0);
 $_SESSION['active_request_destination'] = ['type' => 'shop', 'id' => $shop_id];
 $request_stock_enabled = (int)$shop['is_active'] === 1 && can('request_godown_transfers');
 $request_source_locations = [];
@@ -219,6 +229,10 @@ $cur = tenant_currency();
     <?php endif; ?>
 </div>
 
+<?php if ($msg): ?>
+    <div class="alert alert-<?php echo e($msg[0]); ?>"><?php echo e($msg[1]); ?></div>
+<?php endif; ?>
+
 <?php if (count($accessible_shops) > 1): ?>
 <form method="GET" action="shop-view.php" class="form-inline mb-3">
     <label class="mr-2">Shop</label>
@@ -263,8 +277,9 @@ $cur = tenant_currency();
     </div>
     <div class="col-md-3 col-sm-6 mb-2">
         <div class="card"><div class="card-body">
-            <div class="text-muted small">Opening Sales</div>
-            <div class="h4 mb-0"><?php echo e(money($shop_opening_sales, $cur)); ?></div>
+            <div class="text-muted small">Total Shop Sales</div>
+            <div class="h4 mb-0"><?php echo e(money($shop_total_sales, $cur)); ?></div>
+            <div class="small text-muted mt-1">Updates the brand's capital in bank automatically.</div>
         </div></div>
     </div>
 </div>

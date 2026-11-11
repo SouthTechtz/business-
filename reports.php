@@ -157,7 +157,7 @@ $reports = [
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-sm mb-0">
-                <thead><tr><th>Brand</th><th class="text-right">Sales Transactions</th><th class="text-right">Gross Sales</th><th class="text-right">Returned Qty</th><th class="text-right">Accepted Returns</th><th class="text-right">Net Sales</th><th class="text-right">Shop Opening Sales</th><th class="text-right">Total Sales</th></tr></thead>
+                <thead><tr><th>Brand</th><th class="text-right">Sales Transactions</th><th class="text-right">Gross Sales</th><th class="text-right">Returned Qty</th><th class="text-right">Accepted Returns</th><th class="text-right">Net Sales</th><th class="text-right">Total Sales</th></tr></thead>
                 <tbody>
                 <?php foreach ($sales_by_brand as $brand): ?>
                     <tr>
@@ -167,15 +167,13 @@ $reports = [
                         <td class="text-right"><?php echo e((float)$brand['returned_qty']); ?></td>
                         <td class="text-right"><?php echo e(money($brand['accepted_returns'], $cur)); ?></td>
                         <td class="text-right"><?php echo e(money($brand['net_sales'], $cur)); ?></td>
-                        <td class="text-right"><?php echo e(money($brand['opening_sales'] ?? 0, $cur)); ?></td>
                         <td class="text-right font-weight-semibold"><?php echo e(money($brand['total_sales'] ?? $brand['net_sales'], $cur)); ?></td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$sales_by_brand): ?><tr><td colspan="8" class="text-center text-muted py-3">No eligible sales in this period.</td></tr><?php endif; ?>
+                <?php if (!$sales_by_brand): ?><tr><td colspan="7" class="text-center text-muted py-3">No eligible sales in this period.</td></tr><?php endif; ?>
                 </tbody>
             </table>
         </div>
-        <div class="small text-muted p-2">Opening sales are shop-level balances and are not limited to the selected reporting period.</div>
     </div>
 </div>
 
@@ -267,9 +265,8 @@ $reports = [
                 <h6 class="font-weight-bold text-uppercase" style="font-size:12px;letter-spacing:.06em;color:#6b7280;">Assets</h6>
                 <table class="table table-sm mb-0">
                     <tbody>
-                        <tr><td>Cash in hand</td><td class="text-right"><?php echo e(money($balance_sheet['cash_in_hand'], $cur)); ?></td></tr>
-                        <tr><td>Bank balance (available / overdraft)</td><td class="text-right"><?php echo e(money($balance_sheet['bank_balance'], $cur)); ?></td></tr>
-                        <tr><td>Stock capital (inventory at cost)</td><td class="text-right"><?php echo e(money($balance_sheet['inventory'], $cur)); ?></td></tr>
+                        <tr><td>Capital in bank</td><td class="text-right"><?php echo e(money($balance_sheet['bank_balance'], $cur)); ?></td></tr>
+                        <tr><td>Stock-held capital (inventory at cost)</td><td class="text-right"><?php echo e(money($balance_sheet['inventory'], $cur)); ?></td></tr>
                         <tr><td>Accounts receivable</td><td class="text-right"><?php echo e(money($balance_sheet['receivables'], $cur)); ?></td></tr>
                         <tr class="font-weight-bold" style="background:#f6f7fb;"><td>Total assets</td><td class="text-right"><?php echo e(money($balance_sheet['total_assets'], $cur)); ?></td></tr>
                     </tbody>
@@ -294,13 +291,13 @@ $reports = [
         <div class="row mb-2">
             <div class="col-md-4 mb-2">
                 <div class="p-2" style="background:#f6f7fb;border-radius:8px;">
-                    <div class="small text-muted">Liquid Capital</div>
-                    <div class="font-weight-semibold"><?php echo e(money($balance_sheet['liquid_capital'], $cur)); ?></div>
+                    <div class="small text-muted">Capital in Bank</div>
+                    <div class="font-weight-semibold"><?php echo e(money($balance_sheet['bank_balance'], $cur)); ?></div>
                 </div>
             </div>
             <div class="col-md-4 mb-2">
                 <div class="p-2" style="background:#f6f7fb;border-radius:8px;">
-                    <div class="small text-muted">Stock Capital</div>
+                    <div class="small text-muted">Stock-Held Capital</div>
                     <div class="font-weight-semibold"><?php echo e(money($balance_sheet['stock_capital'], $cur)); ?></div>
                 </div>
             </div>
@@ -311,7 +308,7 @@ $reports = [
                 </div>
             </div>
         </div>
-        <div class="small text-muted">Liquid capital is cash in hand plus bank balance. Stock capital is inventory at purchase price. Total brand capital is liquid plus stock. Capital is equity, not sales revenue. Enter capital movements on the <a href="capital.php">Capital</a> page. Where assets exceed recorded capital, set the brand's opening cash/bank (and stock funding) on the Capital page so the balance sheet reconciles.</div>
+        <div class="small text-muted">Total capital in bank = capital added − capital withdrawn + all shop sales − expenses − purchases − refunds. Stock-held capital is inventory at purchase price. Total brand capital is capital in bank plus stock. Capital is equity, not sales revenue. Record funding on the <a href="capital.php">Capital</a> page; there are no opening balances. Where assets exceed recorded capital, add the missing funding as a capital contribution.</div>
     </div>
 </div>
 

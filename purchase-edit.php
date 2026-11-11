@@ -23,6 +23,10 @@ if (!$row) {
     flash_set('danger', 'Purchase not found.');
     redirect('purchases.php');
 }
+if (purchase_is_received($id, $tenant_id)) {
+    flash_set('danger', 'This purchase has been confirmed received, so it can no longer be edited.');
+    redirect('purchase-view.php?id=' . $id);
+}
 
 $products_brand = brand_scope_condition('brand');
 $products = fetch_all(
@@ -52,6 +56,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($goods_statuses[$status])) {
         $status = 'in_production';
     }
+    // Arrival is only recorded when the receiving popup is confirmed. The edit
+    // keeps the purchase's current status until then, so Cancel changes nothing.
+    $status_to_save = $status === 'arrived_godown'
+        ? (string)($row['status'] ?? 'in_production')
+        : $status;
 
     $valid_product = fetch_one(
         "SELECT product_id, brand FROM products WHERE product_id = ? AND tenant_id = ? AND is_active = 1",
@@ -94,12 +103,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $update_scope = is_godown_manager() ? ' AND created_by = ?' : '';
         $stmt = $conn->prepare("UPDATE purchases SET product_id=?, supplier_id=?, quantity=?, total=?, amount_paid=?, payment_method_id=?, bank_name=?, purchase_date=?, status=?, notes=? WHERE purchase_id=? AND tenant_id=?{$update_scope}");
         if (is_godown_manager()) {
-            $stmt->bind_param('iidddissssiii', $product_id, $supplier_db, $quantity, $total, $amount_paid, $payment_method_id, $bank_db, $date_db, $status, $notes, $id, $tenant_id, $current_user->user_id);
+            $stmt->bind_param('iidddissssiii', $product_id, $supplier_db, $quantity, $total, $amount_paid, $payment_method_id, $bank_db, $date_db, $status_to_save, $notes, $id, $tenant_id, $current_user->user_id);
         } else {
-            $stmt->bind_param('iidddissssii', $product_id, $supplier_db, $quantity, $total, $amount_paid, $payment_method_id, $bank_db, $date_db, $status, $notes, $id, $tenant_id);
+            $stmt->bind_param('iidddissssii', $product_id, $supplier_db, $quantity, $total, $amount_paid, $payment_method_id, $bank_db, $date_db, $status_to_save, $notes, $id, $tenant_id);
         }
         if ($stmt->execute()) {
             audit_log('update', 'purchase', $id, 'Purchase #' . $id . ' updated');
+            if ($status === 'arrived_godown') {
+                flash_set('success', 'Purchase updated. Confirm what actually arrived to add good units to stock.');
+                if (can_receive_purchases()) {
+                    redirect('purchases.php?receive=' . $id);
+                }
+                flash_set('warning', 'Purchase updated. An administrator, Mini Admin or the Godown Manager must confirm the goods received.');
+                redirect('purchases.php');
+            }
             flash_set('success', 'Purchase updated successfully.');
             redirect('purchases.php');
         } else {
@@ -167,7 +184,7 @@ require_once 'sidebar.php';
                         </option>
                     <?php endforeach; ?>
                 </select>
-                <small class="form-text text-muted">Cash methods reduce cash in hand; other methods reduce the bank balance.</small>
+                <small class="form-text text-muted">Every purchase payment reduces the brand's total capital in bank.</small>
             </div>
             <div class="form-group col-md-6" id="purchaseBankGroup">
                 <label>Bank Account <span class="text-muted font-weight-normal">(optional)</span></label>

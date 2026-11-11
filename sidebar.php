@@ -209,11 +209,6 @@ $is_shop_manager = is_shop_manager();
                 <a href="reports.php"><i class="fa fa-bar-chart"></i><span>Reports</span></a>
             </li>
             <?php endif; ?>
-            <?php if (tenant_admin_scope() && can("manage_settings")): ?>
-            <li class="<?php echo basename($_SERVER["PHP_SELF"]) == "shop-opening-balances.php" ? "active" : ""; ?>">
-                <a href="shop-opening-balances.php"><i class="fa fa-balance-scale"></i><span>Shop Opening Balances</span></a>
-            </li>
-            <?php endif; ?>
         </ul>
 
         <?php if (can_manage_capital()): ?>

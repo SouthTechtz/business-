@@ -52,6 +52,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($goods_statuses[$status])) {
         $status = 'in_production';
     }
+    // Arrival is only recorded when the receiving popup is confirmed. Saving a
+    // new purchase keeps its previous/default status until then, so cancelling
+    // the popup leaves the goods status unchanged.
+    $status_to_save = $status === 'arrived_godown' ? 'in_production' : $status;
 
     $valid_product = fetch_one(
         "SELECT p.product_id, p.brand, p.min_stock_level, p.is_service, COALESCE(u.is_decimal, 0) is_decimal
@@ -107,12 +111,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $date_db = $purchase_date !== '' ? $purchase_date : null;
         $bank_db = $bank_name !== '' ? $bank_name : null;
         $created_by = (int)$current_user->user_id;
-        $stmt->bind_param('iiidddissssi', $tenant_id, $product_id, $supplier_db, $quantity, $total, $amount_paid, $payment_method_id, $bank_db, $date_db, $status, $notes, $created_by);
+        $stmt->bind_param('iiidddissssi', $tenant_id, $product_id, $supplier_db, $quantity, $total, $amount_paid, $payment_method_id, $bank_db, $date_db, $status_to_save, $notes, $created_by);
         if ($stmt->execute()) {
             $purchase_id = (int)$stmt->insert_id;
             $stmt->close();
             audit_log('create', 'purchase', $purchase_id, 'Purchase #' . $purchase_id . ' recorded');
-            flash_set('success', 'Purchase recorded successfully. Stock is not changed by purchases; use Godown stock receipts or adjustments to receive goods.');
+            if ($status === 'arrived_godown') {
+                flash_set('success', 'Purchase recorded. Confirm what actually arrived to add good units to stock.');
+                if (can_receive_purchases()) {
+                    redirect('purchases.php?receive=' . $purchase_id);
+                }
+                flash_set('warning', 'Purchase recorded. An administrator, Mini Admin or the Godown Manager must confirm the goods received.');
+                redirect('purchases.php');
+            }
+            flash_set('success', 'Purchase recorded successfully. Purchases do not change stock; record goods received once they arrive at the Godown.');
             redirect('purchases.php');
         }
         $stmt->close();
@@ -211,7 +223,7 @@ require_once 'sidebar.php';
                         </option>
                     <?php endforeach; ?>
                 </select>
-                <small class="form-text text-muted">Cash methods reduce cash in hand; other methods reduce the bank balance.</small>
+                <small class="form-text text-muted">Every purchase payment reduces the brand's total capital in bank.</small>
             </div>
             <div class="form-group col-md-6" id="purchaseBankGroup">
                 <label>Bank Account <span class="text-muted font-weight-normal">(optional)</span></label>

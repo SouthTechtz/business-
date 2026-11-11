@@ -65,7 +65,7 @@ require_once 'sidebar.php';
         <h1 class="page-title">Edit Customer</h1>
         <div class="page-sub"><?php echo e($customer['first_name'] . ' ' . $customer['last_name']); ?></div>
     </div>
-    <a href="customer-view.php?id=<?php echo $id; ?>" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back</a>
+    <a href="customers.php? id=<?php echo $id; ?>" class="btn btn-light"><i class="fa fa-arrow-left mr-1"></i> Back</a>
 </div>
 
 <div class="row">

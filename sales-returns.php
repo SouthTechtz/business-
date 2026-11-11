@@ -69,11 +69,14 @@ if ($receipt !== "") {
 
 $returns = fetch_all("SELECT sr.*, c.first_name, c.last_name, c.company_name, s.name shop_name,
                              o.order_number AS return_order_number, o.return_reason AS return_order_reason,
+                             pur.purchase_id AS return_purchase_id, sup.company_name AS supplier_name,
                              u.first_name seller_first, u.last_name seller_last
                         FROM sales_returns sr
                         LEFT JOIN contacts c ON c.contact_id = sr.customer_id
                         LEFT JOIN shops s ON s.shop_id = sr.shop_id
                         LEFT JOIN orders o ON o.order_id = sr.source_id AND o.tenant_id = sr.tenant_id AND sr.source_type = 'order'
+                        LEFT JOIN purchases pur ON pur.purchase_id = sr.source_id AND pur.tenant_id = sr.tenant_id AND sr.source_type = 'purchase'
+                        LEFT JOIN suppliers sup ON sup.supplier_id = pur.supplier_id AND sup.tenant_id = pur.tenant_id
                         LEFT JOIN users u ON u.user_id = sr.created_by
                        WHERE sr.tenant_id = ?
                        ORDER BY sr.created_at DESC LIMIT 50", $tenant_id);
@@ -83,7 +86,7 @@ require_once "sidebar.php";
 $return_token = bin2hex(random_bytes(16));
 ?>
 <div class="page-head">
-    <div><h1 class="page-title">Sales Returns</h1><div class="page-sub">Process and view accepted sales returns for POS or invoice sales, plus orders marked as returned.</div></div>
+    <div><h1 class="page-title">Sales Returns</h1><div class="page-sub">Process and view accepted sales returns for POS or invoice sales, orders marked as returned, and damaged or returned goods from supplier deliveries.</div></div>
 </div>
 <?php if ($f = flash_get()): ?>
     <div class="alert alert-<?php echo e($f["type"]); ?>"><?php echo e($f["message"]); ?></div>
@@ -154,7 +157,7 @@ $return_token = bin2hex(random_bytes(16));
                             </option>
                         <?php endforeach; ?>
                     </select>
-                    <small class="text-muted">Cash refunds reduce cash in hand; bank refunds reduce the bank balance.</small>
+                    <small class="text-muted">Cash refunds reduce capital in bank; bank refunds reduce the selected bank account.</small>
                 </div>
                 <div class="col-md-6 form-group" id="refundBankGroup" style="display:none;">
                     <label>Refund Bank Account <span class="text-muted font-weight-normal">(optional)</span></label>
@@ -179,22 +182,37 @@ $return_token = bin2hex(random_bytes(16));
     <div class="card-header"><h5 class="card-title mb-0">Accepted Returns</h5></div>
     <div class="card-body p-0">
         <table class="table table-sm mb-0">
-            <thead><tr><th>Return #</th><th>Source</th><th>Customer</th><th>Shop</th><th>Refund</th><th>Reason</th><th>Status</th><th>Seller</th><th>Date</th></tr></thead>
+            <thead><tr><th>Return #</th><th>Category</th><th>Source</th><th>Customer / Supplier</th><th>Shop</th><th>Refund / Value</th><th>Reason</th><th>Status</th><th>Seller</th><th>Date</th></tr></thead>
             <tbody>
             <?php foreach ($returns as $r): ?>
                 <tr>
                     <td><?php echo e($r["return_number"]); ?></td>
                     <td>
+                        <span class="badge badge-<?php echo (string)($r["return_category"] ?? "customer") === "supplier_damage" ? "warning" : "navy"; ?>">
+                            <?php echo (string)($r["return_category"] ?? "customer") === "supplier_damage" ? "Supplier damage" : "Customer return"; ?>
+                        </span>
+                    </td>
+                    <td>
                         <?php if ($r["source_type"] === "order" && !empty($r["return_order_number"])): ?>
                             <a href="order-view.php?id=<?php echo (int)$r["source_id"]; ?>">Order <?php echo e($r["return_order_number"]); ?></a>
                         <?php else: ?>
-                            <?php echo e(strtoupper($r["source_type"]) . " #" . $r["source_id"]); ?>
+                            <?php if ($r["source_type"] === "purchase"): ?>
+                                <a href="purchase-view.php?id=<?php echo (int)$r["source_id"]; ?>">Purchase #<?php echo (int)$r["source_id"]; ?></a>
+                            <?php else: ?>
+                                <?php echo e(strtoupper($r["source_type"]) . " #" . $r["source_id"]); ?>
+                            <?php endif; ?>
                         <?php endif; ?>
                     </td>
-                    <td><?php echo e(trim(($r["first_name"] ?? "") . " " . ($r["last_name"] ?? "") . " " . ($r["company_name"] ?? ""))); ?></td>
-                    <td><?php echo e($r["shop_name"] ?? ""); ?></td>
+                    <td>
+                        <?php if (($r["return_category"] ?? "customer") === "supplier_damage"): ?>
+                            <?php echo e($r["supplier_name"] ?: "Supplier"); ?>
+                        <?php else: ?>
+                            <?php echo e(trim(($r["first_name"] ?? "") . " " . ($r["last_name"] ?? "") . " " . ($r["company_name"] ?? ""))); ?>
+                        <?php endif; ?>
+                    </td>
+                    <td><?php echo e(($r["return_category"] ?? "customer") === "supplier_damage" ? "Godown" : ($r["shop_name"] ?? "")); ?></td>
                     <td><?php echo e(money($r["refund_amount"], tenant_currency())); ?></td>
-                    <td><?php echo e($r["return_order_reason"] ?? ""); ?></td>
+                    <td><?php echo e(($r["return_category"] ?? "customer") === "supplier_damage" ? ($r["notes"] ?? "") : ($r["return_order_reason"] ?? "")); ?></td>
                     <td>
                         <span class="badge badge-<?php echo $r["status"] === "cancelled" ? "secondary" : "success"; ?>">
                             <?php echo e(ucfirst($r["status"])); ?>
@@ -205,7 +223,7 @@ $return_token = bin2hex(random_bytes(16));
                 </tr>
             <?php endforeach; ?>
             <?php if (!$returns): ?>
-                <tr><td colspan="9" class="text-center text-muted py-3">No returns yet.</td></tr>
+                <tr><td colspan="10" class="text-center text-muted py-3">No returns yet.</td></tr>
             <?php endif; ?>
             </tbody>
         </table>

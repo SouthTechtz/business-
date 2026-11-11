@@ -31,6 +31,22 @@ if (!$purchase) {
     flash_set('danger', 'Purchase not found.');
     redirect('purchases.php');
 }
+if (purchase_is_received($id, $tenant_id)) {
+    flash_set('danger', 'This purchase has been confirmed received, so its goods status can no longer change.');
+    redirect('purchase-view.php?id=' . $id);
+}
+
+// "Arrived at Godown" is only applied when the receiving popup is confirmed.
+// Selecting it now opens the confirmation popup and leaves the current status
+// untouched until the quantities are confirmed (so Cancel changes nothing).
+if ($status === 'arrived_godown') {
+    if (can_receive_purchases()) {
+        flash_set('info', 'Confirm what actually arrived. The goods status becomes Arrived at Godown only after you confirm.');
+        redirect('purchases.php?receive=' . $id);
+    }
+    flash_set('warning', 'An administrator, Mini Admin or the Godown Manager must confirm the goods received before this purchase is marked as arrived.');
+    redirect('purchases.php');
+}
 
 $stmt = $conn->prepare("UPDATE purchases SET status = ? WHERE purchase_id = ? AND tenant_id = ?{$owner_filter}");
 if (is_godown_manager()) {

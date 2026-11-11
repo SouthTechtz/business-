@@ -199,16 +199,6 @@ function capital_bank_names($tenant_id = null, $brand = '') {
             ...$params
         ));
     }
-    if (brand_capital_settings_table_ready() && capital_column_exists('brand_capital_settings', 'opening_bank_name')) {
-        $brand_sql = $brand !== '' ? ' AND brand = ?' : '';
-        $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
-        $add(fetch_all(
-            "SELECT DISTINCT opening_bank_name AS bank_name FROM brand_capital_settings
-              WHERE tenant_id = ?{$brand_sql}
-                AND opening_bank_name IS NOT NULL AND TRIM(opening_bank_name) <> ''",
-            ...$params
-        ));
-    }
 
     $names = array_values($names);
     usort($names, 'strcasecmp');
@@ -295,107 +285,9 @@ function capital_return_brand_condition($brand, $tenant_id, array &$params, $ali
     )";
 }
 
-/** True when opening capital settings exist. */
-function brand_capital_settings_table_ready() {
-    return db_table_exists('brand_capital_settings');
-}
-
 /** True when internal transfer records exist. */
 function brand_internal_transfers_table_ready() {
     return db_table_exists('brand_internal_transfers');
-}
-
-/**
- * Opening cash/bank for a brand. With no brand, the values are summed across
- * every visible brand for the combined view.
- */
-function brand_capital_settings($tenant_id = null, $brand = '') {
-    global $current_user;
-    $empty = [
-        'brand'        => '',
-        'opening_cash' => 0.0,
-        'opening_bank' => 0.0,
-        'opening_bank_name' => '',
-        'notes'        => '',
-        'updated_at'   => null,
-        'exists'       => false,
-    ];
-    if (!$current_user || !brand_capital_settings_table_ready()) return $empty;
-    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
-    $brand = capital_resolve_brand($brand);
-
-    if ($brand === '') {
-        $row = fetch_one(
-            "SELECT COALESCE(SUM(opening_cash), 0) opening_cash,
-                    COALESCE(SUM(opening_bank), 0) opening_bank,
-                    COUNT(*) rows_count
-               FROM brand_capital_settings
-              WHERE tenant_id = ?",
-            $tenant_id
-        ) ?: [];
-        return [
-            'brand'        => '',
-            'opening_cash' => (float)($row['opening_cash'] ?? 0),
-            'opening_bank' => (float)($row['opening_bank'] ?? 0),
-            'opening_bank_name' => '',
-            'notes'        => '',
-            'updated_at'   => null,
-            'exists'       => (int)($row['rows_count'] ?? 0) > 0,
-        ];
-    }
-
-    $row = fetch_one(
-        "SELECT * FROM brand_capital_settings WHERE tenant_id = ? AND brand = ?",
-        $tenant_id,
-        $brand
-    );
-    if (!$row) {
-        return array_merge($empty, ['brand' => $brand]);
-    }
-    return [
-        'brand'        => (string)$row['brand'],
-        'opening_cash' => (float)$row['opening_cash'],
-        'opening_bank' => (float)$row['opening_bank'],
-        'opening_bank_name' => capital_column_exists('brand_capital_settings', 'opening_bank_name')
-            ? trim((string)($row['opening_bank_name'] ?? ''))
-            : '',
-        'notes'        => (string)($row['notes'] ?? ''),
-        'updated_at'   => $row['updated_at'] ?? null,
-        'exists'       => true,
-    ];
-}
-
-/** Create or update a brand's opening cash and bank balances. */
-function save_brand_capital_settings($tenant_id, $brand, $opening_cash, $opening_bank, $opening_bank_name, $notes, $user_id) {
-    global $conn;
-    $tenant_id = (int)$tenant_id;
-    $brand = trim((string)$brand);
-    if ($tenant_id <= 0 || $brand === '' || !brand_capital_settings_table_ready()) return false;
-    $opening_cash = round((float)$opening_cash, 2);
-    $opening_bank = round((float)$opening_bank, 2);
-    $opening_bank_name = trim((string)$opening_bank_name);
-    $notes = trim((string)$notes);
-    $user_id = (int)$user_id;
-    $has_bank_name = capital_column_exists('brand_capital_settings', 'opening_bank_name');
-    $columns = 'tenant_id, brand, opening_cash, opening_bank, ' . ($has_bank_name ? 'opening_bank_name, ' : '') . 'notes, updated_by, created_at, updated_at';
-    $values = '?, ?, ?, ?, ' . ($has_bank_name ? '?, ' : '') . '?, ?, NOW(), NOW()';
-    $updates = 'opening_cash = VALUES(opening_cash), opening_bank = VALUES(opening_bank), '
-        . ($has_bank_name ? 'opening_bank_name = VALUES(opening_bank_name), ' : '')
-        . 'notes = VALUES(notes), updated_by = VALUES(updated_by), updated_at = NOW()';
-    $stmt = $conn->prepare(
-        "INSERT INTO brand_capital_settings ({$columns})
-         VALUES ({$values})
-         ON DUPLICATE KEY UPDATE {$updates}"
-    );
-    if (!$stmt) return false;
-    if ($has_bank_name) {
-        $stmt->bind_param('isdds' . 's' . 'i', $tenant_id, $brand, $opening_cash, $opening_bank, $opening_bank_name, $notes, $user_id);
-    } else {
-        $stmt->bind_param('isddsi', $tenant_id, $brand, $opening_cash, $opening_bank, $notes, $user_id);
-    }
-    $ok = $stmt->execute();
-    $stmt->close();
-    return (bool)$ok;
 }
 
 /** Totals of internal transfers between cash and bank. */
@@ -591,19 +483,30 @@ function capital_stock_value($tenant_id, $brand) {
 }
 
 /**
- * Dual-tier capital: Cash in Hand, Bank Balance, Liquid Capital and Stock
- * Capital for one brand ('' = every brand combined).
+ * Two-type capital for one brand ('' = every brand combined):
+ *
+ *   Total Capital in Bank
+ *     = capital added - capital withdrawn
+ *     + every shop's sales
+ *     - expenses - purchases - refunds
+ *
+ *   Stock-Held Capital
+ *     = inventory on hand at product purchase price.
+ *
+ * Cash in hand is no longer a separate capital type, and there are no opening
+ * balances: every amount comes from recorded capital, sales and spending.
  */
 function brand_capital_breakdown($tenant_id = null, $brand = '') {
     global $current_user;
     $empty = [
         'brand' => '',
-        'opening_cash' => 0.0, 'opening_bank' => 0.0,
         'cash_contributions' => 0.0, 'cash_withdrawals' => 0.0,
         'bank_contributions' => 0.0, 'bank_withdrawals' => 0.0,
-        'capital_contributions' => 0.0, 'capital_withdrawals' => 0.0, 'capital_net' => 0.0, 'opening_capital' => 0.0,
+        'capital_contributions' => 0.0, 'capital_withdrawals' => 0.0, 'capital_net' => 0.0,
         'pos_cash' => 0.0, 'pos_bank' => 0.0, 'invoice_cash' => 0.0, 'invoice_bank' => 0.0,
-        'order_bank' => 0.0, 'cash_receipts' => 0.0, 'bank_receipts' => 0.0,
+        'order_bank' => 0.0, 'sales_total' => 0.0,
+        'cash_receipts' => 0.0, 'bank_receipts' => 0.0,
+        'expenses_total' => 0.0, 'purchases_total' => 0.0, 'refunds_total' => 0.0,
         'cash_expenses' => 0.0, 'bank_expenses' => 0.0,
         'cash_purchases' => 0.0, 'bank_purchases' => 0.0,
         'cash_refunds' => 0.0, 'bank_refunds' => 0.0,
@@ -617,88 +520,66 @@ function brand_capital_breakdown($tenant_id = null, $brand = '') {
     $brand = capital_resolve_brand($brand);
     $empty['brand'] = $brand;
 
-    $settings = brand_capital_settings($tenant_id, $brand);
     $capital = capital_summary($tenant_id, $brand);
     $receipts = capital_sales_receipts($tenant_id, $brand);
     $expenses = capital_expense_outflows($tenant_id, $brand);
     $purchases = capital_purchase_outflows($tenant_id, $brand);
     $refunds = capital_refund_outflows($tenant_id, $brand);
-    $transfers = brand_internal_transfer_totals($tenant_id, $brand);
     $stock = capital_stock_value($tenant_id, $brand);
 
-    $cash_banked = 0.0;
-    if (db_table_exists('bank_sales_deposits')) {
-        $brand_sql = $brand !== '' ? ' AND brand = ?' : '';
-        $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
-        $row = fetch_one(
-            "SELECT COALESCE(SUM(amount), 0) t FROM bank_sales_deposits
-              WHERE tenant_id = ?{$brand_sql}",
-            ...$params
-        ) ?: [];
-        $cash_banked = (float)($row['t'] ?? 0);
-    }
+    $capital_contributions = (float)$capital['contributions'];
+    $capital_withdrawals = (float)$capital['withdrawals'];
+    $sales_total = (float)$receipts['cash'] + (float)$receipts['bank'];
+    $expenses_total = (float)$expenses['cash'] + (float)$expenses['bank'];
+    $purchases_total = (float)$purchases['cash'] + (float)$purchases['bank'];
+    $refunds_total = (float)$refunds['cash'] + (float)$refunds['bank'];
 
-    $cash = (float)$settings['opening_cash']
-        + (float)$capital['cash_contributions']
-        - (float)$capital['cash_withdrawals']
-        + (float)$receipts['pos_cash']
-        + (float)$receipts['invoice_cash']
-        - (float)$expenses['cash']
-        - (float)$purchases['cash']
-        - (float)$refunds['cash']
-        - $cash_banked
-        - (float)$transfers['cash_to_bank']
-        + (float)$transfers['bank_to_cash'];
+    $bank = $capital_contributions
+        - $capital_withdrawals
+        + $sales_total
+        - $expenses_total
+        - $purchases_total
+        - $refunds_total;
+    $total = $bank + $stock;
 
-    $bank = (float)$settings['opening_bank']
-        + (float)$capital['bank_contributions']
-        - (float)$capital['bank_withdrawals']
-        + (float)$receipts['pos_bank']
-        + (float)$receipts['invoice_bank']
-        + (float)$receipts['order_bank']
-        - (float)$expenses['bank']
-        - (float)$purchases['bank']
-        - (float)$refunds['bank']
-        + $cash_banked
-        + (float)$transfers['cash_to_bank']
-        - (float)$transfers['bank_to_cash'];
-
-    $liquid = $cash + $bank;
-    $total = $liquid + $stock;
     $bank_accounts = bank_accounts_summary($tenant_id, $brand);
-    $bank_allocated = (float)($bank_accounts['available'] ?? 0);
+    $bank_allocated = 0.0;
+    foreach ($bank_accounts['banks'] as $bank_row) {
+        $bank_allocated += (float)$bank_row['available'];
+    }
 
     return [
         'brand' => $brand,
-        'opening_cash' => (float)$settings['opening_cash'],
-        'opening_bank' => (float)$settings['opening_bank'],
-        'cash_contributions' => (float)$capital['cash_contributions'],
-        'cash_withdrawals' => (float)$capital['cash_withdrawals'],
-        'bank_contributions' => (float)$capital['bank_contributions'],
-        'bank_withdrawals' => (float)$capital['bank_withdrawals'],
-        'capital_contributions' => (float)$capital['contributions'],
-        'capital_withdrawals' => (float)$capital['withdrawals'],
-        'capital_net' => (float)$capital['net'] + (float)$settings['opening_cash'] + (float)$settings['opening_bank'],
-        'opening_capital' => (float)$settings['opening_cash'] + (float)$settings['opening_bank'],
-        'pos_cash' => (float)$receipts['pos_cash'],
-        'pos_bank' => (float)$receipts['pos_bank'],
-        'invoice_cash' => (float)$receipts['invoice_cash'],
-        'invoice_bank' => (float)$receipts['invoice_bank'],
+        'cash_contributions' => 0.0,
+        'cash_withdrawals' => 0.0,
+        'bank_contributions' => $capital_contributions,
+        'bank_withdrawals' => $capital_withdrawals,
+        'capital_contributions' => $capital_contributions,
+        'capital_withdrawals' => $capital_withdrawals,
+        'capital_net' => $capital_contributions - $capital_withdrawals,
+        'pos_cash' => 0.0,
+        'pos_bank' => (float)$receipts['pos_cash'] + (float)$receipts['pos_bank'],
+        'invoice_cash' => 0.0,
+        'invoice_bank' => (float)$receipts['invoice_cash'] + (float)$receipts['invoice_bank'],
         'order_bank' => (float)$receipts['order_bank'],
-        'cash_receipts' => (float)$receipts['cash'],
-        'bank_receipts' => (float)$receipts['bank'],
-        'cash_expenses' => (float)$expenses['cash'],
-        'bank_expenses' => (float)$expenses['bank'],
-        'cash_purchases' => (float)$purchases['cash'],
-        'bank_purchases' => (float)$purchases['bank'],
-        'cash_refunds' => (float)$refunds['cash'],
-        'bank_refunds' => (float)$refunds['bank'],
-        'cash_banked' => $cash_banked,
-        'transfers_cash_to_bank' => (float)$transfers['cash_to_bank'],
-        'transfers_bank_to_cash' => (float)$transfers['bank_to_cash'],
-        'cash' => $cash,
+        'sales_total' => $sales_total,
+        'cash_receipts' => 0.0,
+        'bank_receipts' => $sales_total,
+        'expenses_total' => $expenses_total,
+        'purchases_total' => $purchases_total,
+        'refunds_total' => $refunds_total,
+        'cash_expenses' => 0.0,
+        'bank_expenses' => $expenses_total,
+        'cash_purchases' => 0.0,
+        'bank_purchases' => $purchases_total,
+        'cash_refunds' => 0.0,
+        'bank_refunds' => $refunds_total,
+        'cash_banked' => 0.0,
+        'transfers_cash_to_bank' => 0.0,
+        'transfers_bank_to_cash' => 0.0,
+        'cash' => 0.0,
         'bank' => $bank,
-        'liquid' => $liquid,
+        'liquid' => $bank,
         'stock' => $stock,
         'total' => $total,
         'bank_allocated' => $bank_allocated,
@@ -823,12 +704,9 @@ function capital_balance_sheet($tenant_id = null, $brand = '') {
 
     $revenue = $pos_sales + $invoice_payments + $order_sales;
     $net_profit = $revenue - $returns - $expenses;
-    $opening_capital = (float)$breakdown['opening_cash'] + (float)$breakdown['opening_bank'];
-    $capital = $summary['net'] + $opening_capital;
-    $cash_in_hand = (float)$breakdown['cash'];
+    $capital = (float)$summary['net'];
     $bank_balance = (float)$breakdown['bank'];
-
-    $total_assets = $cash_in_hand + $bank_balance + $inventory + $receivables;
+    $total_assets = $bank_balance + $inventory + $receivables;
     $total_funding = $capital + $net_profit + $payables;
 
     return [
@@ -836,13 +714,13 @@ function capital_balance_sheet($tenant_id = null, $brand = '') {
         'capital_contributions' => $summary['contributions'],
         'capital_withdrawals'   => $summary['withdrawals'],
         'capital_net'           => $capital,
-        'opening_capital'       => $opening_capital,
-        'bank_net'              => $summary['bank_net'],
-        'bank_available'        => (float)$breakdown['bank_allocated'],
+        'bank_net'              => $summary['net'],
+        'bank_available'        => $bank_balance,
         'banks'                 => $breakdown['banks'],
         'pos_sales'             => $pos_sales,
         'invoice_payments'      => $invoice_payments,
         'order_sales'           => $order_sales,
+        'sales_total'           => (float)$breakdown['sales_total'],
         'returns'               => $returns,
         'expenses'              => $expenses,
         'net_profit'            => $net_profit,
@@ -850,11 +728,13 @@ function capital_balance_sheet($tenant_id = null, $brand = '') {
         'stock_capital'         => $inventory,
         'receivables'           => $receivables,
         'payables'              => $payables,
-        'cash_in_hand'          => $cash_in_hand,
+        'cash_in_hand'          => 0.0,
+        'shop_cash_allocated'   => 0.0,
+        'shop_cash_unallocated' => 0.0,
         'bank_balance'          => $bank_balance,
-        'liquid_capital'        => (float)$breakdown['liquid'],
+        'liquid_capital'        => $bank_balance,
         'total_capital'         => (float)$breakdown['total'],
-        'cash'                  => $cash_in_hand,
+        'cash'                  => 0.0,
         'total_assets'          => $total_assets,
         'total_funding'         => $total_funding,
         'difference'            => $total_assets - $total_funding,
@@ -1028,7 +908,6 @@ function bank_accounts_summary($tenant_id = null, $brand = '') {
     $empty = [
         'banks' => [],
         'capital_in' => 0.0,
-        'opening_in' => 0.0,
         'capital_out' => 0.0,
         'sales_banked' => 0.0,
         'expenses_out' => 0.0,
@@ -1050,7 +929,6 @@ function bank_accounts_summary($tenant_id = null, $brand = '') {
             $banks[$key] = [
                 'bank_name' => trim((string)$name),
                 'capital_in' => 0.0,
-                'opening_in' => 0.0,
                 'capital_out' => 0.0,
                 'sales_banked' => 0.0,
                 'expenses_out' => 0.0,
@@ -1083,50 +961,6 @@ function bank_accounts_summary($tenant_id = null, $brand = '') {
             if ($key === '') continue;
             $banks[$key]['capital_in'] += (float)$row['capital_in'];
             $banks[$key]['capital_out'] += (float)$row['capital_out'];
-        }
-    }
-
-    // Opening bank balances allocated to the selected bank account(s).
-    if (brand_capital_settings_table_ready()) {
-        if ($brand !== '') {
-            $opening_settings = brand_capital_settings($tenant_id, $brand);
-            if ((float)$opening_settings['opening_bank'] > 0 && trim((string)$opening_settings['opening_bank_name']) !== '') {
-                $opening_key = $ensure($opening_settings['opening_bank_name']);
-                if ($opening_key !== '') {
-                    $banks[$opening_key]['opening_in'] += (float)$opening_settings['opening_bank'];
-                }
-            }
-        } elseif (capital_column_exists('brand_capital_settings', 'opening_bank_name')) {
-            $opening_rows = fetch_all(
-                "SELECT opening_bank, opening_bank_name FROM brand_capital_settings
-                  WHERE tenant_id = ? AND opening_bank > 0
-                    AND opening_bank_name IS NOT NULL AND TRIM(opening_bank_name) <> ''",
-                $tenant_id
-            );
-            foreach ($opening_rows as $opening_row) {
-                $opening_key = $ensure($opening_row['opening_bank_name']);
-                if ($opening_key !== '') {
-                    $banks[$opening_key]['opening_in'] += (float)$opening_row['opening_bank'];
-                }
-            }
-        }
-    }
-
-    // Cash banked through Close Business.
-    if (db_table_exists('bank_sales_deposits')) {
-        $brand_sql = $brand !== '' ? ' AND brand = ?' : '';
-        $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
-        $rows = fetch_all(
-            "SELECT bank_name, COALESCE(SUM(amount), 0) sales_banked
-               FROM bank_sales_deposits
-              WHERE tenant_id = ?{$brand_sql}
-              GROUP BY bank_name",
-            ...$params
-        );
-        foreach ($rows as $row) {
-            $key = $ensure($row['bank_name']);
-            if ($key === '') continue;
-            $banks[$key]['sales_banked'] += (float)$row['sales_banked'];
         }
     }
 
@@ -1196,31 +1030,8 @@ function bank_accounts_summary($tenant_id = null, $brand = '') {
         }
     }
 
-    // Internal transfers in and out of each bank.
-    if (brand_internal_transfers_table_ready()) {
-        $brand_sql = $brand !== '' ? ' AND t.brand = ?' : '';
-        $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
-        $rows = fetch_all(
-            "SELECT t.bank_name, t.direction, COALESCE(SUM(t.amount), 0) total
-               FROM brand_internal_transfers t
-              WHERE t.tenant_id = ?{$brand_sql}
-              GROUP BY t.bank_name, t.direction",
-            ...$params
-        );
-        foreach ($rows as $row) {
-            $key = $ensure($row['bank_name']);
-            if ($key === '') continue;
-            if ((string)$row['direction'] === 'cash_to_bank') {
-                $banks[$key]['transfers_in'] += (float)$row['total'];
-            } elseif ((string)$row['direction'] === 'bank_to_cash') {
-                $banks[$key]['transfers_out'] += (float)$row['total'];
-            }
-        }
-    }
-
     $totals = [
         'capital_in' => 0.0,
-        'opening_in' => 0.0,
         'capital_out' => 0.0,
         'sales_banked' => 0.0,
         'expenses_out' => 0.0,
@@ -1231,8 +1042,7 @@ function bank_accounts_summary($tenant_id = null, $brand = '') {
         'available' => 0.0,
     ];
     foreach ($banks as &$bank) {
-        $bank['available'] = $bank['opening_in'] + $bank['capital_in'] - $bank['capital_out'] + $bank['sales_banked']
-            + $bank['transfers_in'] - $bank['transfers_out']
+        $bank['available'] = $bank['capital_in'] - $bank['capital_out']
             - $bank['expenses_out'] - $bank['purchases_out'] - $bank['refunds_out'];
         foreach ($totals as $key => $value) {
             $totals[$key] += (float)$bank[$key];
@@ -1283,3 +1093,122 @@ function bank_sales_deposit_history($tenant_id = null, $brand = '', $date = '', 
     return fetch_all($sql, ...$params);
 }
 
+/**
+ * Total sales for every shop of a brand ('' = every shop).
+ *
+ * A shop's sales are completed POS order totals, invoice payments received
+ * and storefront order payments. They are attributed through the order or
+ * invoice warehouse shop, or through orders.shop_id when it is set. These are
+ * the figures that automatically increase the brand's Total Capital in Bank.
+ */
+function shop_sales_totals($tenant_id = null, $brand = '') {
+    global $current_user;
+    if (!$current_user) return [];
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $brand = capital_resolve_brand($brand);
+
+    $brand_sql = $brand !== '' ? ' AND s.brand = ?' : '';
+    $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
+    $shops = fetch_all(
+        "SELECT s.shop_id, s.name, s.code, s.brand, s.is_active
+           FROM shops s
+          WHERE s.tenant_id = ?{$brand_sql}
+          ORDER BY s.is_active DESC, s.name",
+        ...$params
+    );
+    if (!$shops) return [];
+
+    $rows = [];
+    foreach ($shops as $shop) {
+        $sid = (int)$shop['shop_id'];
+        $rows[$sid] = [
+            'shop_id'       => $sid,
+            'name'          => (string)$shop['name'],
+            'code'          => (string)$shop['code'],
+            'brand'         => (string)($shop['brand'] ?? ''),
+            'is_active'     => (int)$shop['is_active'],
+            'pos_sales'     => 0.0,
+            'invoice_sales' => 0.0,
+            'order_sales'   => 0.0,
+            'total_sales'   => 0.0,
+        ];
+    }
+
+    // Completed POS sales, attributed through the order warehouse shop.
+    $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
+    foreach (fetch_all(
+        "SELECT w.shop_id, COALESCE(SUM(o.total), 0) t
+           FROM pos_orders o
+           JOIN warehouses w ON w.warehouse_id = o.warehouse_id AND w.tenant_id = o.tenant_id
+           JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE o.tenant_id = ? AND o.status = 'completed'{$brand_sql}
+          GROUP BY w.shop_id",
+        ...$params
+    ) as $r) {
+        $sid = (int)$r['shop_id'];
+        if (isset($rows[$sid])) $rows[$sid]['pos_sales'] = (float)$r['t'];
+    }
+
+    // Invoice payments received, attributed through the invoice warehouse shop.
+    $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
+    foreach (fetch_all(
+        "SELECT w.shop_id, COALESCE(SUM(p.amount), 0) t
+           FROM payments p
+           JOIN invoices i ON i.invoice_id = p.invoice_id AND i.tenant_id = p.tenant_id
+           JOIN warehouses w ON w.warehouse_id = i.warehouse_id AND w.tenant_id = i.tenant_id
+           JOIN shops s ON s.shop_id = w.shop_id AND s.tenant_id = w.tenant_id
+          WHERE p.tenant_id = ?{$brand_sql}
+          GROUP BY w.shop_id",
+        ...$params
+    ) as $r) {
+        $sid = (int)$r['shop_id'];
+        if (isset($rows[$sid])) $rows[$sid]['invoice_sales'] = (float)$r['t'];
+    }
+
+    // Storefront order payments, attributed to orders.shop_id when set and
+    // otherwise to the order warehouse shop. Order returns are netted out.
+    $params = $brand !== '' ? [$tenant_id, $brand] : [$tenant_id];
+    foreach (fetch_all(
+        "SELECT COALESCE(o.shop_id, w.shop_id) shop_id,
+                COALESCE(SUM(COALESCE(o.Amount_paid, 0) - COALESCE(o.returned_amount, 0)), 0) t
+           FROM orders o
+           LEFT JOIN warehouses w ON w.warehouse_id = o.warehouse_id AND w.tenant_id = o.tenant_id
+           JOIN shops s ON s.shop_id = COALESCE(o.shop_id, w.shop_id) AND s.tenant_id = o.tenant_id
+          WHERE o.tenant_id = ? AND o.status NOT IN ('cancelled', 'rejected'){$brand_sql}
+          GROUP BY COALESCE(o.shop_id, w.shop_id)",
+        ...$params
+    ) as $r) {
+        $sid = (int)$r['shop_id'];
+        if (isset($rows[$sid])) $rows[$sid]['order_sales'] = (float)$r['t'];
+    }
+
+    foreach ($rows as &$row) {
+        $row['total_sales'] = $row['pos_sales'] + $row['invoice_sales'] + $row['order_sales'];
+    }
+    unset($row);
+
+    return array_values($rows);
+}
+
+/** Brand sales total split into shop-attributed and unassigned amounts. */
+function brand_shop_sales_summary($tenant_id = null, $brand = '') {
+    global $current_user;
+    if (!$current_user) {
+        return ['brand' => '', 'sales' => 0.0, 'attributed' => 0.0, 'unassigned' => 0.0, 'shops' => []];
+    }
+    $tenant_id = $tenant_id === null ? (int)$current_user->tenant_id : (int)$tenant_id;
+    $brand = capital_resolve_brand($brand);
+    $breakdown = brand_capital_breakdown($tenant_id, $brand);
+    $shops = shop_sales_totals($tenant_id, $brand);
+    $attributed = 0.0;
+    foreach ($shops as $row) {
+        $attributed += (float)$row['total_sales'];
+    }
+    return [
+        'brand'      => $brand,
+        'sales'      => (float)$breakdown['sales_total'],
+        'attributed' => $attributed,
+        'unassigned' => (float)$breakdown['sales_total'] - $attributed,
+        'shops'      => $shops,
+    ];
+}

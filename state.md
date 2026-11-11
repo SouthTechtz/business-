@@ -1172,3 +1172,89 @@ function shop_is_accessible($shop_id, $include_inactive = true) {
     return (bool)$loc;
 }
 ```
+
+---
+
+## 16. Capital model v2 — two-tier capital and purchase receiving (11 November 2026)
+
+The brand capital model was simplified on 11 November 2026. Cash in hand, per-shop cash balances, shop cash transfers and Close Business were removed. **Opening balances were removed entirely** (same day, migration 044): there is no shop opening sales and no brand opening cash/bank.
+
+**Rules now in force**
+
+* **Total Capital in Bank** = capital added − capital withdrawn + all shop sales − expenses − purchases paid − refunds.
+* **Stock-Held Capital** = `SUM(inventory_stock.quantity × products.purchase_price)`.
+* **Total Brand Capital** = Total Capital in Bank + Stock-Held Capital.
+* Withdrawals are validated against Total Capital in Bank. Per-bank availability excludes sales money that has not been assigned to a named bank; the remainder is displayed as unassigned sales/cash capital.
+* A shop's total sales are shown on the shop dashboard and feed brand bank capital automatically — there is no closing step.
+
+**Purchase receiving**
+
+1. Purchases never change stock directly.
+2. Setting a purchase's goods status to **Arrived at Godown** opens the confirmation popup (see §17). The status is only saved when the popup is confirmed.
+3. The receiver enters the quantities received, damaged, to return and other. Only `received − damaged − returned − other` is added to `inventory_stock` (central Godown) and written to `inventory_movements` (`godown_receipt`).
+4. `godown_receipts` stores the receipt (`GRN-…`), purchase, product, good quantity, damaged quantity and receiver.
+5. A purchase can be received once. After receipt, its goods status, edit and delete actions are blocked; a second receipt attempt is rejected and changes nothing.
+6. Receiving is available to the master administrator, a brand Mini Admin (own brand) and the Godown Manager (see §17).
+7. The Godown Manager's purchases list includes the receiving queue (arrived, unreceived purchases created by anyone) and shows “Receiving due” / “Received” badges.
+
+**Key files:** `capital-helpers.php`, `capital.php`, `dashboard.php`, `shop-view.php`, `reports.php`, `report-print.php`, `sales.php`, `expenses.php`, `purchases.php`, `purchase-add.php`, `purchase-edit.php`, `purchase-status.php`, `purchase-view.php`, `purchase-receive.php` (new), `helpers.php` (Godown Manager page whitelist), `database/migrations/043_purchase_receiving.php` (applied), `database/migrations/042_shop_cash_balances.php` (applied; its transfer table is no longer used by the UI).
+
+`close-business.php` was deleted.
+
+**Opening-balance removal (migration 044).** `shop-opening-balances.php` was deleted, the sidebar link removed, and the helpers `shop_opening_balances()`, `shop_opening_sales()` and `shop_opening_total()` removed. Opening balances no longer appear on the dashboard, shop dashboard, sales list, brand reports, balance sheet or printable report. `capital_balance_sheet()` and `brand_capital_breakdown()` return no opening fields; `bank_accounts_summary()` has no `opening_in`. Database tables dropped: `shop_opening_balances`, `brand_capital_settings`, `brand_opening_balances_removed_041` (and `brand_opening_balances` if present). A pre-drop dump is kept in `database/backups/opening-balances-pre-044-20261111-153212.sql`.
+
+**Verification:** all PHP files and migrations lint clean; every capital, dashboard, sales, purchase and report page rendered without warnings for Administrator, Mini Admin, Godown Manager and Shop Manager; an administrator receipt (5 received, 1 damaged) added 4 units and 20,000 to stock capital, a Godown Manager receipt added 2 units, and both receipts were replayed unsuccessfully. Test rows were removed and the database restored to its prior state (GSP 2,112,000; TECHDOKTA 7,885,000).
+
+**Still open:** expenses and supplier payments are not validated against available bank capital; the 200,000 purchase with no payment method keeps GSP bank capital at zero; 955,000 of stock still sits in shops of the other brand; sales-return, invoice edit/cancel, credit-collection double counting and POS price override issues remain as documented in `docs/sales-and-pos-audit-2026-11-11.md`.
+
+---
+
+## 17. Purchase confirmation and supplier-damage returns (11 November 2026)
+
+**Who may confirm a purchase:** the master administrator (`is_system_administrator()`), a brand Mini Admin (`is_brand_admin()`, restricted to their own brand) and the Godown Manager. The rule is centralised in `can_receive_purchases()` (`helpers.php`).
+
+**Flow**
+
+1. A purchase is recorded with the amount actually paid. Total Capital in Bank already drops by `amount_paid` at that moment (`capital_purchase_outflows()`).
+2. Choosing **Arrived at Godown** opens the **Confirm Goods Received** popup automatically on `purchases.php?receive=<id>` (the same modal opens from the row action or the purchase view). **The goods status is not saved yet:** cancelling the popup leaves the purchase at its previous status.
+3. The popup records: quantity received, damaged, to return to supplier, other (missing/rejected), and confirmation notes. It shows the good quantity that will enter stock. Quantity inputs follow the product unit (whole numbers for `is_decimal = 0`, up to two decimals otherwise), so whole-unit products accept plain integers.
+4. On confirmation: good units (`received − damaged − returned − other`) enter `inventory_stock` at the central Godown, a `godown_receipt` movement is written, the purchase stores all quantities **and its status becomes Arrived at Godown**, and Stock-Held Capital rises automatically. Damaged, returned and other units do **not** enter stock and do **not** change bank capital again.
+5. If any rejected quantity exists, one **supplier return** is created in `sales_returns` (`source_type = purchase`, `return_category = supplier_damage`, `source_id = purchase_id`) with the split quantities, notes and value at purchase cost. It never reduces sales revenue or cash.
+6. A purchase can be confirmed once; the status, edit and delete actions are blocked afterwards and replays are rejected.
+
+**Constraints (added 11 November 2026)**
+
+* `purchase_is_received()` locks a purchase when it has a received timestamp, a godown receipt **or** a supplier return. Locked purchases cannot be edited, re-statused or deleted — direct requests redirect with an error — and the Edit / Update status / Delete actions disappear from the list.
+* **Deleting a purchase is reserved for the system (master) administrator.** A Godown Manager or Mini Admin gets **403** even for a purchase they created, and the Delete action is hidden. Deleting is a POST + CSRF action and writes an audit-log entry.
+* A received purchase cannot be deleted by anyone, including the master administrator; correct it through stock/returns instead.
+* Unreceived purchases can still be edited by their owner (Godown Manager) or an administrator.
+
+**Sales Returns categorisation:** the screen now shows a **Category** column — `Customer return` for POS, invoice and order returns, and `Supplier damage` for goods rejected from a supplier delivery, linked to the purchase.
+
+**Migration 045** (`database/migrations/045_purchase_confirmation_returns.php`, applied): extends `sales_returns.source_type` with `purchase`; adds `return_category`, `damaged_quantity`, `returned_quantity`, `other_quantity`, `notes` and an index; adds `returned_quantity` / `other_quantity` to `purchases` and `godown_receipts`.
+
+**Files:** `helpers.php` (`can_receive_purchases()`), `purchase-receive.php`, `purchases.php` (modal + auto-open), `purchase-status.php`, `purchase-add.php`, `purchase-edit.php`, `purchase-view.php`, `sales-returns.php`.
+
+**Verification:** Mini Admin GSP confirmed purchase #8 (10 received, 2 damaged, 1 to return, 1 other): stock 10 → 16, stock value +30,000, receipt `GRN-000001`, supplier return `RET-000002` (4 units × 5,000 = 20,000), purchase marked received by user 64; a TECHDOKTA Mini Admin was redirected away from the GSP purchase; the Godown Manager could open the form; replaying the confirmation changed nothing. Re-tested with a whole-unit product: selecting **Arrived at Godown** redirected to the popup **without changing the status** (it stayed In Production, equivalent to cancelling), the popup accepted the integer quantities `10 / 2 / 1 / 1`, and confirming set the status to **Arrived at Godown**, added 6 units and created the supplier return. All test rows were removed and the database restored (stock 10, stock value 5,847,000, purchases and returns unchanged).
+
+**Constraint verification:** a received purchase returned **302** for edit, delete and status change and stayed unchanged; the Delete action was absent for the Godown Manager and Mini Admin, and both received **403** on direct GET and POST; the master administrator deleted an unreceived test purchase through the POST + CSRF action and an audit entry (`Purchase #9 deleted`) was written. Received purchases remain undeletable for every role.
+
+**Not adjusted by design:** supplier payables still show the purchase total less the amount paid. Rejected goods are recorded for tracking and stock accuracy; they are not yet netted against the amount owed to the supplier.
+
+---
+
+## 18. Sales/capital test reset utility (11 November 2026)
+
+`database/reset_sales_capital.php` is a CLI-only, local-only data reset used before sales and stock integrity testing. It requires `--force` and takes two optional arguments:
+
+```bash
+php database/reset_sales_capital.php --force --shop=11 --qty=10 --tenant=1
+```
+
+**It clears:** POS orders (items and payments), POS-generated invoices (items and payments), customer sales returns (POS / invoice / order), storefront order amounts (`Amount_paid`, `returned_amount`), capital movements, expenses, bank sales deposits, internal transfers, sales-related inventory movements, stock reservations and POS sessions. It zeroes `purchases.amount_paid`, resets the invoice counter to 1001 when no invoices remain, and leaves purchase records, stock receipts and **supplier** returns intact.
+
+**It sets stock:** every active product of the test shop's brand plus every product that already has a stock row at the shop warehouse is set to the requested quantity, with an `adjustment` inventory movement per change.
+
+**Applied on 11 November 2026:** backup `database/backups/pre-sales-capital-reset-20261111-175224.sql`; Survey GSP (#11, warehouse Mwenge #17) set to **10** for Turret Camera, Wireless Bluetooth Speaker, Solar Panel, A and C. Result: **Total Capital in Bank 0.00**, Stock-Held Capital 6,326,000, Total 6,326,000; POS at Survey GSP shows the four GSP products with 10 units each and hides the TECHDOKTA product.
+
+

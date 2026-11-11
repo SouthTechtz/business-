@@ -37,15 +37,24 @@ if ($supplier_filter > 0 && !in_array($supplier_filter, $supplier_ids, true)) {
 }
 
 $sql = "SELECT pu.*, pr.name product_name, pr.code product_code,
-               s.company_name supplier_name
+               COALESCE(u.is_decimal, 0) is_decimal, COALESCE(u.short_name, 'unit(s)') unit_name,
+               s.company_name supplier_name,
+               EXISTS (SELECT 1 FROM godown_receipts gr
+                        WHERE gr.tenant_id = pu.tenant_id AND gr.purchase_id = pu.purchase_id) has_receipt,
+               EXISTS (SELECT 1 FROM sales_returns sr
+                        WHERE sr.tenant_id = pu.tenant_id AND sr.source_type = 'purchase'
+                          AND sr.source_id = pu.purchase_id) has_supplier_return
           FROM purchases pu
           JOIN products pr ON pr.product_id = pu.product_id AND pr.tenant_id = pu.tenant_id
+          LEFT JOIN units_of_measurement u ON u.unit_id = pr.unit_id AND u.tenant_id = pr.tenant_id
           LEFT JOIN suppliers s ON s.supplier_id = pu.supplier_id AND s.tenant_id = pu.tenant_id
          WHERE pu.tenant_id = ?";
 $params = [$tenant_id];
 $types = 'i';
 if (is_godown_manager()) {
-    $sql .= " AND pu.created_by = ?";
+    // The Godown Manager sees their own purchases plus everything still waiting
+    // to be confirmed as received.
+    $sql .= " AND (pu.created_by = ? OR pu.received_at IS NULL)";
     $params[] = (int)$current_user->user_id;
     $types .= 'i';
 }
@@ -114,6 +123,19 @@ foreach ($purchases as $row) {
     $total_paid_sum += $paid;
     $total_amount_sum += $total;
     $total_remained_sum += ($total - $paid);
+}
+
+$receive_request_id = (int)($_GET['receive'] ?? 0);
+$auto_receive = null;
+if ($receive_request_id > 0 && can_receive_purchases()) {
+    foreach ($purchases as $purchase_row) {
+        if ((int)$purchase_row['purchase_id'] === $receive_request_id
+            && empty($purchase_row['received_at'])
+            && (string)($purchase_row['status'] ?? '') !== 'cancelled') {
+            $auto_receive = $purchase_row;
+            break;
+        }
+    }
 }
 
 require_once 'navbar.php';
@@ -249,17 +271,44 @@ $cur = tenant_currency();
                             <td><?php echo e($row['supplier_name'] ?: '—'); ?></td>
                             <td>
                                 <?php $row_goods_status = (string)($row['status'] ?? 'in_production'); ?>
+                                <?php $row_received = !empty($row['received_at']) || (int)($row['has_receipt'] ?? 0) > 0 || (int)($row['has_supplier_return'] ?? 0) > 0; ?>
                                 <span class="badge badge-<?php echo e(purchase_goods_status_class($row_goods_status)); ?>"><?php echo e(purchase_goods_status_label($row_goods_status)); ?></span>
+                                <?php if ($row_received): ?>
+                                    <span class="badge badge-success" title="Goods received into the Godown">Received</span>
+                                <?php elseif ($row_goods_status === 'arrived_godown'): ?>
+                                    <span class="badge badge-warning" title="Waiting for the Godown Manager to record the goods received">Receiving due</span>
+                                <?php endif; ?>
                             </td>
                             <td class="text-right text-success"><?php echo e(money($paid, $cur)); ?></td>
                             <td class="text-right text-danger"><?php echo e(money($remained, $cur)); ?></td>
                             <td class="text-right font-weight-semibold"><?php echo e(money($total, $cur)); ?></td>
                             <td class="text-right">
                                 <?php
-                                echo row_action_menu([
+                                $purchase_actions = [
                                     ['label' => 'View purchase', 'icon' => 'fa-eye', 'href' => 'purchase-view.php?id=' . (int)$row['purchase_id']],
-                                    ['label' => 'Edit purchase', 'icon' => 'fa-pencil', 'href' => 'purchase-edit.php?id=' . (int)$row['purchase_id']],
-                                    [
+                                ];
+                                if (!$row_received) {
+                                    $purchase_actions[] = ['label' => 'Edit purchase', 'icon' => 'fa-pencil', 'href' => 'purchase-edit.php?id=' . (int)$row['purchase_id']];
+                                }
+                                if (!$row_received && $row_goods_status !== 'cancelled' && can_receive_purchases()) {
+                                    $purchase_actions[] = [
+                                        'label' => 'Confirm goods received',
+                                        'icon' => 'fa-download',
+                                        'href' => '#',
+                                        'attrs' => [
+                                            'data-toggle' => 'modal',
+                                            'data-target' => '#purchaseReceiveModal',
+                                            'data-purchase-id' => (int)$row['purchase_id'],
+                                            'data-purchase-label' => 'Purchase #' . (int)$row['purchase_id'],
+                                            'data-product' => (string)$row['product_name'],
+                                            'data-ordered' => (float)$row['quantity'],
+                                            'data-unit' => (string)$row['unit_name'],
+                                            'data-decimal' => (int)$row['is_decimal'],
+                                        ],
+                                    ];
+                                }
+                                if (!$row_received) {
+                                    $purchase_actions[] = [
                                         'label' => 'Update goods status',
                                         'icon' => 'fa-truck',
                                         'attrs' => [
@@ -269,16 +318,23 @@ $cur = tenant_currency();
                                             'data-purchase-label' => 'Purchase #' . (int)$row['purchase_id'],
                                             'data-status' => $row_goods_status,
                                         ],
-                                    ],
-                                    ['type' => 'divider'],
-                                    [
+                                    ];
+                                }
+                                if (is_system_administrator() && !$row_received) {
+                                    $purchase_actions[] = ['type' => 'divider'];
+                                    $purchase_actions[] = [
                                         'label' => 'Delete purchase',
                                         'icon' => 'fa-trash',
                                         'danger' => true,
-                                        'href' => 'purchase-delete.php?id=' . (int)$row['purchase_id'],
-                                        'attrs' => ['onclick' => "return confirm('Delete this purchase?');"],
-                                    ],
-                                ], 'Purchase actions');
+                                        'form' => [
+                                            'action' => 'purchase-delete.php',
+                                            'method' => 'POST',
+                                            'fields' => ['purchase_id' => (int)$row['purchase_id']],
+                                            'confirm' => 'Delete this purchase permanently?',
+                                        ],
+                                    ];
+                                }
+                                echo row_action_menu($purchase_actions, 'Purchase actions');
                                 ?>
                             </td>
                         </tr>
@@ -371,6 +427,134 @@ $cur = tenant_currency();
         $('#purchaseStatusLabel').text($button.data('purchase-label'));
         $('#purchaseStatusSelect').val($button.data('status'));
     });
+</script>
+
+<div class="modal fade" id="purchaseReceiveModal" tabindex="-1" role="dialog" aria-labelledby="purchaseReceiveModalLabel" aria-hidden="true"
+     data-auto="<?php echo $auto_receive ? '1' : '0'; ?>"
+     data-auto-id="<?php echo $auto_receive ? (int)$auto_receive['purchase_id'] : ''; ?>"
+     data-auto-label="<?php echo $auto_receive ? e('Purchase #' . (int)$auto_receive['purchase_id']) : ''; ?>"
+     data-auto-product="<?php echo $auto_receive ? e((string)$auto_receive['product_name']) : ''; ?>"
+     data-auto-ordered="<?php echo $auto_receive ? e((string)(float)$auto_receive['quantity']) : ''; ?>"
+     data-auto-unit="<?php echo $auto_receive ? e((string)$auto_receive['unit_name']) : ''; ?>"
+     data-auto-decimal="<?php echo $auto_receive ? (int)$auto_receive['is_decimal'] : '0'; ?>">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <form method="POST" action="purchase-receive.php">
+                <?php echo csrf_field(); ?>
+                <?php echo form_token_field(); ?>
+                <input type="hidden" name="purchase_id" id="receivePurchaseId" value="">
+                <input type="hidden" name="return_to" value="purchases">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="purchaseReceiveModalLabel"><i class="fa fa-download mr-1"></i> Confirm Goods Received</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Purchase <strong id="receivePurchaseLabel"></strong> — <span id="receiveProductName"></span></p>
+                    <p class="text-muted small">Record what actually arrived. Good units enter stock and stock-held capital. Damaged, returned and other units are recorded as a supplier return and do not enter stock. The goods status becomes <strong>Arrived at Godown</strong> only when you confirm.</p>
+                    <div class="form-group">
+                        <label>Quantity Received <span class="text-danger">*</span></label>
+                        <input type="number" name="received_quantity" id="receiveReceived" class="form-control" min="1" step="1" required>
+                        <small class="text-muted">Total that arrived, including damaged and returned units. Ordered: <strong id="receiveOrderedLabel"></strong> <span id="receiveUnitLabel"></span>.</small>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label>Damaged</label>
+                            <input type="number" name="damaged_quantity" id="receiveDamaged" class="form-control receive-deduction" min="0" step="1" value="0">
+                            <small class="text-muted">Broken / not sellable.</small>
+                        </div>
+                        <div class="form-group col-6">
+                            <label>To return to supplier</label>
+                            <input type="number" name="returned_quantity" id="receiveReturned" class="form-control receive-deduction" min="0" step="1" value="0">
+                            <small class="text-muted">Goods going back to the supplier.</small>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Other (missing / rejected)</label>
+                        <input type="number" name="other_quantity" id="receiveOther" class="form-control receive-deduction" min="0" step="1" value="0">
+                    </div>
+                    <div class="alert alert-info py-2 mb-2">
+                        Good quantity to add to stock: <strong id="receiveGoodPreview">0</strong> <span id="receiveGoodUnit"></span>
+                    </div>
+                    <div class="form-group mb-0">
+                        <label>Confirmation Notes</label>
+                        <textarea name="notes" class="form-control" rows="2" maxlength="2000" placeholder="Optional note about this delivery"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success"><i class="fa fa-check mr-1"></i> Confirm Received</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+$(function () {
+    var $modal = $('#purchaseReceiveModal');
+    var received = document.getElementById('receiveReceived');
+    var deductions = document.querySelectorAll('#purchaseReceiveModal .receive-deduction');
+    var preview = document.getElementById('receiveGoodPreview');
+
+    function refreshPreview() {
+        var good = parseFloat(received.value) || 0;
+        deductions.forEach(function (input) { good -= parseFloat(input.value) || 0; });
+        preview.textContent = (good > 0 ? good : 0).toLocaleString(undefined, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2
+        });
+    }
+
+    function fill(data) {
+        var ordered = parseFloat(data.ordered) || 0;
+        var decimal = parseInt(data.decimal, 10) === 1;
+        var step = decimal ? '0.01' : '1';
+        $('#receivePurchaseId').val(data.id);
+        $('#receivePurchaseLabel').text(data.label || '');
+        $('#receiveProductName').text(data.product || '');
+        $('#receiveOrderedLabel').text(ordered.toLocaleString(undefined, {maximumFractionDigits: 2}));
+        $('#receiveUnitLabel, #receiveGoodUnit').text(data.unit || '');
+        received.value = ordered.toFixed(decimal ? 2 : 0);
+        received.max = ordered.toFixed(decimal ? 2 : 0);
+        received.min = decimal ? '0.01' : '1';
+        received.step = step;
+        deductions.forEach(function (input) {
+            input.value = '0';
+            input.max = ordered.toFixed(decimal ? 2 : 0);
+            input.step = step;
+        });
+        refreshPreview();
+    }
+
+    $('[data-target="#purchaseReceiveModal"]').on('click', function () {
+        var $button = $(this);
+        fill({
+            id: $button.data('purchase-id'),
+            label: $button.data('purchase-label'),
+            product: $button.data('product'),
+            ordered: $button.data('ordered'),
+            unit: $button.data('unit'),
+            decimal: $button.data('decimal')
+        });
+    });
+
+    deductions.forEach(function (input) { input.addEventListener('input', refreshPreview); });
+    received.addEventListener('input', refreshPreview);
+
+    if (String($modal.data('auto')) === '1') {
+        fill({
+            id: $modal.data('auto-id'),
+            label: $modal.data('auto-label'),
+            product: $modal.data('auto-product'),
+            ordered: $modal.data('auto-ordered'),
+            unit: $modal.data('auto-unit'),
+            decimal: $modal.data('auto-decimal')
+        });
+        $modal.modal('show');
+    }
+});
 </script>
 
 <?php require_once 'footer.php'; ?>

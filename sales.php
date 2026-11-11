@@ -155,58 +155,13 @@ foreach ($orders as $order) {
     );
     $brand_key = $brand_info['key'] !== '' ? $brand_info['key'] : 'unbranded';
     if (!isset($brand_totals[$brand_key])) {
-        $brand_totals[$brand_key] = ['label' => $brand_info['label'], 'count' => 0, 'total' => 0.0, 'opening' => 0.0];
+        $brand_totals[$brand_key] = ['label' => $brand_info['label'], 'count' => 0, 'total' => 0.0];
     }
     $brand_totals[$brand_key]['count']++;
     $brand_totals[$brand_key]['total'] += (float)$order['total'];
 }
 
-// Shop opening balances are all-time amounts. They are included in totals only
-// when the list is not narrowed by date, customer or status. A shop filter
-// includes only that shop's opening.
-$opening_total = 0.0;
-$include_opening = $date_from === '' && $date_to === '' && $customer_id === 0 && $status === '';
-
-// Shop-specific opening balances, attributed to the shop's brand.
-$warehouse_shop_id = 0;
-if ($warehouse_filter > 0) {
-    $warehouse_shop_row = fetch_one(
-        "SELECT shop_id FROM warehouses WHERE warehouse_id = ? AND tenant_id = ?",
-        $warehouse_filter,
-        $current_user->tenant_id
-    );
-    $warehouse_shop_id = (int)($warehouse_shop_row['shop_id'] ?? 0);
-}
-$accessible_shop_ids_for_opening = $is_shop_manager_view
-    ? array_map(fn($s) => (int)$s['shop_id'], accessible_shops(null, false))
-    : null;
-
-foreach (shop_opening_balances($current_user->tenant_id) as $shop_opening_row) {
-    $shop_opening_amount = (float)($shop_opening_row['opening_sales'] ?? 0);
-    if ($warehouse_filter > 0 && (int)$shop_opening_row['shop_id'] !== $warehouse_shop_id) {
-        continue;
-    }
-    if ($is_shop_manager_view && !in_array((int)$shop_opening_row['shop_id'], $accessible_shop_ids_for_opening ?: [], true)) {
-        continue;
-    }
-
-    $shop_opening_brand = trim((string)($shop_opening_row['shop_brand'] ?? ''));
-    if ($brand_filter !== '' && $shop_opening_brand !== $brand_filter) {
-        continue;
-    }
-    $opening_total += $shop_opening_amount;
-    if (!$include_opening || $shop_opening_amount <= 0) {
-        continue;
-    }
-    $shop_brand_info = sale_brand_info($shop_opening_brand, []);
-    $shop_brand_key = $shop_brand_info['key'] !== '' ? $shop_brand_info['key'] : 'unbranded';
-    if (!isset($brand_totals[$shop_brand_key])) {
-        $brand_totals[$shop_brand_key] = ['label' => $shop_brand_info['label'], 'count' => 0, 'total' => 0.0, 'opening' => 0.0];
-    }
-    $brand_totals[$shop_brand_key]['opening'] += $shop_opening_amount;
-    $brand_totals[$shop_brand_key]['total'] += $shop_opening_amount;
-}
-$total_sales_display = $total_sales_amount + ($include_opening ? $opening_total : 0);
+$total_sales_display = $total_sales_amount;
 uasort($brand_totals, fn($a, $b) => $b['total'] <=> $a['total']);
 
 require_once 'navbar.php';
@@ -220,9 +175,6 @@ $cur = tenant_currency();
         <div class="page-sub"><?php echo count($orders); ?> sale(s) found.</div>
     </div>
     <a href="sale-add.php" class="btn btn-primary"><i class="fa fa-plus mr-1"></i> New Sale</a>
-    <?php if (can_manage_capital()): ?>
-    <a href="close-business.php" class="btn btn-success ml-2"><i class="fa fa-check-circle mr-1"></i> Close Business</a>
-    <?php endif; ?>
     <a href="export-sales.php?<?php echo e(http_build_query(array_filter(['status' => $status, 'customer' => $customer_id > 0 ? $customer_id : '', 'warehouse' => $warehouse_filter > 0 ? $warehouse_filter : '', 'brand' => $brand_filter, 'date_from' => $date_from, 'date_to' => $date_to], fn($v) => $v !== ''))); ?>" class="btn btn-outline-success"><i class="fa fa-file-excel-o mr-1"></i> Excel</a>
 </div>
 
@@ -246,20 +198,11 @@ $cur = tenant_currency();
             <div class="card-body">
                 <div class="text-xs font-weight-bold text-success text-uppercase mb-1">Total Amount Sold</div>
                 <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($total_sales_display, tenant_currency())); ?></div>
-                <div class="small text-muted"><?php echo $include_opening ? 'Includes shop opening balance' : 'Actual sales only (filtered view)'; ?></div>
+                <div class="small text-muted">Completed sales in the current view</div>
             </div>
         </div>
     </div>
     <?php endif; ?>
-    <div class="col-md-4">
-        <div class="card border-left-secondary shadow-sm h-100 py-2">
-            <div class="card-body">
-                <div class="text-xs font-weight-bold text-secondary text-uppercase mb-1">Opening Sales</div>
-                <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($opening_total, tenant_currency())); ?></div>
-                <div class="small text-muted"><?php echo $include_opening ? 'Included in amounts above' : 'Not included in filtered totals'; ?></div>
-            </div>
-        </div>
-    </div>
 </div>
 
 <?php if (!$is_shop_manager_view && $brand_totals): ?>
@@ -271,9 +214,6 @@ $cur = tenant_currency();
                 <div class="text-xs font-weight-bold text-primary text-uppercase mb-1"><?php echo e($brand_total['label']); ?> Sales</div>
                 <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo e(money($brand_total['total'], tenant_currency())); ?></div>
                 <div class="small text-muted"><?php echo number_format($brand_total['count']); ?> sale(s)</div>
-                <?php if (!empty($brand_total['opening'])): ?>
-                    <div class="small text-muted">Opening: <?php echo e(money($brand_total['opening'], tenant_currency())); ?></div>
-                <?php endif; ?>
             </div>
         </div>
     </div>

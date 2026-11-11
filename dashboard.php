@@ -362,32 +362,19 @@ $shop_order_total = 0.0;
 $shop_refunds_total = 0.0;
 $shop_earnings_total = 0.0;
 
-// Shop opening sales are entered per shop by an administrator.
-$shop_opening_balances = shop_opening_balances($current_user->tenant_id);
-
-foreach ($shop_earnings as &$shop_row) {
-    $opening_shop_id = (int)($shop_row['shop_id'] ?? 0);
-    $shop_row['opening_sales'] = $opening_shop_id > 0
-        ? (float)($shop_opening_balances[$opening_shop_id]['opening_sales'] ?? 0)
-        : 0.0;
-}
-unset($shop_row);
-
-$shop_opening_total = 0.0;
 foreach ($shop_earnings as $shop_row) {
     $shop_pos = (float)($shop_row['pos_sales'] ?? 0);
     $shop_orders = (float)($shop_row['order_payments'] ?? 0);
     $shop_refunds = (float)($shop_row['refunds'] ?? 0);
-    $shop_opening = (float)($shop_row['opening_sales'] ?? 0);
     $shop_pos_total += $shop_pos;
     $shop_order_total += $shop_orders;
     $shop_refunds_total += $shop_refunds;
-    $shop_opening_total += $shop_opening;
-    $shop_earnings_total += $shop_pos + $shop_orders - $shop_refunds + $shop_opening;
+    $shop_earnings_total += $shop_pos + $shop_orders - $shop_refunds;
 }
 $all_time_sales = $shop_earnings_total;
 
-// Dual-tier capital position for this brand (or both brands for an administrator).
+// Two-tier capital position for this brand (or both brands for an administrator):
+// total capital in bank + stock-held capital.
 $dashboard_breakdown = can_manage_capital()
     ? brand_capital_breakdown($current_user->tenant_id, $brand_scope)
     : ['cash' => 0, 'bank' => 0, 'liquid' => 0, 'stock' => 0, 'total' => 0];
@@ -397,6 +384,9 @@ $dashboard_balance = can_manage_capital()
 $dashboard_brand_rows = ($brand_scope === '' && can_manage_capital())
     ? brand_capital_breakdown_by_brand($current_user->tenant_id)
     : [];
+$dashboard_shop_sales = can_manage_capital()
+    ? brand_shop_sales_summary($current_user->tenant_id, $brand_scope)
+    : ['sales' => 0.0, 'attributed' => 0.0, 'unassigned' => 0.0, 'shops' => []];
 
 require_once 'navbar.php';
 require_once 'sidebar.php';
@@ -513,7 +503,7 @@ require_once 'sidebar.php';
             <div class="widget-info">
                 <div class="widget-value" style="font-size:18px;"><?php echo e(money($month_sales, $cur)); ?></div>
                 <div class="widget-label">Sales this month</div>
-                <div class="small text-muted" style="margin-top:4px;">All-time incl. shop opening: <?php echo e(money($all_time_sales, $cur)); ?></div>
+                <div class="small text-muted" style="margin-top:4px;">All-time completed sales and order payments less refunds: <?php echo e(money($all_time_sales, $cur)); ?></div>
             </div>
         <?php if ($card_link): ?></a><?php else: ?></div><?php endif; ?>
     </div>
@@ -552,31 +542,14 @@ require_once 'sidebar.php';
 <div class="row">
     <div class="col-md-6 col-xl mb-3">
         <a href="capital.php" class="widget widget-link">
-            <div class="widget-icon wi-green"><i class="fa fa-money"></i></div>
-            <div class="widget-info">
-                <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['cash'], $cur)); ?></div>
-                <div class="widget-label">Cash in Hand</div>
-                <div class="small text-muted" style="margin-top:4px;"><?php echo e($brand_scope !== '' ? brand_label($brand_scope) : 'Both brands combined'); ?></div>
-            </div>
-        </a>
-    </div>
-    <div class="col-md-6 col-xl mb-3">
-        <a href="capital.php" class="widget widget-link">
             <div class="widget-icon wi-blue"><i class="fa fa-bank"></i></div>
             <div class="widget-info">
                 <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['bank'], $cur)); ?></div>
-                <div class="widget-label">Bank Balance</div>
-                <div class="small text-muted" style="margin-top:4px;">All brand bank accounts</div>
-            </div>
-        </a>
-    </div>
-    <div class="col-md-6 col-xl mb-3">
-        <a href="capital.php" class="widget widget-link">
-            <div class="widget-icon wi-indigo"><i class="fa fa-tint"></i></div>
-            <div class="widget-info">
-                <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['liquid'], $cur)); ?></div>
-                <div class="widget-label">Liquid Capital</div>
-                <div class="small text-muted" style="margin-top:4px;">Cash + bank</div>
+                <div class="widget-label">Total Capital in Bank</div>
+                <div class="small text-muted" style="margin-top:4px;">
+                    Sales <?php echo e(money($dashboard_breakdown['sales_total'] ?? 0, $cur)); ?>
+                    &middot; expenses + purchases <?php echo e(money(($dashboard_breakdown['expenses_total'] ?? 0) + ($dashboard_breakdown['purchases_total'] ?? 0), $cur)); ?>
+                </div>
             </div>
         </a>
     </div>
@@ -585,8 +558,8 @@ require_once 'sidebar.php';
             <div class="widget-icon wi-purple"><i class="fa fa-cubes"></i></div>
             <div class="widget-info">
                 <div class="widget-value" style="font-size:18px;"><?php echo e(money($dashboard_breakdown['stock'], $cur)); ?></div>
-                <div class="widget-label">Stock Capital</div>
-                <div class="small text-muted" style="margin-top:4px;">Inventory at purchase price</div>
+                <div class="widget-label">Stock-Held Capital</div>
+                <div class="small text-muted" style="margin-top:4px;">Inventory on hand at purchase price</div>
             </div>
         </a>
     </div>
@@ -608,7 +581,7 @@ require_once 'sidebar.php';
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap" style="gap:8px;">
         <div>
             <h5 class="card-title mb-0">Capital by Brand</h5>
-            <small class="text-muted">Cash in hand, bank balance, liquid capital and stock capital for each brand.</small>
+            <small class="text-muted">Total capital in bank and stock-held capital for each brand.</small>
         </div>
         <a href="capital.php" class="btn btn-sm btn-light"><i class="fa fa-bank mr-1"></i> Open Capital</a>
     </div>
@@ -618,10 +591,8 @@ require_once 'sidebar.php';
                 <thead>
                     <tr>
                         <th>Brand</th>
-                        <th class="text-right">Cash in Hand</th>
-                        <th class="text-right">Bank Balance</th>
-                        <th class="text-right">Liquid Capital</th>
-                        <th class="text-right">Stock Capital</th>
+                        <th class="text-right">Capital in Bank</th>
+                        <th class="text-right">Stock-Held Capital</th>
                         <th class="text-right">Total Brand Capital</th>
                     </tr>
                 </thead>
@@ -629,9 +600,7 @@ require_once 'sidebar.php';
                 <?php foreach ($dashboard_brand_rows as $brand_row): ?>
                     <tr>
                         <td><a href="capital.php?brand=<?php echo urlencode((string)$brand_row['brand']); ?>" class="badge badge-navy"><?php echo e(brand_label($brand_row['brand'])); ?></a></td>
-                        <td class="text-right"><?php echo e(money($brand_row['cash'], $cur)); ?></td>
-                        <td class="text-right"><?php echo e(money($brand_row['bank'], $cur)); ?></td>
-                        <td class="text-right font-weight-semibold"><?php echo e(money($brand_row['liquid'], $cur)); ?></td>
+                        <td class="text-right font-weight-semibold"><?php echo e(money($brand_row['bank'], $cur)); ?></td>
                         <td class="text-right"><?php echo e(money($brand_row['stock'], $cur)); ?></td>
                         <td class="text-right font-weight-semibold"><?php echo e(money($brand_row['total'], $cur)); ?></td>
                     </tr>
@@ -649,7 +618,7 @@ require_once 'sidebar.php';
             <div class="card-header d-flex justify-content-between align-items-center flex-wrap" style="gap:8px;">
                 <div>
                     <h5 class="card-title mb-0">Total Earned by Shop</h5>
-                    <small class="text-muted">Completed POS sales, order payments and shop opening sales, less sales returns and refunds.</small>
+                    <small class="text-muted">Completed POS sales and order payments, less sales returns and refunds.</small>
                 </div>
                 <span class="badge badge-primary" style="font-size:12px;padding:7px 12px;">
                     <?php echo e(money($shop_earnings_total, $cur)); ?> total
@@ -664,20 +633,18 @@ require_once 'sidebar.php';
                                 <th class="text-right">POS Sales</th>
                                 <th class="text-right">Order Payments</th>
                                 <th class="text-right">Refunds</th>
-                                <th class="text-right">Opening</th>
                                 <th class="text-right">Total Earned</th>
                             </tr>
                         </thead>
                         <tbody>
                         <?php if (!$shop_earnings): ?>
-                            <tr><td colspan="6" class="text-center text-muted py-4">No shops yet.</td></tr>
+                            <tr><td colspan="5" class="text-center text-muted py-4">No shops yet.</td></tr>
                         <?php else: foreach ($shop_earnings as $shop_row): ?>
                             <?php
                             $shop_pos = (float)($shop_row['pos_sales'] ?? 0);
                             $shop_orders = (float)($shop_row['order_payments'] ?? 0);
                             $shop_refunds = (float)($shop_row['refunds'] ?? 0);
-                            $shop_opening = (float)($shop_row['opening_sales'] ?? 0);
-                            $shop_net = $shop_pos + $shop_orders - $shop_refunds + $shop_opening;
+                            $shop_net = $shop_pos + $shop_orders - $shop_refunds;
                             ?>
                             <tr>
                                 <td>
@@ -695,7 +662,6 @@ require_once 'sidebar.php';
                                 <td class="text-right <?php echo $shop_refunds > 0 ? 'text-danger' : 'text-muted'; ?>">
                                     <?php echo $shop_refunds > 0 ? '- ' . e(money($shop_refunds, $cur)) : e(money(0, $cur)); ?>
                                 </td>
-                                <td class="text-right"><?php echo e(money($shop_opening, $cur)); ?></td>
                                 <td class="text-right font-weight-semibold"><?php echo e(money($shop_net, $cur)); ?></td>
                             </tr>
                         <?php endforeach; endif; ?>
@@ -707,7 +673,6 @@ require_once 'sidebar.php';
                                 <th class="text-right"><?php echo e(money($shop_pos_total, $cur)); ?></th>
                                 <th class="text-right"><?php echo e(money($shop_order_total, $cur)); ?></th>
                                 <th class="text-right"><?php echo $shop_refunds_total > 0 ? '- ' . e(money($shop_refunds_total, $cur)) : e(money(0, $cur)); ?></th>
-                                <th class="text-right"><?php echo e(money($shop_opening_total, $cur)); ?></th>
                                 <th class="text-right"><?php echo e(money($shop_earnings_total, $cur)); ?></th>
                             </tr>
                         </tfoot>

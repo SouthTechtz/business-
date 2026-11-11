@@ -349,7 +349,6 @@ function report_sales_by_brand($from = '', $to = '') {
                 'gross_sales' => 0.0,
                 'returned_qty' => 0.0,
                 'accepted_returns' => 0.0,
-                'opening_sales' => 0.0,
             ];
         }
         foreach ($values as $field => $value) {
@@ -445,32 +444,9 @@ function report_sales_by_brand($from = '', $to = '') {
         ]);
     }
 
-    // Shop-specific opening balances are grouped under the shop's brand.
-    foreach (shop_opening_balances($tenantId) as $shopOpeningRow) {
-        $shopOpeningAmount = (float)($shopOpeningRow['opening_sales'] ?? 0);
-        if ($shopOpeningAmount <= 0) {
-            continue;
-        }
-        $shopOpeningBrand = trim((string)($shopOpeningRow['shop_brand'] ?? ''));
-        $shopOpeningKey = $shopOpeningBrand !== '' ? $shopOpeningBrand : 'Unbranded';
-        if (!isset($rows[$shopOpeningKey])) {
-            $rows[$shopOpeningKey] = [
-                'brand_key' => $shopOpeningKey,
-                'brand_label' => $shopOpeningKey === 'Unbranded' ? 'Unbranded' : brand_label($shopOpeningKey),
-                'sale_count' => 0,
-                'gross_sales' => 0.0,
-                'returned_qty' => 0.0,
-                'accepted_returns' => 0.0,
-                'opening_sales' => 0.0,
-            ];
-        }
-        $rows[$shopOpeningKey]['opening_sales'] = (float)($rows[$shopOpeningKey]['opening_sales'] ?? 0) + $shopOpeningAmount;
-    }
-
     foreach ($rows as &$row) {
-        $row['opening_sales'] = (float)($row['opening_sales'] ?? 0);
         $row['net_sales'] = $row['gross_sales'] - $row['accepted_returns'];
-        $row['total_sales'] = $row['net_sales'] + $row['opening_sales'];
+        $row['total_sales'] = $row['net_sales'];
     }
     unset($row);
     uasort($rows, fn($a, $b) => $b['total_sales'] <=> $a['total_sales'] ?: strcmp($a['brand_label'], $b['brand_label']));

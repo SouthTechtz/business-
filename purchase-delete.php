@@ -3,37 +3,54 @@ require_once 'header.php';
 require_once 'auth_check.php';
 require_permission('manage_purchases');
 
+// Deleting a purchase is reserved for the system (master) administrator.
+// Godown Managers and Mini Admins must never remove purchase records.
+if (!is_system_administrator()) {
+    http_response_code(403);
+    die('Only the system administrator can delete purchases.');
+}
+
 $tenant_id = (int)$current_user->tenant_id;
-$id = (int)($_GET['id'] ?? 0);
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    redirect('purchases.php');
+}
+verify_csrf();
 
-// A brand Mini Admin cannot delete another brand's purchase.
-$delete_brand_scope = current_brand_scope();
-if ($delete_brand_scope !== '') {
-    $delete_product = fetch_one(
-        "SELECT p.brand FROM purchases pu
-           JOIN products p ON p.product_id = pu.product_id AND p.tenant_id = pu.tenant_id
-          WHERE pu.purchase_id = ? AND pu.tenant_id = ?",
-        $id,
-        $tenant_id
-    );
-    if (!$delete_product || !brand_scope_allows($delete_product['brand'] ?? '')) {
-        flash_set('danger', 'Purchase not found or could not be deleted.');
-        redirect('purchases.php');
-    }
+$id = (int)($_POST['purchase_id'] ?? 0);
+$purchase = fetch_one(
+    "SELECT purchase_id FROM purchases WHERE purchase_id = ? AND tenant_id = ?",
+    $id,
+    $tenant_id
+);
+if (!$purchase) {
+    flash_set('danger', 'Purchase not found.');
+    redirect('purchases.php');
 }
 
-$owner_filter = is_godown_manager() ? ' AND created_by = ?' : '';
-$stmt = $conn->prepare("DELETE FROM purchases WHERE purchase_id = ? AND tenant_id = ?{$owner_filter}");
-if (is_godown_manager()) {
-    $stmt->bind_param('iii', $id, $tenant_id, $current_user->user_id);
-} else {
+// A confirmed (received) purchase is locked: editing, status changes and
+// deletion are all blocked so receipts, returns and stock stay consistent.
+if (purchase_is_received($id, $tenant_id)) {
+    flash_set('danger', 'This purchase has been confirmed received, so it cannot be deleted.');
+    redirect('purchase-view.php?id=' . $id);
+}
+
+$conn->begin_transaction();
+try {
+    $stmt = $conn->prepare("DELETE FROM purchases WHERE purchase_id = ? AND tenant_id = ?");
     $stmt->bind_param('ii', $id, $tenant_id);
+    $stmt->execute();
+    $deleted = $stmt->affected_rows;
+    $stmt->close();
+    if ($deleted !== 1) {
+        throw new RuntimeException('Purchase not found or could not be deleted.');
+    }
+    $conn->commit();
+} catch (Throwable $ex) {
+    $conn->rollback();
+    flash_set('danger', $ex->getMessage());
+    redirect('purchases.php');
 }
-if ($stmt->execute() && $stmt->affected_rows > 0) {
-    flash_set('success', 'Purchase deleted successfully.');
-} else {
-    flash_set('danger', 'Purchase not found or could not be deleted.');
-}
-$stmt->close();
 
+audit_log('delete', 'purchase', $id, 'Purchase #' . $id . ' deleted');
+flash_set('success', 'Purchase deleted successfully.');
 redirect('purchases.php');

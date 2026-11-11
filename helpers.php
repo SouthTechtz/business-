@@ -581,6 +581,7 @@ function godown_manager_page_allowed($page) {
         'purchase-view.php',
         'purchase-delete.php',
         'purchase-status.php',
+        'purchase-receive.php',
         'suppliers.php',
         'invoices.php',
         'invoice-add.php',
@@ -859,6 +860,45 @@ function is_system_administrator() {
     }
     // Fall back to a tenant-wide account when the administrator role is renamed.
     return tenant_admin_scope();
+}
+
+/**
+ * Who may confirm an arriving purchase and record what was received:
+ * the master administrator, a brand Mini Admin (for their own brand) or the
+ * Godown Manager. The receive screen still applies the brand scope.
+ */
+function can_receive_purchases() {
+    return is_system_administrator() || is_brand_admin() || is_godown_manager();
+}
+
+/**
+ * True when a purchase is confirmed received and therefore locked.
+ *
+ * A purchase is locked when it has a received timestamp, a godown receipt or a
+ * supplier return. Locked purchases can no longer be edited, re-statused or
+ * deleted, so stock, receipts and capital stay consistent.
+ */
+function purchase_is_received($purchase_id, $tenant_id = null) {
+    global $current_user;
+    $purchase_id = (int)$purchase_id;
+    $tenant_id = $tenant_id === null ? (int)($current_user->tenant_id ?? 0) : (int)$tenant_id;
+    if ($purchase_id <= 0 || $tenant_id <= 0) return false;
+    $row = fetch_one(
+        "SELECT pu.purchase_id, pu.received_at,
+                EXISTS (SELECT 1 FROM godown_receipts gr
+                         WHERE gr.tenant_id = pu.tenant_id AND gr.purchase_id = pu.purchase_id) has_receipt,
+                EXISTS (SELECT 1 FROM sales_returns sr
+                         WHERE sr.tenant_id = pu.tenant_id AND sr.source_type = 'purchase'
+                           AND sr.source_id = pu.purchase_id) has_supplier_return
+           FROM purchases pu
+          WHERE pu.purchase_id = ? AND pu.tenant_id = ?",
+        $purchase_id,
+        $tenant_id
+    );
+    if (!$row) return false;
+    return !empty($row['received_at'])
+        || (int)($row['has_receipt'] ?? 0) > 0
+        || (int)($row['has_supplier_return'] ?? 0) > 0;
 }
 
 /**
@@ -3169,56 +3209,6 @@ function sale_brand_info($shop_brand, $product_brands) {
         return ['key' => 'mixed', 'label' => 'Mixed'];
     }
     return ['key' => 'unbranded', 'label' => 'Unbranded'];
-}
-
-/**
- * Opening sales balance per shop, keyed by shop_id, with the shop's brand.
- */
-function shop_opening_balances($tenant_id = null) {
-    global $current_user;
-    $tenant_id = $tenant_id === null
-        ? (int)($current_user->tenant_id ?? 0)
-        : (int)$tenant_id;
-    if ($tenant_id <= 0) return [];
-    $rows = fetch_all(
-        "SELECT sob.shop_id, sob.opening_sales, sob.notes, sob.updated_by, sob.updated_at,
-                s.name shop_name, s.code shop_code, s.brand shop_brand, s.is_active shop_is_active
-           FROM shop_opening_balances sob
-           JOIN shops s ON s.shop_id = sob.shop_id AND s.tenant_id = sob.tenant_id
-          WHERE sob.tenant_id = ?
-          ORDER BY s.name",
-        $tenant_id
-    );
-    $out = [];
-    foreach ($rows as $row) {
-        $out[(int)$row['shop_id']] = [
-            'shop_id' => (int)$row['shop_id'],
-            'shop_name' => $row['shop_name'],
-            'shop_code' => $row['shop_code'],
-            'shop_brand' => $row['shop_brand'],
-            'shop_is_active' => (int)$row['shop_is_active'],
-            'opening_sales' => (float)($row['opening_sales'] ?? 0),
-            'notes' => $row['notes'] ?? null,
-            'updated_by' => $row['updated_by'] ?? null,
-            'updated_at' => $row['updated_at'] ?? null,
-        ];
-    }
-    return $out;
-}
-
-/** Opening sales for one shop. */
-function shop_opening_sales($shop_id, $tenant_id = null) {
-    $balances = shop_opening_balances($tenant_id);
-    return (float)($balances[(int)$shop_id]['opening_sales'] ?? 0);
-}
-
-/** Total opening sales across all shops. */
-function shop_opening_total($tenant_id = null) {
-    $total = 0.0;
-    foreach (shop_opening_balances($tenant_id) as $row) {
-        $total += (float)($row['opening_sales'] ?? 0);
-    }
-    return $total;
 }
 
 /** Goods lifecycle statuses for a purchase record. */

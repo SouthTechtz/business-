@@ -86,10 +86,8 @@ switch ($type) {
         $capital_position = capital_balance_sheet($current_user->tenant_id, $report_brand_scope);
         $rows[] = ['', '', ''];
         $rows[] = ['MEMO: Capital introduced (equity, not income)', money($capital_memo['net'], $cur), ''];
-        $rows[] = ['MEMO: Cash in hand', money($capital_position['cash_in_hand'] ?? 0, $cur), ''];
-        $rows[] = ['MEMO: Bank balance', money($capital_position['bank_balance'] ?? 0, $cur), ''];
-        $rows[] = ['MEMO: Liquid capital', money($capital_position['liquid_capital'] ?? 0, $cur), ''];
-        $rows[] = ['MEMO: Stock capital', money($capital_position['stock_capital'] ?? 0, $cur), ''];
+        $rows[] = ['MEMO: Total capital in bank', money($capital_position['bank_balance'] ?? 0, $cur), ''];
+        $rows[] = ['MEMO: Stock-held capital', money($capital_position['stock_capital'] ?? 0, $cur), ''];
         $rows[] = ['MEMO: Total brand capital', money($capital_position['total_capital'] ?? 0, $cur), ''];
         $totals = ['net' => $net];
         break;
@@ -276,17 +274,16 @@ switch ($type) {
                 <h4>Assets</h4>
                 <table class="table table-bordered">
                     <tbody>
-                        <tr><td>Cash in hand</td><td class="text-right"><?php echo e(money($bs['cash_in_hand'], $cur)); ?></td></tr>
-                        <tr><td>Bank balance (available / overdraft)</td><td class="text-right"><?php echo e(money($bs['bank_balance'], $cur)); ?></td></tr>
-                        <tr><td>Stock capital (inventory at cost)</td><td class="text-right"><?php echo e(money($bs['inventory'], $cur)); ?></td></tr>
+                        <tr><td>Capital in bank</td><td class="text-right"><?php echo e(money($bs['bank_balance'], $cur)); ?></td></tr>
+                        <tr><td>Stock-held capital (inventory at cost)</td><td class="text-right"><?php echo e(money($bs['inventory'], $cur)); ?></td></tr>
                         <tr><td>Accounts receivable</td><td class="text-right"><?php echo e(money($bs['receivables'], $cur)); ?></td></tr>
                         <tr class="strong"><td>Total assets</td><td class="text-right"><?php echo e(money($bs['total_assets'], $cur)); ?></td></tr>
                     </tbody>
                 </table>
                 <table class="table table-bordered" style="margin-top:8px;">
                     <tbody>
-                        <tr><td>Liquid capital (cash + bank)</td><td class="text-right"><?php echo e(money($bs['liquid_capital'], $cur)); ?></td></tr>
-                        <tr><td>Stock capital</td><td class="text-right"><?php echo e(money($bs['stock_capital'], $cur)); ?></td></tr>
+                        <tr><td>Capital in bank</td><td class="text-right"><?php echo e(money($bs['bank_balance'], $cur)); ?></td></tr>
+                        <tr><td>Stock-held capital</td><td class="text-right"><?php echo e(money($bs['stock_capital'], $cur)); ?></td></tr>
                         <tr class="strong"><td>Total brand capital</td><td class="text-right"><?php echo e(money($bs['total_capital'], $cur)); ?></td></tr>
                     </tbody>
                 </table>
@@ -310,7 +307,7 @@ switch ($type) {
 
         <h4>Bank Accounts</h4>
         <table class="table table-bordered">
-            <thead><tr><th>Bank</th><th class="text-right">Opening</th><th class="text-right">Capital In</th><th class="text-right">Withdrawn</th><th class="text-right">Cash Banked</th><th class="text-right">Money Out</th><th class="text-right">Transfers</th><th class="text-right">Available</th></tr></thead>
+            <thead><tr><th>Bank</th><th class="text-right">Capital In</th><th class="text-right">Withdrawn</th><th class="text-right">Cash Banked</th><th class="text-right">Money Out</th><th class="text-right">Transfers</th><th class="text-right">Available</th></tr></thead>
             <tbody>
             <?php foreach ($bs['banks'] as $bank): ?>
                 <?php
@@ -319,7 +316,6 @@ switch ($type) {
                 ?>
                 <tr>
                     <td><?php echo e($bank['bank_name']); ?></td>
-                    <td class="text-right"><?php echo e(money($bank['opening_in'], $cur)); ?></td>
                     <td class="text-right"><?php echo e(money($bank['capital_in'], $cur)); ?></td>
                     <td class="text-right"><?php echo e(money($bank['capital_out'], $cur)); ?></td>
                     <td class="text-right"><?php echo e(money($bank['sales_banked'], $cur)); ?></td>
@@ -328,7 +324,7 @@ switch ($type) {
                     <td class="text-right font-weight-bold"><?php echo e(money($bank['available'], $cur)); ?></td>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$bs['banks']): ?><tr><td colspan="8" class="text-center">No bank accounts yet.</td></tr><?php endif; ?>
+            <?php if (!$bs['banks']): ?><tr><td colspan="7" class="text-center">No bank accounts yet.</td></tr><?php endif; ?>
             </tbody>
         </table>
 
@@ -344,9 +340,10 @@ switch ($type) {
             </tbody>
         </table>
         <p class="text-muted" style="font-size:11.5px;">
-            Liquid capital is cash in hand plus bank balance. Stock capital is inventory at purchase price.
-            Total brand capital is liquid plus stock. Capital is equity, not sales revenue.
-            Enter capital movements on the Capital page.
+            Total capital in bank is capital added, less capital withdrawn, plus all shop sales,
+            less expenses, purchases and refunds. Stock-held capital is inventory at purchase price.
+            Total brand capital is capital in bank plus stock. Capital is equity, not sales revenue.
+            There are no opening balances; record funding on the Capital page.
         </p>
     <?php elseif ($type === 'sales'): ?>
         <table class="table table-bordered">
